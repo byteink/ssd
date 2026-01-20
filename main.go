@@ -3,9 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
+
+	"github.com/byteink/ssd/config"
+	"github.com/byteink/ssd/deploy"
+	"github.com/byteink/ssd/remote"
 )
 
-const version = "0.1.0"
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -14,18 +19,19 @@ func main() {
 	}
 
 	command := os.Args[1]
+	args := os.Args[2:]
 
 	switch command {
 	case "version", "-v", "--version":
 		fmt.Printf("ssd version %s\n", version)
 	case "deploy":
-		fmt.Println("🚀 Deploying... (coming soon)")
+		runDeploy(args)
 	case "status":
-		fmt.Println("📊 Checking status... (coming soon)")
+		runStatus(args)
 	case "logs":
-		fmt.Println("📜 Showing logs... (coming soon)")
+		runLogs(args)
 	case "config":
-		fmt.Println("⚙️  Showing config... (coming soon)")
+		runConfig(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -33,6 +39,130 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func loadConfig(serviceName string) *config.Config {
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := rootCfg.GetService(serviceName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		if !rootCfg.IsSingleService() {
+			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
+		}
+		os.Exit(1)
+	}
+
+	return cfg
+}
+
+func runDeploy(args []string) {
+	serviceName := ""
+	if len(args) > 0 {
+		serviceName = args[0]
+	}
+
+	cfg := loadConfig(serviceName)
+
+	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
+
+	if err := deploy.Deploy(cfg); err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runStatus(args []string) {
+	serviceName := ""
+	if len(args) > 0 {
+		serviceName = args[0]
+	}
+
+	cfg := loadConfig(serviceName)
+	client := remote.NewClient(cfg)
+
+	fmt.Printf("Status for %s on %s:\n\n", cfg.Name, cfg.Server)
+
+	status, err := client.GetContainerStatus()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if status == "" {
+		fmt.Println("No containers found")
+	} else {
+		fmt.Println(status)
+	}
+}
+
+func runLogs(args []string) {
+	serviceName := ""
+	follow := false
+	tail := 100
+
+	for _, arg := range args {
+		if arg == "-f" || arg == "--follow" {
+			follow = true
+		} else if !strings.HasPrefix(arg, "-") {
+			serviceName = arg
+		}
+	}
+
+	cfg := loadConfig(serviceName)
+	client := remote.NewClient(cfg)
+
+	if err := client.GetLogs(follow, tail); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runConfig(args []string) {
+	serviceName := ""
+	if len(args) > 0 {
+		serviceName = args[0]
+	}
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// If multi-service and no service specified, show all
+	if !rootCfg.IsSingleService() && serviceName == "" {
+		fmt.Println("Services:")
+		for _, name := range rootCfg.ListServices() {
+			cfg, _ := rootCfg.GetService(name)
+			fmt.Printf("\n  %s:\n", name)
+			printConfig(cfg, "    ")
+		}
+		return
+	}
+
+	cfg, err := rootCfg.GetService(serviceName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Configuration:")
+	printConfig(cfg, "  ")
+}
+
+func printConfig(cfg *config.Config, indent string) {
+	fmt.Printf("%sname: %s\n", indent, cfg.Name)
+	fmt.Printf("%sserver: %s\n", indent, cfg.Server)
+	fmt.Printf("%sstack: %s\n", indent, cfg.Stack)
+	fmt.Printf("%sstack_path: %s\n", indent, cfg.StackPath())
+	fmt.Printf("%sdockerfile: %s\n", indent, cfg.Dockerfile)
+	fmt.Printf("%scontext: %s\n", indent, cfg.Context)
+	fmt.Printf("%simage: %s\n", indent, cfg.ImageName())
 }
 
 func printUsage() {
@@ -43,8 +173,8 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  ssd deploy [service]     Deploy application")
 	fmt.Println("  ssd status [service]     Check deployment status")
-	fmt.Println("  ssd logs [service]       View logs")
-	fmt.Println("  ssd config               Show current configuration")
+	fmt.Println("  ssd logs [service] [-f]  View logs (-f to follow)")
+	fmt.Println("  ssd config [service]     Show current configuration")
 	fmt.Println("  ssd version              Show version")
 	fmt.Println("  ssd help                 Show this help")
 	fmt.Println()

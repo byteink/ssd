@@ -18,44 +18,63 @@ Uses goreleaser. Version is injected via ldflags (`-X main.version={{.Version}}`
 goreleaser release --snapshot --clean   # Test release locally
 ```
 
-## Project Overview
+## Project Structure
 
-`ssd` (SSH Deploy) is an opinionated CLI tool for deploying Docker Compose applications to remote servers via SSH. No agents, no image registries—just rsync code to server, build there, restart stack.
-
-### Core Workflow
-1. Read `ssd.yaml` config from current directory
-2. SSH into configured server
-3. Rsync code to temp directory on server
-4. Build Docker image on server
-5. Auto-increment build number
-6. Update compose.yaml with new image tag
-7. Restart the stack
-
-### Conventions
-- **Stack path**: `{stack}/{name}/` where `stack` defaults to `/stacks` (legacy servers may use `/dockge/stacks`)
-- **Stack structure**: `compose.yaml` + `data/` directory for persistent data
-- **Image naming**: `ssd-{name}:{version}`
-- **SSH config**: Uses `~/.ssh/config` hosts directly
-- **Config file**: `ssd.yaml` in project root
-
-### Expected ssd.yaml Structure
-```yaml
-# Simple project
-server: myserver        # SSH host from ~/.ssh/config
-name: myapp             # Optional, defaults to directory name
-stack: /stacks          # Optional, defaults to /stacks
-
-# Monorepo
-services:
-  api:
-    server: myserver
-    dockerfile: ./api/Dockerfile
-    context: ./api
-  web:
-    server: myserver
-    dockerfile: ./web/Dockerfile
-    context: ./web
+```
+├── main.go           # CLI entry point and commands
+├── config/
+│   └── config.go     # ssd.yaml parsing and defaults
+├── remote/
+│   └── remote.go     # SSH, rsync, docker operations
+└── deploy/
+    └── deploy.go     # Deploy orchestration
 ```
 
-### Current State
-Skeleton CLI with command structure in place. Core deployment logic not yet implemented.
+## Core Workflow
+
+1. Read `ssd.yaml` config from current directory
+2. SSH into configured server (uses `~/.ssh/config` hosts)
+3. Create temp directory on server
+4. Rsync code to temp dir (excludes .git, node_modules, .next)
+5. Build Docker image on server: `ssd-{name}:{version}`
+6. Parse current version from compose.yaml, increment it
+7. Update compose.yaml with new image tag
+8. Run `docker compose up -d` to restart
+9. Clean up temp directory
+
+## Conventions
+
+- **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)
+- **Image naming**: `ssd-{name}:{version}` (auto-incremented)
+- **Version tracking**: Parsed from compose.yaml image tag, supports legacy `ssd-*` format
+- **Config inheritance**: Root-level `server` and `stack` are inherited by services in monorepo mode
+
+## ssd.yaml Patterns
+
+### Simple project
+```yaml
+server: myserver        # SSH host from ~/.ssh/config
+name: myapp             # Optional, defaults to directory name
+# stack defaults to /stacks/{name}
+```
+
+### Custom stack path
+```yaml
+server: myserver
+name: myapp
+stack: /custom/stacks/myapp   # Full path to stack directory
+```
+
+### Monorepo (root-level defaults)
+```yaml
+server: myserver
+stack: /stacks/myproject      # Shared stack for all services
+
+services:
+  web:
+    name: myproject-web       # Image will be ssd-myproject-web:{version}
+    context: ./apps/web
+  api:
+    name: myproject-api
+    context: ./apps/api
+```
