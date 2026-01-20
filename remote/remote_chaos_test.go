@@ -12,12 +12,18 @@ import (
 
 // ChaosExecutor implements CommandExecutor for chaos testing
 type ChaosExecutor struct {
-	hangDuration      time.Duration
-	forceError        error
-	shouldHang        bool
-	shouldRefuse      bool
-	timeoutOnRun      bool
-	timeoutOnInteract bool
+	hangDuration       time.Duration
+	forceError         error
+	shouldHang         bool
+	shouldRefuse       bool
+	timeoutOnRun       bool
+	timeoutOnInteract  bool
+	disconnectMidRun   bool
+	interruptAfter     time.Duration
+	stallAfter         time.Duration
+	shouldStall        bool
+	commandCallCount   int
+	interruptOnNthCall int
 }
 
 // NewChaosExecutor creates a new chaos executor for testing
@@ -51,10 +57,47 @@ func (e *ChaosExecutor) WithTimeoutOnInteractive() *ChaosExecutor {
 	return e
 }
 
+// WithMidCommandDisconnect simulates SSH disconnecting during command execution
+func (e *ChaosExecutor) WithMidCommandDisconnect(after time.Duration) *ChaosExecutor {
+	e.disconnectMidRun = true
+	e.interruptAfter = after
+	return e
+}
+
+// WithInterruptOnNthCall simulates failure after N successful calls
+func (e *ChaosExecutor) WithInterruptOnNthCall(n int) *ChaosExecutor {
+	e.interruptOnNthCall = n
+	return e
+}
+
+// WithStall simulates a stalled connection (hangs without timeout)
+func (e *ChaosExecutor) WithStall(after time.Duration) *ChaosExecutor {
+	e.shouldStall = true
+	e.stallAfter = after
+	return e
+}
+
 // Run simulates command execution with chaos injection
 func (e *ChaosExecutor) Run(ctx context.Context, name string, args ...string) (string, error) {
+	e.commandCallCount++
+
 	if e.shouldRefuse {
 		return "", e.forceError
+	}
+
+	if e.interruptOnNthCall > 0 && e.commandCallCount == e.interruptOnNthCall {
+		time.Sleep(e.interruptAfter)
+		return "", errors.New("ssh: connection reset by peer")
+	}
+
+	if e.disconnectMidRun {
+		// Start executing, then disconnect
+		select {
+		case <-time.After(e.interruptAfter):
+			return "", errors.New("ssh: connection reset by peer")
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 
 	if e.timeoutOnRun {
@@ -81,8 +124,37 @@ func (e *ChaosExecutor) Run(ctx context.Context, name string, args ...string) (s
 
 // RunInteractive simulates interactive command execution with chaos injection
 func (e *ChaosExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
+	e.commandCallCount++
+
 	if e.shouldRefuse {
 		return e.forceError
+	}
+
+	if e.interruptOnNthCall > 0 && e.commandCallCount == e.interruptOnNthCall {
+		time.Sleep(e.interruptAfter)
+		return errors.New("rsync: connection unexpectedly closed")
+	}
+
+	if e.shouldStall {
+		// Simulate stalling after initial progress
+		select {
+		case <-time.After(e.stallAfter):
+			// Now hang indefinitely (or until context cancels)
+			<-ctx.Done()
+			return ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	if e.disconnectMidRun {
+		// Start executing, then disconnect
+		select {
+		case <-time.After(e.interruptAfter):
+			return errors.New("rsync: connection unexpectedly closed")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	if e.timeoutOnInteract {
@@ -278,4 +350,64 @@ func TestChaos_RestartStackTimeout(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context deadline exceeded")
+}
+
+// TestChaos_RsyncInterrupted verifies rsync handles mid-transfer failures
+func TestChaos_RsyncInterrupted(t *testing.T) {
+	cfg := newTestConfig()
+	// Simulate rsync failing mid-transfer after 50ms
+	chaosExec := NewChaosExecutor().WithMidCommandDisconnect(50 * time.Millisecond)
+	client := NewClientWithExecutor(cfg, chaosExec)
+
+	ctx := context.Background()
+	start := time.Now()
+	err := client.Rsync(ctx, "/local/path", "/remote/path")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection unexpectedly closed")
+	// Verify interruption occurred around 50ms
+	assert.Greater(t, elapsed, 40*time.Millisecond, "should wait for interruption")
+	assert.Less(t, elapsed, 150*time.Millisecond, "should fail quickly after interruption")
+}
+
+// TestChaos_RsyncStalled verifies rsync stalls are caught by timeout
+func TestChaos_RsyncStalled(t *testing.T) {
+	cfg := newTestConfig()
+	// Simulate rsync stalling after 20ms of progress
+	chaosExec := NewChaosExecutor().WithStall(20 * time.Millisecond)
+	client := NewClientWithExecutor(cfg, chaosExec)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := client.Rsync(ctx, "/local/path", "/remote/path")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline exceeded")
+	// Verify timeout triggered after the stall
+	assert.Greater(t, elapsed, 90*time.Millisecond, "should timeout after stall")
+	assert.Less(t, elapsed, 200*time.Millisecond, "should not exceed timeout window")
+}
+
+// TestChaos_SSHMidCommandDisconnect verifies SSH handles disconnection during command
+func TestChaos_SSHMidCommandDisconnect(t *testing.T) {
+	cfg := newTestConfig()
+	// Simulate SSH disconnecting 50ms into command execution
+	chaosExec := NewChaosExecutor().WithMidCommandDisconnect(50 * time.Millisecond)
+	client := NewClientWithExecutor(cfg, chaosExec)
+
+	ctx := context.Background()
+	start := time.Now()
+	_, err := client.SSH(ctx, "echo hello && sleep 10")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+	assert.Contains(t, err.Error(), "connection reset by peer")
+	// Verify disconnection occurred around 50ms
+	assert.Greater(t, elapsed, 40*time.Millisecond, "should wait for disconnection")
+	assert.Less(t, elapsed, 150*time.Millisecond, "should fail quickly after disconnection")
 }
