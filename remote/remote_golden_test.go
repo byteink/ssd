@@ -16,9 +16,8 @@ import (
 func transformCompose(input string, appName string, newVersion int) string {
 	newImage := fmt.Sprintf("ssd-%s:%d", appName, newVersion)
 
-	// Replace image tag - handle both old and new naming conventions
-	// Match any image line for the app service
-	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(appName) + `|ssd-` + regexp.QuoteMeta(appName) + `):(\d+)`)
+	// Replace image tag
+	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(appName) + `):(\d+)`)
 	return oldImagePattern.ReplaceAllString(input, fmt.Sprintf("${1}%s", newImage))
 }
 
@@ -40,11 +39,6 @@ func TestGolden_UpdateCompose(t *testing.T) {
 	}{
 		{
 			name:       "compose-basic-upgrade",
-			appName:    "myapp",
-			newVersion: 5,
-		},
-		{
-			name:       "compose-",
 			appName:    "myapp",
 			newVersion: 5,
 		},
@@ -123,31 +117,3 @@ func TestGolden_UpdateCompose_MixedSpacing(t *testing.T) {
 	require.Equal(t, expected, result)
 }
 
-func TestGolden_UpdateCompose_LegacyToModern(t *testing.T) {
-	input := `services:
-  web:
-    image: ssd-webapp:5
-  api:
-    image: ssd-api:3
-`
-
-	expectedWeb := `services:
-  web:
-    image: ssd-webapp:10
-  api:
-    image: ssd-api:3
-`
-
-	resultWeb := transformCompose(input, "webapp", 10)
-	require.Equal(t, expectedWeb, resultWeb)
-
-	expectedApi := `services:
-  web:
-    image: ssd-webapp:5
-  api:
-    image: ssd-api:8
-`
-
-	resultApi := transformCompose(input, "api", 8)
-	require.Equal(t, expectedApi, resultApi)
-}

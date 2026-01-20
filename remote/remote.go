@@ -109,18 +109,10 @@ func parseVersionFromContent(content, appName string) (int, error) {
 		return 0, nil
 	}
 
-	// Try new format first: ssd-{name}:{version}
+	// Match ssd-{name}:{version}
 	imageName := fmt.Sprintf("ssd-%s", appName)
 	re := regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName)))
 	matches := re.FindStringSubmatch(content)
-	if len(matches) >= 2 {
-		return strconv.Atoi(matches[1])
-	}
-
-	// Try : ssd-{name}:{version}
-	legacyName := fmt.Sprintf("ssd-%s", appName)
-	re = regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(legacyName)))
-	matches = re.FindStringSubmatch(content)
 	if len(matches) >= 2 {
 		return strconv.Atoi(matches[1])
 	}
@@ -164,9 +156,8 @@ func (c *Client) UpdateCompose(ctx context.Context, version int) error {
 		return fmt.Errorf("failed to read compose.yaml: %w", err)
 	}
 
-	// Replace image tag - handle both old and new naming conventions
-	// Match any image line for the app service
-	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(c.cfg.Name) + `|ssd-` + regexp.QuoteMeta(c.cfg.Name) + `):(\d+)`)
+	// Replace image tag
+	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(c.cfg.Name) + `):(\d+)`)
 	newContent := oldImagePattern.ReplaceAllString(output, fmt.Sprintf("${1}%s", newImage))
 
 	// Write back

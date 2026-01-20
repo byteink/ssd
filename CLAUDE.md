@@ -46,7 +46,7 @@ goreleaser release --snapshot --clean   # Test release locally
 
 - **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)
 - **Image naming**: `ssd-{name}:{version}` (auto-incremented)
-- **Version tracking**: Parsed from compose.yaml image tag, supports legacy `ssd-*` format
+- **Version tracking**: Parsed from compose.yaml image tag (`ssd-{name}:{version}`)
 - **Config inheritance**: Root-level `server` and `stack` are inherited by services in monorepo mode
 
 ## ssd.yaml Patterns

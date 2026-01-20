@@ -338,56 +338,6 @@ func TestE2E_VerifyVersionInCompose(t *testing.T) {
 	}
 }
 
-func TestE2E_Migration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping E2E test in short mode")
-	}
-
-	sshContainer, cfg, _, cleanup := setupE2EEnvironment(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// Create compose.yaml with legacy ssd format
-	legacyCompose := `services:
-  app:
-    image: ssd-testapp:3
-    ports:
-      - "8080:8080"
-`
-	_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", legacyCompose, cfg.Stack))
-	require.NoError(t, err)
-
-	// Create 
-	_, err = sshContainer.RunSSH("echo 'FROM alpine:latest' | docker build -t ssd-testapp:3 -")
-	require.NoError(t, err)
-
-	// Create client
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
-
-	// Verify current version is parsed correctly from 
-	currentVersion, err := client.GetCurrentVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 3, currentVersion, "should parse version from ")
-
-	// Deploy (should migrate to new format)
-	err = DeployWithClient(cfg, client, nil)
-	require.NoError(t, err)
-
-	// Verify compose.yaml was migrated to new format
-	composeResult, err := sshContainer.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
-	require.NoError(t, err)
-	assert.Contains(t, composeResult, "ssd-testapp:4", "should use new ssd- format")
-	assert.NotContains(t, composeResult, "ssd", "should not contain ")
-
-	// Verify version was incremented
-	newVersion, err := client.GetCurrentVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 4, newVersion, "version should be incremented from legacy version")
-}
-
 func TestE2E_RsyncExclusions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")

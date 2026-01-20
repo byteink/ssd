@@ -139,23 +139,6 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_WithComposeFile() {
 	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 }
 
-func (s *SSHIntegrationSuite) TestGetCurrentVersion_() {
-	client := s.newClient()
-
-	// Create stack directory and compose file with 
-	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(context.Background(), `echo 'services:
-  app:
-    image: ssd-testapp:5' > /home/testuser/stacks/testapp/compose.yaml`)
-
-	version, err := client.GetCurrentVersion(context.Background())
-	require.NoError(s.T(), err)
-	assert.Equal(s.T(), 5, version)
-
-	// Cleanup
-	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
-}
-
 func (s *SSHIntegrationSuite) TestUpdateCompose() {
 	client := s.newClient()
 
@@ -176,29 +159,6 @@ func (s *SSHIntegrationSuite) TestUpdateCompose() {
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "ssd-testapp:2")
 	assert.NotContains(s.T(), output, "ssd-testapp:1")
-
-	// Cleanup
-	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
-}
-
-func (s *SSHIntegrationSuite) TestUpdateCompose_Migrates() {
-	client := s.newClient()
-
-	// Create stack directory with 
-	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(context.Background(), `echo 'services:
-  app:
-    image: ssd-testapp:3' > /home/testuser/stacks/testapp/compose.yaml`)
-
-	// Update - should migrate to new format
-	err := client.UpdateCompose(context.Background(), 4)
-	require.NoError(s.T(), err)
-
-	// Verify
-	output, err := client.SSH(context.Background(), "cat /home/testuser/stacks/testapp/compose.yaml")
-	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, "ssd-testapp:4")
-	assert.NotContains(s.T(), output, "ssd")
 
 	// Cleanup
 	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")

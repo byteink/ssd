@@ -184,25 +184,6 @@ func TestClient_GetCurrentVersion_NewFormat(t *testing.T) {
 	assert.Equal(t, 5, version)
 }
 
-func TestClient_GetCurrentVersion_(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	composeContent := `services:
-  app:
-    image: ssd-myapp:3
-    ports:
-      - "8080:8080"`
-
-	mockExec.On("Run", "ssh", mock.Anything).Return(composeContent, nil)
-
-	version, err := client.GetCurrentVersion(context.Background())
-
-	require.NoError(t, err)
-	assert.Equal(t, 3, version)
-}
-
 func TestClient_GetCurrentVersion_NoMatch(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
@@ -311,28 +292,6 @@ func TestClient_UpdateCompose(t *testing.T) {
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
-}
-
-func TestClient_UpdateCompose_(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	// Read 
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		return strings.Contains(args[1], "cat")
-	})).Return("services:\n  app:\n    image: ssd-myapp:3", nil)
-
-	// Write with new format
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
-		// Should replace with new ssd- format
-		return strings.Contains(cmd, "ssd-myapp:5") && !strings.Contains(cmd, "ssd")
-	})).Return("", nil)
-
-	err := client.UpdateCompose(context.Background(), 5)
-
-	require.NoError(t, err)
 }
 
 func TestClient_UpdateCompose_ReadError(t *testing.T) {
