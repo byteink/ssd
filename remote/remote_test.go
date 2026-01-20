@@ -459,3 +459,73 @@ func TestClient_ImplementsRemoteClient(t *testing.T) {
 	cfg := newTestConfig()
 	var _ RemoteClient = NewClient(cfg)
 }
+
+func TestValidateTempPath_Success(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"simple temp path", "/tmp/ssd-build-123"},
+		{"nested temp path", "/tmp/ssd/build/abc"},
+		{"with hyphens", "/tmp/my-temp-dir"},
+		{"with underscores", "/tmp/my_temp_dir"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTempPath(tt.path)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateTempPath_EmptyPath(t *testing.T) {
+	err := ValidateTempPath("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path cannot be empty")
+}
+
+func TestValidateTempPath_NotInTmp(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"root path", "/var/lib/something"},
+		{"home path", "/home/user/temp"},
+		{"relative path", "tmp/something"},
+		{"current dir", "./tmp/something"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTempPath(tt.path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "path must start with /tmp/")
+		})
+	}
+}
+
+func TestValidateTempPath_ContainsDotDot(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"direct parent ref", "/tmp/../etc/passwd"},
+		{"nested parent ref", "/tmp/foo/../../../etc"},
+		{"normalized to parent", "/tmp/foo/bar/../../.."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTempPath(tt.path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "path must not contain ..")
+		})
+	}
+}
+
+func TestValidateTempPath_NormalizedPath(t *testing.T) {
+	// Path with redundant slashes should still validate if it's in /tmp
+	err := ValidateTempPath("/tmp//ssd-build//123")
+	assert.NoError(t, err)
+}

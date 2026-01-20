@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/byteink/ssd/config"
 )
 
@@ -138,7 +139,7 @@ func (c *Client) BuildImage(buildDir string, version int) error {
 		dockerfile = dockerfile[2:]
 	}
 
-	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s .", buildDir, imageTag, dockerfile)
+	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile))
 	return c.SSHInteractive(cmd)
 }
 
