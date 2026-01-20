@@ -3,9 +3,11 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,22 +33,22 @@ type DockerIntegrationSuite struct {
 func (s *DockerIntegrationSuite) SetupSuite() {
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 10*time.Minute)
 
+	// Start DinD container first
+	dindContainer, err := testhelpers.StartDinDContainer(s.ctx, s.T())
+	require.NoError(s.T(), err, "Failed to start DinD container")
+	s.dindContainer = dindContainer
+
 	// Start SSH container
 	sshContainer, err := testhelpers.StartSSHContainer(s.ctx, s.T())
 	require.NoError(s.T(), err, "Failed to start SSH container")
 	s.sshContainer = sshContainer
-
-	// Start DinD container
-	dindContainer, err := testhelpers.StartDinDContainer(s.ctx, s.T())
-	require.NoError(s.T(), err, "Failed to start DinD container")
-	s.dindContainer = dindContainer
 
 	// Write SSH config
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
 	require.NoError(s.T(), err, "Failed to write SSH config")
 	s.sshConfig = sshConfig
 
-	// Install Docker in SSH container and configure it to use DinD
+	// Install Docker CLI in SSH container and configure it to use DinD
 	dockerHost := dindContainer.DockerHost()
 	installCmd := fmt.Sprintf(`
 		set -e
@@ -88,8 +90,58 @@ func (s *DockerIntegrationSuite) newClient(name string) *Client {
 		Context:    ".",
 	}
 
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: s.sshConfig}
+	executor := &dockerSSHExecutor{
+		configPath: s.sshConfig,
+		dockerHost: s.dindContainer.DockerHost(),
+	}
 	return NewClientWithExecutor(cfg, executor)
+}
+
+// dockerSSHExecutor wraps SSHConfigExecutor and injects DOCKER_HOST environment variable
+type dockerSSHExecutor struct {
+	configPath string
+	dockerHost string
+}
+
+func (e *dockerSSHExecutor) Run(name string, args ...string) (string, error) {
+	if name == "ssh" && len(args) >= 2 {
+		// Inject DOCKER_HOST into SSH command
+		command := args[len(args)-1]
+		args[len(args)-1] = fmt.Sprintf("export DOCKER_HOST=%s && %s", e.dockerHost, command)
+		newArgs := []string{"-F", e.configPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	} else if name == "ssh" {
+		newArgs := []string{"-F", e.configPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	}
+	cmd := exec.Command(name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("command failed: %s\n%s", err, stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+func (e *dockerSSHExecutor) RunInteractive(name string, args ...string) error {
+	if name == "ssh" && len(args) >= 2 {
+		command := args[len(args)-1]
+		args[len(args)-1] = fmt.Sprintf("export DOCKER_HOST=%s && %s", e.dockerHost, command)
+		newArgs := []string{"-F", e.configPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	} else if name == "ssh" {
+		newArgs := []string{"-F", e.configPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (s *DockerIntegrationSuite) TestDocker_SimpleBuild() {
@@ -122,13 +174,12 @@ CMD ["cat", "/hello.txt"]
 
 	// Verify image exists
 	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
-	dockerHost := s.dindContainer.DockerHost()
-	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Repository}}:{{.Tag}}'", dockerHost, imageName))
+	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, imageName)
 
 	// Verify image runs correctly
-	output, err = client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
+	output, err = client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Hello from simple build")
 }
@@ -165,13 +216,12 @@ CMD ["cat", "/custom.txt"]
 
 	// Verify image exists
 	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
-	dockerHost := s.dindContainer.DockerHost()
-	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Repository}}:{{.Tag}}'", dockerHost, imageName))
+	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, imageName)
 
 	// Verify image runs correctly
-	output, err = client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
+	output, err = client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Custom dockerfile path")
 }
@@ -205,18 +255,17 @@ CMD ["cat", "/version.txt"]
 	// Build image with build args
 	version := 1
 	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
-	dockerHost := s.dindContainer.DockerHost()
 
 	// Build with custom build args
 	buildCmd := fmt.Sprintf(
-		"cd %s && DOCKER_HOST=%s docker build -t %s --build-arg BUILD_VERSION=1.2.3 --build-arg BUILD_ENV=production -f Dockerfile .",
-		remoteDir, dockerHost, imageName,
+		"cd %s && docker build -t %s --build-arg BUILD_VERSION=1.2.3 --build-arg BUILD_ENV=production -f Dockerfile .",
+		remoteDir, imageName,
 	)
 	err = client.SSHInteractive(buildCmd)
 	require.NoError(s.T(), err)
 
 	// Verify build args were applied
-	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
+	output, err := client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Version: 1.2.3")
 	assert.Contains(s.T(), output, "Environment: production")
@@ -251,8 +300,7 @@ CMD ["echo", "Image tagging test"]
 	}
 
 	// Verify all three versions exist
-	dockerHost := s.dindContainer.DockerHost()
-	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Tag}}'", dockerHost, client.cfg.ImageName()))
+	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Tag}}'", client.cfg.ImageName()))
 	require.NoError(s.T(), err)
 
 	// Parse tags from output

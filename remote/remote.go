@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -56,7 +57,7 @@ func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client
 
 // SSH executes a command on the remote server
 func (c *Client) SSH(command string) (string, error) {
-	output, err := c.executor.Run("ssh", c.server, command)
+	output, err := c.executor.Run(context.Background(), "ssh", c.server, command)
 	if err != nil {
 		return "", fmt.Errorf("ssh command failed: %w", err)
 	}
@@ -65,7 +66,7 @@ func (c *Client) SSH(command string) (string, error) {
 
 // SSHInteractive runs an SSH command with output streamed to terminal
 func (c *Client) SSHInteractive(command string) error {
-	return c.executor.RunInteractive("ssh", c.server, command)
+	return c.executor.RunInteractive(context.Background(), "ssh", c.server, command)
 }
 
 // Rsync syncs local directory to remote server
@@ -96,7 +97,7 @@ func (c *Client) Rsync(localPath, remotePath string) error {
 
 	args = append(args, localPath, fmt.Sprintf("%s:%s", c.server, remotePath))
 
-	return c.executor.RunInteractive("rsync", args...)
+	return c.executor.RunInteractive(context.Background(), "rsync", args...)
 }
 
 // GetCurrentVersion reads the current image version from compose.yaml on the server

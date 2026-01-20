@@ -2,17 +2,19 @@ package remote
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // CommandExecutor abstracts command execution for testing
 type CommandExecutor interface {
-	// Run executes a command and returns stdout
-	Run(name string, args ...string) (string, error)
-	// RunInteractive executes a command with stdout/stderr connected to terminal
-	RunInteractive(name string, args ...string) error
+	// Run executes a command with a 5 minute timeout and returns stdout
+	Run(ctx context.Context, name string, args ...string) (string, error)
+	// RunInteractive executes a command with a 30 minute timeout and stdout/stderr connected to terminal
+	RunInteractive(ctx context.Context, name string, args ...string) error
 }
 
 // RealExecutor implements CommandExecutor using real exec.Command
@@ -23,9 +25,12 @@ func NewRealExecutor() *RealExecutor {
 	return &RealExecutor{}
 }
 
-// Run executes a command and returns the output
-func (e *RealExecutor) Run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+// Run executes a command with a 5 minute timeout and returns the output
+func (e *RealExecutor) Run(ctx context.Context, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -35,9 +40,12 @@ func (e *RealExecutor) Run(name string, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// RunInteractive executes a command with output streamed to terminal
-func (e *RealExecutor) RunInteractive(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+// RunInteractive executes a command with a 30 minute timeout and output streamed to terminal
+func (e *RealExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
