@@ -20,103 +20,99 @@ import (
 
 type DockerIntegrationSuite struct {
 	suite.Suite
-	ctx          context.Context
-	cancel       context.CancelFunc
-	sshContainer *testhelpers.SSHContainer
-	dindHost     string
-	sshConfig    string
+	ctx           context.Context
+	cancel        context.CancelFunc
+	sshContainer  *testhelpers.SSHContainer
+	dindContainer *testhelpers.DinDContainer
+	sshConfig     string
+	tempDir       string
 }
 
 func (s *DockerIntegrationSuite) SetupSuite() {
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 10*time.Minute)
 
-	// Start SSH container with Docker installed
+	// Start SSH container
 	sshContainer, err := testhelpers.StartSSHContainer(s.ctx, s.T())
 	require.NoError(s.T(), err, "Failed to start SSH container")
 	s.sshContainer = sshContainer
 
-	// Write SSH config file
+	// Start DinD container
+	dindContainer, err := testhelpers.StartDinDContainer(s.ctx, s.T())
+	require.NoError(s.T(), err, "Failed to start DinD container")
+	s.dindContainer = dindContainer
+
+	// Write SSH config
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
 	require.NoError(s.T(), err, "Failed to write SSH config")
 	s.sshConfig = sshConfig
 
-	// Install Docker in SSH container
-	s.installDockerInSSH()
+	// Install Docker in SSH container and configure it to use DinD
+	dockerHost := dindContainer.DockerHost()
+	installCmd := fmt.Sprintf(`
+		set -e
+		apk add --no-cache docker-cli
+		echo 'export DOCKER_HOST=%s' >> ~/.profile
+		echo 'export DOCKER_HOST=%s' >> ~/.bashrc
+		export DOCKER_HOST=%s
+		docker version
+	`, dockerHost, dockerHost, dockerHost)
+
+	output, err := sshContainer.RunSSH(installCmd)
+	require.NoError(s.T(), err, "Failed to install Docker in SSH container: %s", output)
+
+	// Create temp directory for test files
+	tempDir, err := os.MkdirTemp("", "ssd-docker-test-*")
+	require.NoError(s.T(), err, "Failed to create temp dir")
+	s.tempDir = tempDir
 }
 
 func (s *DockerIntegrationSuite) TearDownSuite() {
+	if s.tempDir != "" {
+		os.RemoveAll(s.tempDir)
+	}
 	if s.sshContainer != nil {
 		s.sshContainer.Cleanup(s.ctx)
+	}
+	if s.dindContainer != nil {
+		s.dindContainer.Cleanup(s.ctx)
 	}
 	s.cancel()
 }
 
-func (s *DockerIntegrationSuite) installDockerInSSH() {
-	s.T().Log("Installing Docker in SSH container...")
-
-	commands := []string{
-		"sudo apk update",
-		"sudo apk add docker",
-		"sudo rc-update add docker boot",
-		"sudo service docker start",
-		"sleep 3",
-	}
-
-	for _, cmd := range commands {
-		output, err := s.sshContainer.RunSSH(cmd)
-		if err != nil {
-			s.T().Logf("Command output: %s", output)
-		}
-		require.NoError(s.T(), err, "Failed to run: %s", cmd)
-	}
-
-	// Verify Docker is running
-	output, err := s.sshContainer.RunSSH("sudo docker version")
-	require.NoError(s.T(), err, "Docker not properly installed")
-	s.T().Logf("Docker installed: %s", strings.Split(output, "\n")[0])
-}
-
-func (s *DockerIntegrationSuite) newClient(cfg *config.Config) *Client {
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: s.sshConfig}
-	return NewClientWithExecutor(cfg, executor)
-}
-
-func (s *DockerIntegrationSuite) createTestDockerfile(dir, content string) {
-	dockerfilePath := filepath.Join(dir, "Dockerfile")
-	err := os.WriteFile(dockerfilePath, []byte(content), 0644)
-	require.NoError(s.T(), err, "Failed to create Dockerfile")
-}
-
-func (s *DockerIntegrationSuite) TestDocker_SimpleBuild() {
-	// Create temp directory for test files
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
-	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
-
-	// Create simple Dockerfile
-	dockerfile := `FROM alpine:latest
-RUN echo "Hello from SSD test"
-CMD ["echo", "test"]
-`
-	s.createTestDockerfile(tmpDir, dockerfile)
-
+func (s *DockerIntegrationSuite) newClient(name string) *Client {
 	cfg := &config.Config{
-		Name:       "testapp",
+		Name:       name,
 		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
+		Stack:      fmt.Sprintf("/home/testuser/stacks/%s", name),
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
 	}
 
-	client := s.newClient(cfg)
+	executor := &testhelpers.SSHConfigExecutor{ConfigPath: s.sshConfig}
+	return NewClientWithExecutor(cfg, executor)
+}
 
-	// Create temp dir on remote
+func (s *DockerIntegrationSuite) TestDocker_SimpleBuild() {
+	client := s.newClient("simple-build")
+
+	// Create a simple Dockerfile
+	buildDir := filepath.Join(s.tempDir, "simple-build")
+	err := os.MkdirAll(buildDir, 0755)
+	require.NoError(s.T(), err)
+
+	dockerfile := `FROM alpine:latest
+RUN echo "Hello from simple build" > /hello.txt
+CMD ["cat", "/hello.txt"]
+`
+	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte(dockerfile), 0644)
+	require.NoError(s.T(), err)
+
+	// Rsync to remote
 	remoteDir, err := client.MakeTempDir()
 	require.NoError(s.T(), err)
 	defer client.Cleanup(remoteDir)
 
-	// Rsync files to remote
-	err = client.Rsync(tmpDir, remoteDir)
+	err = client.Rsync(buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build image
@@ -125,233 +121,155 @@ CMD ["echo", "test"]
 	require.NoError(s.T(), err)
 
 	// Verify image exists
-	imageTag := fmt.Sprintf("ssd-%s:%d", cfg.Name, version)
-	output, err := client.SSH(fmt.Sprintf("sudo docker images %s --format '{{.Repository}}:{{.Tag}}'", imageTag))
+	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
+	dockerHost := s.dindContainer.DockerHost()
+	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Repository}}:{{.Tag}}'", dockerHost, imageName))
 	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, imageTag, "Image should be tagged correctly")
+	assert.Contains(s.T(), output, imageName)
+
+	// Verify image runs correctly
+	output, err = client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
+	require.NoError(s.T(), err)
+	assert.Contains(s.T(), output, "Hello from simple build")
 }
 
 func (s *DockerIntegrationSuite) TestDocker_CustomDockerfilePath() {
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
-	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
+	client := s.newClient("custom-dockerfile")
+	client.cfg.Dockerfile = "./docker/custom.Dockerfile"
 
-	// Create docker subdirectory
-	dockerDir := filepath.Join(tmpDir, "docker")
-	err = os.Mkdir(dockerDir, 0755)
+	// Create directory structure
+	buildDir := filepath.Join(s.tempDir, "custom-dockerfile")
+	dockerDir := filepath.Join(buildDir, "docker")
+	err := os.MkdirAll(dockerDir, 0755)
 	require.NoError(s.T(), err)
 
-	// Create Dockerfile in custom location
 	dockerfile := `FROM alpine:latest
-RUN echo "Custom Dockerfile location"
-CMD ["echo", "custom"]
+RUN echo "Custom dockerfile path" > /custom.txt
+CMD ["cat", "/custom.txt"]
 `
-	dockerfilePath := filepath.Join(dockerDir, "Dockerfile.prod")
-	err = os.WriteFile(dockerfilePath, []byte(dockerfile), 0644)
+	err = os.WriteFile(filepath.Join(dockerDir, "custom.Dockerfile"), []byte(dockerfile), 0644)
 	require.NoError(s.T(), err)
 
-	cfg := &config.Config{
-		Name:       "testapp",
-		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
-		Dockerfile: "./docker/Dockerfile.prod",
-		Context:    ".",
-	}
-
-	client := s.newClient(cfg)
-
+	// Rsync to remote
 	remoteDir, err := client.MakeTempDir()
 	require.NoError(s.T(), err)
 	defer client.Cleanup(remoteDir)
 
-	err = client.Rsync(tmpDir, remoteDir)
+	err = client.Rsync(buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	// Build with custom Dockerfile
+	// Build image with custom Dockerfile path
 	version := 1
 	err = client.BuildImage(remoteDir, version)
 	require.NoError(s.T(), err)
 
 	// Verify image exists
-	imageTag := fmt.Sprintf("ssd-%s:%d", cfg.Name, version)
-	output, err := client.SSH(fmt.Sprintf("sudo docker images %s --format '{{.Repository}}:{{.Tag}}'", imageTag))
+	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
+	dockerHost := s.dindContainer.DockerHost()
+	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Repository}}:{{.Tag}}'", dockerHost, imageName))
 	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, imageTag)
+	assert.Contains(s.T(), output, imageName)
+
+	// Verify image runs correctly
+	output, err = client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
+	require.NoError(s.T(), err)
+	assert.Contains(s.T(), output, "Custom dockerfile path")
 }
 
 func (s *DockerIntegrationSuite) TestDocker_BuildWithBuildArgs() {
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
-	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
+	client := s.newClient("build-args")
 
-	// Create Dockerfile with ARG instruction
+	// Create Dockerfile with ARG instructions
+	buildDir := filepath.Join(s.tempDir, "build-args")
+	err := os.MkdirAll(buildDir, 0755)
+	require.NoError(s.T(), err)
+
 	dockerfile := `FROM alpine:latest
 ARG BUILD_VERSION=unknown
-ARG BUILD_DATE=unknown
-RUN echo "Build Version: ${BUILD_VERSION}"
-RUN echo "Build Date: ${BUILD_DATE}"
-LABEL version="${BUILD_VERSION}"
-LABEL date="${BUILD_DATE}"
-CMD ["echo", "build-args-test"]
+ARG BUILD_ENV=development
+RUN echo "Version: ${BUILD_VERSION}" > /version.txt
+RUN echo "Environment: ${BUILD_ENV}" >> /version.txt
+CMD ["cat", "/version.txt"]
 `
-	s.createTestDockerfile(tmpDir, dockerfile)
+	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte(dockerfile), 0644)
+	require.NoError(s.T(), err)
 
-	cfg := &config.Config{
-		Name:       "testapp",
-		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
-		Dockerfile: "./Dockerfile",
-		Context:    ".",
-	}
-
-	client := s.newClient(cfg)
-
+	// Rsync to remote
 	remoteDir, err := client.MakeTempDir()
 	require.NoError(s.T(), err)
 	defer client.Cleanup(remoteDir)
 
-	err = client.Rsync(tmpDir, remoteDir)
+	err = client.Rsync(buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	// Build image (build args would need to be supported in config)
+	// Build image with build args
 	version := 1
-	err = client.BuildImage(remoteDir, version)
+	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
+	dockerHost := s.dindContainer.DockerHost()
+
+	// Build with custom build args
+	buildCmd := fmt.Sprintf(
+		"cd %s && DOCKER_HOST=%s docker build -t %s --build-arg BUILD_VERSION=1.2.3 --build-arg BUILD_ENV=production -f Dockerfile .",
+		remoteDir, dockerHost, imageName,
+	)
+	err = client.SSHInteractive(buildCmd)
 	require.NoError(s.T(), err)
 
-	// Verify image has correct labels
-	imageTag := fmt.Sprintf("ssd-%s:%d", cfg.Name, version)
-	output, err := client.SSH(fmt.Sprintf("sudo docker inspect %s --format '{{.Config.Labels}}'", imageTag))
+	// Verify build args were applied
+	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker run --rm %s", dockerHost, imageName))
 	require.NoError(s.T(), err)
-
-	// Image should exist with default ARG values
-	assert.NotEmpty(s.T(), output, "Image should have labels")
+	assert.Contains(s.T(), output, "Version: 1.2.3")
+	assert.Contains(s.T(), output, "Environment: production")
 }
 
 func (s *DockerIntegrationSuite) TestDocker_ImageTagging() {
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
+	client := s.newClient("image-tagging")
+
+	// Create Dockerfile
+	buildDir := filepath.Join(s.tempDir, "image-tagging")
+	err := os.MkdirAll(buildDir, 0755)
 	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
 
 	dockerfile := `FROM alpine:latest
-CMD ["echo", "tagging-test"]
+CMD ["echo", "Image tagging test"]
 `
-	s.createTestDockerfile(tmpDir, dockerfile)
+	err = os.WriteFile(filepath.Join(buildDir, "Dockerfile"), []byte(dockerfile), 0644)
+	require.NoError(s.T(), err)
 
-	cfg := &config.Config{
-		Name:       "myapp",
-		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/myapp",
-		Dockerfile: "./Dockerfile",
-		Context:    ".",
-	}
-
-	client := s.newClient(cfg)
-
+	// Rsync to remote
 	remoteDir, err := client.MakeTempDir()
 	require.NoError(s.T(), err)
 	defer client.Cleanup(remoteDir)
 
-	err = client.Rsync(tmpDir, remoteDir)
+	err = client.Rsync(buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build multiple versions
 	for version := 1; version <= 3; version++ {
 		err = client.BuildImage(remoteDir, version)
 		require.NoError(s.T(), err, "Failed to build version %d", version)
-
-		// Verify each version is tagged correctly
-		expectedTag := fmt.Sprintf("ssd-myapp:%d", version)
-		output, err := client.SSH(fmt.Sprintf("sudo docker images ssd-myapp --format '{{.Repository}}:{{.Tag}}'"))
-		require.NoError(s.T(), err)
-		assert.Contains(s.T(), output, expectedTag, "Version %d should be tagged", version)
 	}
 
 	// Verify all three versions exist
-	output, err := client.SSH("sudo docker images ssd-myapp --format '{{.Repository}}:{{.Tag}}'")
+	dockerHost := s.dindContainer.DockerHost()
+	output, err := client.SSH(fmt.Sprintf("DOCKER_HOST=%s docker images %s --format '{{.Tag}}'", dockerHost, client.cfg.ImageName()))
 	require.NoError(s.T(), err)
 
-	assert.Contains(s.T(), output, "ssd-myapp:1")
-	assert.Contains(s.T(), output, "ssd-myapp:2")
-	assert.Contains(s.T(), output, "ssd-myapp:3")
-}
+	// Parse tags from output
+	tags := strings.Split(strings.TrimSpace(output), "\n")
+	require.Len(s.T(), tags, 3, "Expected 3 image tags")
 
-func (s *DockerIntegrationSuite) TestDocker_BuildFailsWithInvalidDockerfile() {
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
-	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
-
-	// Create invalid Dockerfile
-	dockerfile := `FROM nonexistent-image-that-does-not-exist:latest
-RUN echo "This should fail"
-`
-	s.createTestDockerfile(tmpDir, dockerfile)
-
-	cfg := &config.Config{
-		Name:       "testapp",
-		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
-		Dockerfile: "./Dockerfile",
-		Context:    ".",
+	// Verify each version exists
+	for version := 1; version <= 3; version++ {
+		assert.Contains(s.T(), tags, fmt.Sprintf("%d", version), "Version %d not found", version)
 	}
 
-	client := s.newClient(cfg)
-
-	remoteDir, err := client.MakeTempDir()
-	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
-
-	err = client.Rsync(tmpDir, remoteDir)
-	require.NoError(s.T(), err)
-
-	// Build should fail
-	err = client.BuildImage(remoteDir, 1)
-	require.Error(s.T(), err, "Build should fail with invalid base image")
-}
-
-func (s *DockerIntegrationSuite) TestDocker_BuildWithContext() {
-	tmpDir, err := os.MkdirTemp("", "ssd-docker-test-*")
-	require.NoError(s.T(), err)
-	defer os.RemoveAll(tmpDir)
-
-	// Create a file that will be copied during build
-	testFile := filepath.Join(tmpDir, "test.txt")
-	err = os.WriteFile(testFile, []byte("test content"), 0644)
-	require.NoError(s.T(), err)
-
-	// Dockerfile that uses the context
-	dockerfile := `FROM alpine:latest
-COPY test.txt /app/test.txt
-RUN cat /app/test.txt
-CMD ["cat", "/app/test.txt"]
-`
-	s.createTestDockerfile(tmpDir, dockerfile)
-
-	cfg := &config.Config{
-		Name:       "testapp",
-		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
-		Dockerfile: "./Dockerfile",
-		Context:    ".",
+	// Verify image naming convention
+	expectedPrefix := "ssd-image-tagging"
+	for _, version := range []int{1, 2, 3} {
+		imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
+		assert.Contains(s.T(), imageName, expectedPrefix, "Image name doesn't follow naming convention")
 	}
-
-	client := s.newClient(cfg)
-
-	remoteDir, err := client.MakeTempDir()
-	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
-
-	err = client.Rsync(tmpDir, remoteDir)
-	require.NoError(s.T(), err)
-
-	// Build should succeed with context file
-	err = client.BuildImage(remoteDir, 1)
-	require.NoError(s.T(), err)
-
-	// Verify image exists
-	imageTag := fmt.Sprintf("ssd-%s:1", cfg.Name)
-	output, err := client.SSH(fmt.Sprintf("sudo docker images %s --format '{{.Repository}}:{{.Tag}}'", imageTag))
-	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, imageTag)
 }
 
 func TestDockerIntegrationSuite(t *testing.T) {

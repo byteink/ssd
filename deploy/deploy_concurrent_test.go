@@ -402,6 +402,118 @@ func TestConcurrent_RaceConditions(t *testing.T) {
 		successCount.Load(), failureCount.Load())
 }
 
+// TestConcurrent_VersionRace simulates two deploys reading the same version
+// and verifies that locking prevents both from writing version 6.
+// 1. Deploy A reads version 5
+// 2. Deploy B reads version 5 (before A writes)
+// 3. Verify locking prevents both from writing version 6
+func TestConcurrent_VersionRace(t *testing.T) {
+	stackPath := "/stacks/versionrace"
+	cfg := &config.Config{
+		Name:       "myapp",
+		Server:     "testserver",
+		Stack:      stackPath,
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	var firstStarted, secondStarted atomic.Bool
+	var firstCompleted, secondCompleted atomic.Bool
+	var mu sync.Mutex
+	executionOrder := []string{}
+
+	// First deployment - holds lock for 200ms
+	mockClient1 := new(MockDeployer)
+	mockClient1.On("GetCurrentVersion").Run(func(args mock.Arguments) {
+		firstStarted.Store(true)
+		mu.Lock()
+		executionOrder = append(executionOrder, "first-started")
+		mu.Unlock()
+		time.Sleep(200 * time.Millisecond)
+	}).Return(5, nil)
+	mockClient1.On("MakeTempDir").Return("/tmp/build1", nil)
+	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
+	mockClient1.On("BuildImage", "/tmp/build1", 6).Return(nil)
+	mockClient1.On("UpdateCompose", 6).Return(nil)
+	mockClient1.On("RestartStack").Run(func(args mock.Arguments) {
+		mu.Lock()
+		executionOrder = append(executionOrder, "first-completed")
+		mu.Unlock()
+		firstCompleted.Store(true)
+	}).Return(nil)
+	mockClient1.On("Cleanup", "/tmp/build1").Return(nil)
+
+	// Second deployment - should wait for first
+	mockClient2 := new(MockDeployer)
+	mockClient2.On("GetCurrentVersion").Run(func(args mock.Arguments) {
+		secondStarted.Store(true)
+		mu.Lock()
+		executionOrder = append(executionOrder, "second-started")
+		mu.Unlock()
+		// Second deploy should only start after first completes
+		assert.True(t, firstCompleted.Load(), "second deploy started before first completed")
+	}).Return(6, nil)
+	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
+	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
+	mockClient2.On("BuildImage", "/tmp/build2", 7).Return(nil)
+	mockClient2.On("UpdateCompose", 7).Return(nil)
+	mockClient2.On("RestartStack").Run(func(args mock.Arguments) {
+		mu.Lock()
+		executionOrder = append(executionOrder, "second-completed")
+		mu.Unlock()
+		secondCompleted.Store(true)
+	}).Return(nil)
+	mockClient2.On("Cleanup", "/tmp/build2").Return(nil)
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 2)
+
+	// Start first deployment
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := DeployWithClient(cfg, mockClient1, nil)
+		errors <- err
+	}()
+
+	// Wait a bit to ensure first deployment acquires lock
+	time.Sleep(50 * time.Millisecond)
+
+	// Start second deployment - should block
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := DeployWithClient(cfg, mockClient2, nil)
+		errors <- err
+	}()
+
+	wg.Wait()
+	close(errors)
+
+	// Both should succeed
+	for err := range errors {
+		require.NoError(t, err)
+	}
+
+	// Verify execution order
+	assert.True(t, firstStarted.Load(), "first deployment should have started")
+	assert.True(t, secondStarted.Load(), "second deployment should have started")
+	assert.True(t, firstCompleted.Load(), "first deployment should have completed")
+	assert.True(t, secondCompleted.Load(), "second deployment should have completed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{
+		"first-started",
+		"first-completed",
+		"second-started",
+		"second-completed",
+	}, executionOrder, "deployments must execute in sequence")
+
+	mockClient1.AssertExpectations(t)
+	mockClient2.AssertExpectations(t)
+}
+
 // TestConcurrent_MultipleStacksNoInterference verifies that locks for different
 // stacks don't interfere with each other even under concurrent load
 func TestConcurrent_MultipleStacksNoInterference(t *testing.T) {
