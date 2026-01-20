@@ -1,0 +1,76 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    binary: ssd
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: ssd
+    repository:
+      owner: byteink
+      name: homebrew-tap
+    folder: Formula
+    homepage: https://github.com/byteink/ssd
+    description: Agentless remote deployment tool for Docker Compose stacks
+    license: MIT
+    install: |
+      bin.install "ssd"
+    test: |
+      system "#{bin}/ssd", "version"
+
+scoops:
+  - repository:
+      owner: byteink
+      name: scoop-bucket
+    homepage: https://github.com/byteink/ssd
+    description: Agentless remote deployment tool for Docker Compose stacks
+    license: MIT
+
+nfpms:
+  - package_name: ssd
+    homepage: https://github.com/byteink/ssd
+    description: Agentless remote deployment tool for Docker Compose stacks
+    maintainer: ByteInk <https://github.com/byteink>
+    license: MIT
+    formats:
+      - deb
+      - rpm
