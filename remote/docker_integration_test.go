@@ -160,26 +160,26 @@ CMD ["cat", "/hello.txt"]
 	require.NoError(s.T(), err)
 
 	// Rsync to remote
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(buildDir, remoteDir)
+	err = client.Rsync(context.Background(), buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build image
 	version := 1
-	err = client.BuildImage(remoteDir, version)
+	err = client.BuildImage(context.Background(), remoteDir, version)
 	require.NoError(s.T(), err)
 
 	// Verify image exists
 	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
-	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
+	output, err := client.SSH(context.Background(), fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, imageName)
 
 	// Verify image runs correctly
-	output, err = client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
+	output, err = client.SSH(context.Background(), fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Hello from simple build")
 }
@@ -202,26 +202,26 @@ CMD ["cat", "/custom.txt"]
 	require.NoError(s.T(), err)
 
 	// Rsync to remote
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(buildDir, remoteDir)
+	err = client.Rsync(context.Background(), buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build image with custom Dockerfile path
 	version := 1
-	err = client.BuildImage(remoteDir, version)
+	err = client.BuildImage(context.Background(), remoteDir, version)
 	require.NoError(s.T(), err)
 
 	// Verify image exists
 	imageName := fmt.Sprintf("%s:%d", client.cfg.ImageName(), version)
-	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
+	output, err := client.SSH(context.Background(), fmt.Sprintf("docker images %s --format '{{.Repository}}:{{.Tag}}'", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, imageName)
 
 	// Verify image runs correctly
-	output, err = client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
+	output, err = client.SSH(context.Background(), fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Custom dockerfile path")
 }
@@ -245,11 +245,11 @@ CMD ["cat", "/version.txt"]
 	require.NoError(s.T(), err)
 
 	// Rsync to remote
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(buildDir, remoteDir)
+	err = client.Rsync(context.Background(), buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build image with build args
@@ -261,11 +261,11 @@ CMD ["cat", "/version.txt"]
 		"cd %s && docker build -t %s --build-arg BUILD_VERSION=1.2.3 --build-arg BUILD_ENV=production -f Dockerfile .",
 		remoteDir, imageName,
 	)
-	err = client.SSHInteractive(buildCmd)
+	err = client.SSHInteractive(context.Background(), buildCmd)
 	require.NoError(s.T(), err)
 
 	// Verify build args were applied
-	output, err := client.SSH(fmt.Sprintf("docker run --rm %s", imageName))
+	output, err := client.SSH(context.Background(), fmt.Sprintf("docker run --rm %s", imageName))
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "Version: 1.2.3")
 	assert.Contains(s.T(), output, "Environment: production")
@@ -286,21 +286,21 @@ CMD ["echo", "Image tagging test"]
 	require.NoError(s.T(), err)
 
 	// Rsync to remote
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(buildDir, remoteDir)
+	err = client.Rsync(context.Background(), buildDir, remoteDir)
 	require.NoError(s.T(), err)
 
 	// Build multiple versions
 	for version := 1; version <= 3; version++ {
-		err = client.BuildImage(remoteDir, version)
+		err = client.BuildImage(context.Background(), remoteDir, version)
 		require.NoError(s.T(), err, "Failed to build version %d", version)
 	}
 
 	// Verify all three versions exist
-	output, err := client.SSH(fmt.Sprintf("docker images %s --format '{{.Tag}}'", client.cfg.ImageName()))
+	output, err := client.SSH(context.Background(), fmt.Sprintf("docker images %s --format '{{.Tag}}'", client.cfg.ImageName()))
 	require.NoError(s.T(), err)
 
 	// Parse tags from output

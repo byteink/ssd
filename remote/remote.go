@@ -14,17 +14,17 @@ import (
 
 // RemoteClient defines the interface for remote operations
 type RemoteClient interface {
-	SSH(command string) (string, error)
-	SSHInteractive(command string) error
-	Rsync(localPath, remotePath string) error
-	GetCurrentVersion() (int, error)
-	BuildImage(buildDir string, version int) error
-	UpdateCompose(version int) error
-	RestartStack() error
-	GetContainerStatus() (string, error)
-	GetLogs(follow bool, tail int) error
-	Cleanup(path string) error
-	MakeTempDir() (string, error)
+	SSH(ctx context.Context, command string) (string, error)
+	SSHInteractive(ctx context.Context, command string) error
+	Rsync(ctx context.Context, localPath, remotePath string) error
+	GetCurrentVersion(ctx context.Context) (int, error)
+	BuildImage(ctx context.Context, buildDir string, version int) error
+	UpdateCompose(ctx context.Context, version int) error
+	RestartStack(ctx context.Context) error
+	GetContainerStatus(ctx context.Context) (string, error)
+	GetLogs(ctx context.Context, follow bool, tail int) error
+	Cleanup(ctx context.Context, path string) error
+	MakeTempDir(ctx context.Context) (string, error)
 }
 
 // Ensure Client implements RemoteClient
@@ -56,8 +56,8 @@ func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client
 }
 
 // SSH executes a command on the remote server
-func (c *Client) SSH(command string) (string, error) {
-	output, err := c.executor.Run(context.Background(), "ssh", c.server, command)
+func (c *Client) SSH(ctx context.Context, command string) (string, error) {
+	output, err := c.executor.Run(ctx, "ssh", c.server, command)
 	if err != nil {
 		return "", fmt.Errorf("ssh command failed: %w", err)
 	}
@@ -65,12 +65,12 @@ func (c *Client) SSH(command string) (string, error) {
 }
 
 // SSHInteractive runs an SSH command with output streamed to terminal
-func (c *Client) SSHInteractive(command string) error {
-	return c.executor.RunInteractive(context.Background(), "ssh", c.server, command)
+func (c *Client) SSHInteractive(ctx context.Context, command string) error {
+	return c.executor.RunInteractive(ctx, "ssh", c.server, command)
 }
 
 // Rsync syncs local directory to remote server
-func (c *Client) Rsync(localPath, remotePath string) error {
+func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error {
 	// Build rsync command with common excludes
 	excludes := []string{
 		".git",
@@ -97,13 +97,13 @@ func (c *Client) Rsync(localPath, remotePath string) error {
 
 	args = append(args, localPath, fmt.Sprintf("%s:%s", c.server, remotePath))
 
-	return c.executor.RunInteractive(context.Background(), "rsync", args...)
+	return c.executor.RunInteractive(ctx, "rsync", args...)
 }
 
 // GetCurrentVersion reads the current image version from compose.yaml on the server
-func (c *Client) GetCurrentVersion() (int, error) {
+func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
-	output, err := c.SSH(fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
+	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
 	if err != nil {
 		return 0, nil // No compose.yaml means version 0
 	}
@@ -131,7 +131,7 @@ func (c *Client) GetCurrentVersion() (int, error) {
 }
 
 // BuildImage builds a Docker image on the remote server
-func (c *Client) BuildImage(buildDir string, version int) error {
+func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) error {
 	imageTag := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Build command with dockerfile path relative to build context
@@ -141,16 +141,16 @@ func (c *Client) BuildImage(buildDir string, version int) error {
 	}
 
 	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile))
-	return c.SSHInteractive(cmd)
+	return c.SSHInteractive(ctx, cmd)
 }
 
 // UpdateCompose updates the image tag in compose.yaml
-func (c *Client) UpdateCompose(version int) error {
+func (c *Client) UpdateCompose(ctx context.Context, version int) error {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
 	newImage := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Read current compose.yaml
-	output, err := c.SSH(fmt.Sprintf("cat %s", shellescape.Quote(composePath)))
+	output, err := c.SSH(ctx, fmt.Sprintf("cat %s", shellescape.Quote(composePath)))
 	if err != nil {
 		return fmt.Errorf("failed to read compose.yaml: %w", err)
 	}
@@ -163,27 +163,27 @@ func (c *Client) UpdateCompose(version int) error {
 	// Write back
 	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
 	cmd := fmt.Sprintf("echo '%s' > %s", escapedContent, shellescape.Quote(composePath))
-	_, err = c.SSH(cmd)
+	_, err = c.SSH(ctx, cmd)
 	return err
 }
 
 // RestartStack runs docker compose up -d in the stack directory
-func (c *Client) RestartStack() error {
+func (c *Client) RestartStack(ctx context.Context) error {
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker compose up -d", shellescape.Quote(stackPath))
-	return c.SSHInteractive(cmd)
+	return c.SSHInteractive(ctx, cmd)
 }
 
 // GetContainerStatus returns the status of the container
-func (c *Client) GetContainerStatus() (string, error) {
+func (c *Client) GetContainerStatus(ctx context.Context) (string, error) {
 	// Try to find container by compose project name
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Name}}\\t{{.Status}}'", shellescape.Quote(stackPath))
-	return c.SSH(cmd)
+	return c.SSH(ctx, cmd)
 }
 
 // GetLogs returns logs from the container
-func (c *Client) GetLogs(follow bool, tail int) error {
+func (c *Client) GetLogs(ctx context.Context, follow bool, tail int) error {
 	stackPath := c.cfg.StackPath()
 
 	tailArg := ""
@@ -197,21 +197,21 @@ func (c *Client) GetLogs(follow bool, tail int) error {
 	}
 
 	cmd := fmt.Sprintf("cd %s && docker compose logs %s %s", shellescape.Quote(stackPath), followArg, tailArg)
-	return c.SSHInteractive(cmd)
+	return c.SSHInteractive(ctx, cmd)
 }
 
 // Cleanup removes a directory on the remote server
-func (c *Client) Cleanup(path string) error {
+func (c *Client) Cleanup(ctx context.Context, path string) error {
 	if err := ValidateTempPath(path); err != nil {
 		return err
 	}
-	_, err := c.SSH(fmt.Sprintf("rm -rf %s", shellescape.Quote(path)))
+	_, err := c.SSH(ctx, fmt.Sprintf("rm -rf %s", shellescape.Quote(path)))
 	return err
 }
 
 // MakeTempDir creates a temporary directory on the remote server
-func (c *Client) MakeTempDir() (string, error) {
-	output, err := c.SSH("mktemp -d")
+func (c *Client) MakeTempDir(ctx context.Context) (string, error) {
+	output, err := c.SSH(ctx, "mktemp -d")
 	if err != nil {
 		return "", err
 	}

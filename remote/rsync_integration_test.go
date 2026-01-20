@@ -81,24 +81,24 @@ func (s *RsyncIntegrationSuite) TestRsync_BasicSync() {
 	err = os.WriteFile(filepath.Join(localDir, "subdir", "file3.txt"), []byte("content3"), 0644)
 	require.NoError(s.T(), err)
 
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err := client.SSH("ls -1 " + remoteDir)
+	output, err := client.SSH(context.Background(), "ls -1 " + remoteDir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "file1.txt")
 	assert.Contains(s.T(), output, "file2.txt")
 	assert.Contains(s.T(), output, "subdir")
 
-	output, err = client.SSH("cat " + remoteDir + "/file1.txt")
+	output, err = client.SSH(context.Background(), "cat " + remoteDir + "/file1.txt")
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), "content1", output)
 
-	output, err = client.SSH("cat " + remoteDir + "/subdir/file3.txt")
+	output, err = client.SSH(context.Background(), "cat " + remoteDir + "/subdir/file3.txt")
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), "content3", output)
 }
@@ -119,19 +119,19 @@ func (s *RsyncIntegrationSuite) TestRsync_ExcludesGit() {
 	err = os.WriteFile(filepath.Join(gitDir, "config"), []byte("git config"), 0644)
 	require.NoError(s.T(), err)
 
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err := client.SSH("ls -1 " + remoteDir)
+	output, err := client.SSH(context.Background(), "ls -1 " + remoteDir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "app.txt")
 	assert.NotContains(s.T(), output, ".git")
 
-	output, err = client.SSH("test -d " + remoteDir + "/.git && echo 'EXISTS' || echo 'MISSING'")
+	output, err = client.SSH(context.Background(), "test -d " + remoteDir + "/.git && echo 'EXISTS' || echo 'MISSING'")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "MISSING")
 }
@@ -152,19 +152,19 @@ func (s *RsyncIntegrationSuite) TestRsync_ExcludesNodeModules() {
 	err = os.WriteFile(filepath.Join(nodeModulesDir, "some-package", "index.js"), []byte("module.exports = {};"), 0644)
 	require.NoError(s.T(), err)
 
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err := client.SSH("ls -1 " + remoteDir)
+	output, err := client.SSH(context.Background(), "ls -1 " + remoteDir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "package.json")
 	assert.NotContains(s.T(), output, "node_modules")
 
-	output, err = client.SSH("test -d " + remoteDir + "/node_modules && echo 'EXISTS' || echo 'MISSING'")
+	output, err = client.SSH(context.Background(), "test -d " + remoteDir + "/node_modules && echo 'EXISTS' || echo 'MISSING'")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "MISSING")
 }
@@ -184,18 +184,18 @@ func (s *RsyncIntegrationSuite) TestRsync_PreservesPermissions() {
 	err = os.WriteFile(readOnlyPath, []byte("readonly"), 0444)
 	require.NoError(s.T(), err)
 
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err := client.SSH("stat -c '%a' " + remoteDir + "/script.sh")
+	output, err := client.SSH(context.Background(), "stat -c '%a' " + remoteDir + "/script.sh")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "755")
 
-	output, err = client.SSH("stat -c '%a' " + remoteDir + "/readonly.txt")
+	output, err = client.SSH(context.Background(), "stat -c '%a' " + remoteDir + "/readonly.txt")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "444")
 }
@@ -212,14 +212,14 @@ func (s *RsyncIntegrationSuite) TestRsync_DeletesRemoved() {
 	err = os.WriteFile(filepath.Join(localDir, "remove.txt"), []byte("remove"), 0644)
 	require.NoError(s.T(), err)
 
-	remoteDir, err := client.MakeTempDir()
+	remoteDir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
-	defer client.Cleanup(remoteDir)
+	defer client.Cleanup(context.Background(), remoteDir)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err := client.SSH("ls -1 " + remoteDir)
+	output, err := client.SSH(context.Background(), "ls -1 " + remoteDir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "keep.txt")
 	assert.Contains(s.T(), output, "remove.txt")
@@ -227,15 +227,15 @@ func (s *RsyncIntegrationSuite) TestRsync_DeletesRemoved() {
 	err = os.Remove(filepath.Join(localDir, "remove.txt"))
 	require.NoError(s.T(), err)
 
-	err = client.Rsync(localDir, remoteDir)
+	err = client.Rsync(context.Background(), localDir, remoteDir)
 	require.NoError(s.T(), err)
 
-	output, err = client.SSH("ls -1 " + remoteDir)
+	output, err = client.SSH(context.Background(), "ls -1 " + remoteDir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "keep.txt")
 	assert.NotContains(s.T(), output, "remove.txt")
 
-	output, err = client.SSH("test -f " + remoteDir + "/remove.txt && echo 'EXISTS' || echo 'DELETED'")
+	output, err = client.SSH(context.Background(), "test -f " + remoteDir + "/remove.txt && echo 'EXISTS' || echo 'DELETED'")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "DELETED")
 }

@@ -59,7 +59,7 @@ func (s *SSHIntegrationSuite) newClient() *Client {
 func (s *SSHIntegrationSuite) TestSSH_BasicCommand() {
 	client := s.newClient()
 
-	output, err := client.SSH("echo hello")
+	output, err := client.SSH(context.Background(), "echo hello")
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), "hello\n", output)
 }
@@ -67,7 +67,7 @@ func (s *SSHIntegrationSuite) TestSSH_BasicCommand() {
 func (s *SSHIntegrationSuite) TestSSH_MultipleCommands() {
 	client := s.newClient()
 
-	output, err := client.SSH("echo one && echo two")
+	output, err := client.SSH(context.Background(), "echo one && echo two")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "one")
 	assert.Contains(s.T(), output, "two")
@@ -76,17 +76,17 @@ func (s *SSHIntegrationSuite) TestSSH_MultipleCommands() {
 func (s *SSHIntegrationSuite) TestMakeTempDir() {
 	client := s.newClient()
 
-	dir, err := client.MakeTempDir()
+	dir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
 	assert.True(s.T(), strings.HasPrefix(dir, "/tmp/"))
 
 	// Verify directory exists
-	output, err := client.SSH("ls -d " + dir)
+	output, err := client.SSH(context.Background(), "ls -d " + dir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, dir)
 
 	// Cleanup
-	err = client.Cleanup(dir)
+	err = client.Cleanup(context.Background(), dir)
 	require.NoError(s.T(), err)
 }
 
@@ -94,18 +94,18 @@ func (s *SSHIntegrationSuite) TestCleanup() {
 	client := s.newClient()
 
 	// Create a directory and file
-	dir, err := client.MakeTempDir()
+	dir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
 
-	_, err = client.SSH("touch " + dir + "/testfile && mkdir " + dir + "/subdir")
+	_, err = client.SSH(context.Background(), "touch " + dir + "/testfile && mkdir " + dir + "/subdir")
 	require.NoError(s.T(), err)
 
 	// Cleanup
-	err = client.Cleanup(dir)
+	err = client.Cleanup(context.Background(), dir)
 	require.NoError(s.T(), err)
 
 	// Verify it's gone
-	output, _ := client.SSH("ls " + dir + " 2>&1 || echo 'DELETED'")
+	output, _ := client.SSH(context.Background(), "ls " + dir + " 2>&1 || echo 'DELETED'")
 	assert.Contains(s.T(), output, "DELETED")
 }
 
@@ -113,9 +113,9 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_NoComposeFile() {
 	client := s.newClient()
 
 	// Ensure no compose.yaml exists
-	client.SSH("rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), 0, version)
 }
@@ -124,84 +124,84 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_WithComposeFile() {
 	client := s.newClient()
 
 	// Create stack directory and compose file
-	client.SSH("mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(`echo 'services:
+	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), `echo 'services:
   app:
     image: ssd-testapp:7
     ports:
       - "8080:8080"' > /home/testuser/stacks/testapp/compose.yaml`)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), 7, version)
 
 	// Cleanup
-	client.SSH("rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestGetCurrentVersion_() {
 	client := s.newClient()
 
 	// Create stack directory and compose file with 
-	client.SSH("mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(`echo 'services:
+	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), `echo 'services:
   app:
     image: ssd-testapp:5' > /home/testuser/stacks/testapp/compose.yaml`)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), 5, version)
 
 	// Cleanup
-	client.SSH("rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestUpdateCompose() {
 	client := s.newClient()
 
 	// Create stack directory and compose file
-	client.SSH("mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(`echo 'services:
+	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), `echo 'services:
   app:
     image: ssd-testapp:1
     ports:
       - "8080:8080"' > /home/testuser/stacks/testapp/compose.yaml`)
 
 	// Update to version 2
-	err := client.UpdateCompose(2)
+	err := client.UpdateCompose(context.Background(), 2)
 	require.NoError(s.T(), err)
 
 	// Verify
-	output, err := client.SSH("cat /home/testuser/stacks/testapp/compose.yaml")
+	output, err := client.SSH(context.Background(), "cat /home/testuser/stacks/testapp/compose.yaml")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "ssd-testapp:2")
 	assert.NotContains(s.T(), output, "ssd-testapp:1")
 
 	// Cleanup
-	client.SSH("rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestUpdateCompose_Migrates() {
 	client := s.newClient()
 
 	// Create stack directory with 
-	client.SSH("mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(`echo 'services:
+	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), `echo 'services:
   app:
     image: ssd-testapp:3' > /home/testuser/stacks/testapp/compose.yaml`)
 
 	// Update - should migrate to new format
-	err := client.UpdateCompose(4)
+	err := client.UpdateCompose(context.Background(), 4)
 	require.NoError(s.T(), err)
 
 	// Verify
-	output, err := client.SSH("cat /home/testuser/stacks/testapp/compose.yaml")
+	output, err := client.SSH(context.Background(), "cat /home/testuser/stacks/testapp/compose.yaml")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "ssd-testapp:4")
 	assert.NotContains(s.T(), output, "ssd")
 
 	// Cleanup
-	client.SSH("rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
 }
 
 func TestSSHIntegrationSuite(t *testing.T) {

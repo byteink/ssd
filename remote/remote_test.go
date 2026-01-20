@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -48,7 +49,7 @@ func TestClient_SSH_Success(t *testing.T) {
 
 	mockExec.On("Run", "ssh", []string{"testserver", "echo hello"}).Return("hello\n", nil)
 
-	output, err := client.SSH("echo hello")
+	output, err := client.SSH(context.Background(), "echo hello")
 
 	require.NoError(t, err)
 	assert.Equal(t, "hello\n", output)
@@ -62,7 +63,7 @@ func TestClient_SSH_Error(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
 
-	_, err := client.SSH("echo hello")
+	_, err := client.SSH(context.Background(), "echo hello")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ssh command failed")
@@ -76,7 +77,7 @@ func TestClient_SSHInteractive_Success(t *testing.T) {
 
 	mockExec.On("RunInteractive", "ssh", []string{"testserver", "docker ps"}).Return(nil)
 
-	err := client.SSHInteractive("docker ps")
+	err := client.SSHInteractive(context.Background(), "docker ps")
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -89,7 +90,7 @@ func TestClient_SSHInteractive_Error(t *testing.T) {
 
 	mockExec.On("RunInteractive", "ssh", mock.Anything).Return(errors.New("command failed"))
 
-	err := client.SSHInteractive("docker ps")
+	err := client.SSHInteractive(context.Background(), "docker ps")
 
 	require.Error(t, err)
 }
@@ -140,7 +141,7 @@ func TestClient_Rsync(t *testing.T) {
 		return hasAvz && hasDelete && hasGitExclude && hasNodeModulesExclude && endsWithSlash && hasRemoteDest
 	})).Return(nil)
 
-	err := client.Rsync("/local/path", "/remote/path")
+	err := client.Rsync(context.Background(), "/local/path", "/remote/path")
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -157,7 +158,7 @@ func TestClient_Rsync_AlreadyHasSlash(t *testing.T) {
 		return strings.HasSuffix(source, "/") && !strings.HasSuffix(source, "//")
 	})).Return(nil)
 
-	err := client.Rsync("/local/path/", "/remote/path")
+	err := client.Rsync(context.Background(), "/local/path/", "/remote/path")
 
 	require.NoError(t, err)
 }
@@ -177,7 +178,7 @@ func TestClient_GetCurrentVersion_NewFormat(t *testing.T) {
 		return strings.Contains(args[1], "cat") && strings.Contains(args[1], "compose.yaml")
 	})).Return(composeContent, nil)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 5, version)
@@ -196,7 +197,7 @@ func TestClient_GetCurrentVersion_(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return(composeContent, nil)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 3, version)
@@ -213,7 +214,7 @@ func TestClient_GetCurrentVersion_NoMatch(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return(composeContent, nil)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, version)
@@ -226,7 +227,7 @@ func TestClient_GetCurrentVersion_EmptyFile(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, version)
@@ -243,7 +244,7 @@ func TestClient_GetCurrentVersion_MultiDigit(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return(composeContent, nil)
 
-	version, err := client.GetCurrentVersion()
+	version, err := client.GetCurrentVersion(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 123, version)
@@ -262,7 +263,7 @@ func TestClient_BuildImage(t *testing.T) {
 			strings.Contains(cmd, "-f Dockerfile")
 	})).Return(nil)
 
-	err := client.BuildImage("/tmp/build123", 5)
+	err := client.BuildImage(context.Background(), "/tmp/build123", 5)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -283,7 +284,7 @@ func TestClient_BuildImage_CustomDockerfile(t *testing.T) {
 		return strings.Contains(cmd, "-f docker/Dockerfile.prod")
 	})).Return(nil)
 
-	err := client.BuildImage("/tmp/build", 1)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1)
 
 	require.NoError(t, err)
 }
@@ -306,7 +307,7 @@ func TestClient_UpdateCompose(t *testing.T) {
 			strings.Contains(cmd, "> /stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
-	err := client.UpdateCompose(5)
+	err := client.UpdateCompose(context.Background(), 5)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -329,7 +330,7 @@ func TestClient_UpdateCompose_(t *testing.T) {
 		return strings.Contains(cmd, "ssd-myapp:5") && !strings.Contains(cmd, "ssd")
 	})).Return("", nil)
 
-	err := client.UpdateCompose(5)
+	err := client.UpdateCompose(context.Background(), 5)
 
 	require.NoError(t, err)
 }
@@ -341,7 +342,7 @@ func TestClient_UpdateCompose_ReadError(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("file not found"))
 
-	err := client.UpdateCompose(5)
+	err := client.UpdateCompose(context.Background(), 5)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read compose.yaml")
@@ -358,7 +359,7 @@ func TestClient_RestartStack(t *testing.T) {
 			strings.Contains(cmd, "docker compose up -d")
 	})).Return(nil)
 
-	err := client.RestartStack()
+	err := client.RestartStack(context.Background())
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -376,7 +377,7 @@ func TestClient_GetContainerStatus(t *testing.T) {
 			strings.Contains(cmd, "docker compose ps")
 	})).Return(expectedOutput, nil)
 
-	status, err := client.GetContainerStatus()
+	status, err := client.GetContainerStatus(context.Background())
 
 	require.NoError(t, err)
 	assert.Contains(t, status, "Up 5 minutes")
@@ -394,7 +395,7 @@ func TestClient_GetLogs_NoFollow(t *testing.T) {
 			strings.Contains(cmd, "--tail 100")
 	})).Return(nil)
 
-	err := client.GetLogs(false, 100)
+	err := client.GetLogs(context.Background(), false, 100)
 
 	require.NoError(t, err)
 }
@@ -410,7 +411,7 @@ func TestClient_GetLogs_WithFollow(t *testing.T) {
 			strings.Contains(cmd, "-f")
 	})).Return(nil)
 
-	err := client.GetLogs(true, 0)
+	err := client.GetLogs(context.Background(), true, 0)
 
 	require.NoError(t, err)
 }
@@ -422,7 +423,7 @@ func TestClient_Cleanup(t *testing.T) {
 
 	mockExec.On("Run", "ssh", []string{"testserver", "rm -rf /tmp/build123"}).Return("", nil)
 
-	err := client.Cleanup("/tmp/build123")
+	err := client.Cleanup(context.Background(), "/tmp/build123")
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -433,7 +434,7 @@ func TestClient_Cleanup_InvalidPath(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	err := client.Cleanup("/var/lib/something")
+	err := client.Cleanup(context.Background(), "/var/lib/something")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path must start with /tmp/")
@@ -445,7 +446,7 @@ func TestClient_Cleanup_EmptyPath(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	err := client.Cleanup("")
+	err := client.Cleanup(context.Background(), "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path cannot be empty")
@@ -457,10 +458,11 @@ func TestClient_Cleanup_PathTraversal(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	err := client.Cleanup("/tmp/../etc/passwd")
+	err := client.Cleanup(context.Background(), "/tmp/../etc/passwd")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path must not contain ..")
+	// Path gets normalized to /etc/passwd by filepath.Clean, which fails the /tmp/ prefix check
+	assert.Contains(t, err.Error(), "path must start with /tmp/")
 	mockExec.AssertNotCalled(t, "Run")
 }
 
@@ -471,7 +473,7 @@ func TestClient_MakeTempDir(t *testing.T) {
 
 	mockExec.On("Run", "ssh", []string{"testserver", "mktemp -d"}).Return("/tmp/tmp.abc123\n", nil)
 
-	dir, err := client.MakeTempDir()
+	dir, err := client.MakeTempDir(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/tmp.abc123", dir) // Trimmed
@@ -485,7 +487,7 @@ func TestClient_MakeTempDir_Error(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("disk full"))
 
-	_, err := client.MakeTempDir()
+	_, err := client.MakeTempDir(context.Background())
 
 	require.Error(t, err)
 }
@@ -555,7 +557,9 @@ func TestValidateTempPath_ContainsDotDot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateTempPath(tt.path)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "path must not contain ..")
+			// These paths get normalized by filepath.Clean to paths outside /tmp/
+			// So they fail the prefix check, not the ".." check
+			assert.Contains(t, err.Error(), "path must start with /tmp/")
 		})
 	}
 }

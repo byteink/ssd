@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -87,7 +88,7 @@ func runStatus(args []string) {
 
 	fmt.Printf("Status for %s on %s:\n\n", cfg.Name, cfg.Server)
 
-	status, err := client.GetContainerStatus()
+	status, err := client.GetContainerStatus(context.Background())
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -116,7 +117,7 @@ func runLogs(args []string) {
 	cfg := loadConfig(serviceName)
 	client := remote.NewClient(cfg)
 
-	if err := client.GetLogs(follow, tail); err != nil {
+	if err := client.GetLogs(context.Background(), follow, tail); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
