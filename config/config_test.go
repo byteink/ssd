@@ -48,7 +48,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 func TestLoad_InvalidYAML(t *testing.T) {
 	_, err := Load(testdataPath("invalid.ssd.yaml"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse config file")
+	assert.Contains(t, err.Error(), "failed to parse config")
 }
 
 func TestLoad_DefaultPath(t *testing.T) {
