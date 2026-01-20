@@ -304,13 +304,13 @@ func TestAcquireLock_Success(t *testing.T) {
 func TestAcquireLock_SamePathTwice(t *testing.T) {
 	stackPath := "/stacks/test-concurrent"
 
-	unlock1, err := acquireLock(stackPath)
+	unlock1, err := acquireLockWithTimeout(stackPath, 2*time.Second)
 	require.NoError(t, err)
 	defer unlock1()
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := acquireLock(stackPath)
+		_, err := acquireLockWithTimeout(stackPath, 500*time.Millisecond)
 		done <- err
 	}()
 
@@ -318,7 +318,7 @@ func TestAcquireLock_SamePathTwice(t *testing.T) {
 	case err := <-done:
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "timeout waiting for deployment lock")
-	case <-time.After(6 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("expected timeout error but goroutine did not complete")
 	}
 }
@@ -334,13 +334,13 @@ func TestAcquireLock_ConcurrentDeploys(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			unlock, err := acquireLock(stackPath)
+			unlock, err := acquireLockWithTimeout(stackPath, 500*time.Millisecond)
 			if err != nil {
 				results <- fmt.Errorf("goroutine %d: %w", id, err)
 				return
 			}
 
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 			unlock()
 			results <- nil
 		}(i)

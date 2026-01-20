@@ -1,0 +1,25 @@
+services:
+  app:
+    image: ssd-myapp:5
+    container_name: myapp-container
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    networks:
+      - app-network
+    environment:
+      DATABASE_URL: postgres://localhost/db
+      API_KEY: secret
+
+  db:
+    image: postgres:15
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  db-data:

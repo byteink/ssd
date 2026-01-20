@@ -94,3 +94,70 @@ func TestChaos_MkTempFailsDiskFull(t *testing.T) {
 	mockClient.AssertNotCalled(t, "RestartStack")
 	mockClient.AssertNotCalled(t, "Cleanup", mock.Anything)
 }
+
+func TestChaos_DiskFullDuringBuild(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	diskFullErr := errors.New("no space left on device")
+
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(diskFullErr)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to build image")
+	assert.Contains(t, err.Error(), "no space left on device")
+	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 2)
+	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
+	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
+}
+
+func TestChaos_OutOfMemoryDuringBuild(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	oomErr := errors.New("cannot allocate memory")
+
+	mockClient.On("GetCurrentVersion").Return(2, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 3).Return(oomErr)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to build image")
+	assert.Contains(t, err.Error(), "cannot allocate memory")
+	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 3)
+	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
+	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
+}
+
+func TestChaos_TempDirCleanupRace(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	racErr := errors.New("directory not empty")
+
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
+	mockClient.On("UpdateCompose", 5).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(racErr)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
+}

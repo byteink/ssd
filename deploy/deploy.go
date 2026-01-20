@@ -108,6 +108,11 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 // Returns an unlock function that must be called when deployment completes
 // Timeout is 5 minutes
 func acquireLock(stackPath string) (func(), error) {
+	return acquireLockWithTimeout(stackPath, 5*time.Minute)
+}
+
+// acquireLockWithTimeout creates a file-based lock with a custom timeout
+func acquireLockWithTimeout(stackPath string, timeout time.Duration) (func(), error) {
 	hash := sha256.Sum256([]byte(stackPath))
 	lockPath := filepath.Join(os.TempDir(), fmt.Sprintf("ssd-lock-%x", hash[:8]))
 
@@ -116,7 +121,6 @@ func acquireLock(stackPath string) (func(), error) {
 		return nil, fmt.Errorf("failed to create lock file: %w", err)
 	}
 
-	timeout := 5 * time.Minute
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
