@@ -328,23 +328,30 @@ func TestAcquireLock_ConcurrentDeploys(t *testing.T) {
 
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
+	ready := make(chan struct{})
+	var readyCount int32
 
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
-			unlock, err := acquireLockWithTimeout(stackPath, 500*time.Millisecond)
+			<-ready
+
+			unlock, err := acquireLockWithTimeout(stackPath, 300*time.Millisecond)
 			if err != nil {
 				results <- fmt.Errorf("goroutine %d: %w", id, err)
 				return
 			}
 
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 			unlock()
 			results <- nil
 		}(i)
 	}
+
+	time.Sleep(10 * time.Millisecond)
+	close(ready)
 
 	wg.Wait()
 	close(results)
