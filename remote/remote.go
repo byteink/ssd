@@ -169,7 +169,7 @@ func (c *Client) UpdateCompose(version int) error {
 // RestartStack runs docker compose up -d in the stack directory
 func (c *Client) RestartStack() error {
 	stackPath := c.cfg.StackPath()
-	cmd := fmt.Sprintf("cd %s && docker compose up -d", stackPath)
+	cmd := fmt.Sprintf("cd %s && docker compose up -d", shellescape.Quote(stackPath))
 	return c.SSHInteractive(cmd)
 }
 
@@ -177,7 +177,7 @@ func (c *Client) RestartStack() error {
 func (c *Client) GetContainerStatus() (string, error) {
 	// Try to find container by compose project name
 	stackPath := c.cfg.StackPath()
-	cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Name}}\\t{{.Status}}'", stackPath)
+	cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Name}}\\t{{.Status}}'", shellescape.Quote(stackPath))
 	return c.SSH(cmd)
 }
 
