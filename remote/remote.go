@@ -100,6 +100,28 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 	return c.executor.RunInteractive(ctx, "rsync", args...)
 }
 
+// parseVersionFromContent extracts the version number from compose.yaml content
+// Returns 0, nil if no version found; error on parse failure
+func parseVersionFromContent(content, appName string) (int, error) {
+	// Try new format first: ssd-{name}:{version}
+	imageName := fmt.Sprintf("ssd-%s", appName)
+	re := regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName)))
+	matches := re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		return strconv.Atoi(matches[1])
+	}
+
+	// Try : ssd-{name}:{version}
+	legacyName := fmt.Sprintf("ssd-%s", appName)
+	re = regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(legacyName)))
+	matches = re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		return strconv.Atoi(matches[1])
+	}
+
+	return 0, nil
+}
+
 // GetCurrentVersion reads the current image version from compose.yaml on the server
 func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
@@ -108,26 +130,7 @@ func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 		return 0, nil // No compose.yaml means version 0
 	}
 
-	// Parse image tag from compose.yaml
-	// Looking for pattern: image: ssd-{name}:{version} or ssd-{name}:{version}
-	imageName := c.cfg.ImageName()
-
-	// Try new format first: ssd-{name}:{version}
-	re := regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName)))
-	matches := re.FindStringSubmatch(output)
-	if len(matches) >= 2 {
-		return strconv.Atoi(matches[1])
-	}
-
-	// Try : ssd-{name}:{version}
-	legacyName := fmt.Sprintf("ssd-%s", c.cfg.Name)
-	re = regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(legacyName)))
-	matches = re.FindStringSubmatch(output)
-	if len(matches) >= 2 {
-		return strconv.Atoi(matches[1])
-	}
-
-	return 0, nil
+	return parseVersionFromContent(output, c.cfg.Name)
 }
 
 // BuildImage builds a Docker image on the remote server
