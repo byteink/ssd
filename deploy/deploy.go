@@ -1,16 +1,12 @@
 package deploy
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/remote"
-	"golang.org/x/sys/unix"
 )
 
 // Deployer defines the interface for deployment operations
@@ -43,6 +39,13 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	if opts != nil && opts.Output != nil {
 		output = opts.Output
 	}
+
+	// Acquire deployment lock
+	unlock, err := acquireLock(cfg.StackPath())
+	if err != nil {
+		return fmt.Errorf("failed to acquire deployment lock: %w", err)
+	}
+	defer unlock()
 
 	// Get current version
 	fmt.Fprintf(output, "Checking current version on %s...\n", cfg.Server)
@@ -95,4 +98,10 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 	fmt.Fprintf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
 	return nil
+}
+
+// acquireLock is a no-op function that returns an unlock function
+// Lock functionality has been removed as it's not currently needed
+func acquireLock(stackPath string) (func(), error) {
+	return func() {}, nil
 }

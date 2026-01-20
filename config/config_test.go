@@ -260,7 +260,8 @@ func TestApplyDefaults_AllDefaults(t *testing.T) {
 
 func TestApplyDefaults_WithServiceName(t *testing.T) {
 	cfg := &Config{Server: "myserver"}
-	result := applyDefaults(cfg, "web")
+	result, err := applyDefaults(cfg, "web")
+	require.NoError(t, err)
 
 	assert.Equal(t, "web", result.Name)
 	assert.Equal(t, "/stacks/web", result.Stack)
@@ -275,7 +276,8 @@ func TestApplyDefaults_PreservesExistingValues(t *testing.T) {
 		Context:    "./src",
 	}
 
-	result := applyDefaults(cfg, "ignored-service-name")
+	result, err := applyDefaults(cfg, "ignored-service-name")
+	require.NoError(t, err)
 
 	assert.Equal(t, "custom-name", result.Name)         // Not overwritten
 	assert.Equal(t, "/custom/stack/path", result.Stack) // Not overwritten
@@ -312,4 +314,158 @@ func TestConfig_ImageName(t *testing.T) {
 			assert.Equal(t, tt.expected, cfg.ImageName())
 		})
 	}
+}
+
+func TestRootConfig_GetService_InvalidName(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "single service with invalid name characters",
+			config: &RootConfig{
+				Name:   "my;app",
+				Server: "myserver",
+			},
+			serviceName: "",
+			expectError: "invalid service name",
+		},
+		{
+			name: "single service with empty name after defaults",
+			config: &RootConfig{
+				Name:   "",
+				Server: "myserver",
+			},
+			serviceName: "",
+			expectError: "", // Should use directory name as default
+		},
+		{
+			name: "multi service with invalid name",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {Name: "bad|name"},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid service name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, svc)
+			}
+		})
+	}
+}
+
+func TestRootConfig_GetService_InvalidServer(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "single service with invalid server characters",
+			config: &RootConfig{
+				Name:   "myapp",
+				Server: "my;server",
+			},
+			serviceName: "",
+			expectError: "invalid server",
+		},
+		{
+			name: "multi service with inherited invalid server",
+			config: &RootConfig{
+				Server: "bad|server",
+				Services: map[string]*Config{
+					"web": {Name: "web-svc"},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid server",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+		})
+	}
+}
+
+func TestRootConfig_GetService_InvalidStackPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "single service with relative stack path",
+			config: &RootConfig{
+				Name:   "myapp",
+				Server: "myserver",
+				Stack:  "relative/path",
+			},
+			serviceName: "",
+			expectError: "invalid stack path",
+		},
+		{
+			name: "single service with path traversal",
+			config: &RootConfig{
+				Name:   "myapp",
+				Server: "myserver",
+				Stack:  "/stacks/../etc/passwd",
+			},
+			serviceName: "",
+			expectError: "invalid stack path",
+		},
+		{
+			name: "multi service with invalid stack path",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:  "web-svc",
+						Stack: "relative/stack",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid stack path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+		})
+	}
+}
+
+func TestApplyDefaults_InvalidStackPath(t *testing.T) {
+	cfg := &Config{
+		Name:   "myapp",
+		Server: "myserver",
+		Stack:  "relative/path",
+	}
+
+	_, err := applyDefaults(cfg, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid stack path")
 }
