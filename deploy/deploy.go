@@ -2,39 +2,67 @@ package deploy
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/remote"
 )
 
-// Deploy performs a full deployment
+// Deployer defines the interface for deployment operations
+type Deployer interface {
+	GetCurrentVersion() (int, error)
+	MakeTempDir() (string, error)
+	Rsync(localPath, remotePath string) error
+	BuildImage(buildDir string, version int) error
+	UpdateCompose(version int) error
+	RestartStack() error
+	Cleanup(path string) error
+}
+
+// Options holds configuration for the deployment
+type Options struct {
+	// Output is where to write progress messages (defaults to os.Stdout)
+	Output io.Writer
+}
+
+// Deploy performs a full deployment using the default client
 func Deploy(cfg *config.Config) error {
 	client := remote.NewClient(cfg)
+	return DeployWithClient(cfg, client, nil)
+}
+
+// DeployWithClient performs a deployment with a custom client (for testing)
+func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error {
+	// Default output to discarding if nil (for cleaner test output)
+	output := io.Discard
+	if opts != nil && opts.Output != nil {
+		output = opts.Output
+	}
 
 	// Get current version
-	fmt.Printf("Checking current version on %s...\n", cfg.Server)
+	fmt.Fprintf(output, "Checking current version on %s...\n", cfg.Server)
 	currentVersion, err := client.GetCurrentVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get current version: %w", err)
 	}
 
 	newVersion := currentVersion + 1
-	fmt.Printf("Current version: %d, deploying version: %d\n", currentVersion, newVersion)
+	fmt.Fprintf(output, "Current version: %d, deploying version: %d\n", currentVersion, newVersion)
 
 	// Create temp directory on server
-	fmt.Println("Creating temp build directory...")
+	fmt.Fprintln(output, "Creating temp build directory...")
 	tempDir, err := client.MakeTempDir()
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() {
-		fmt.Println("Cleaning up temp directory...")
+		fmt.Fprintln(output, "Cleaning up temp directory...")
 		client.Cleanup(tempDir)
 	}()
 
 	// Rsync code to server
-	fmt.Printf("Syncing code to %s:%s...\n", cfg.Server, tempDir)
+	fmt.Fprintf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
 	localContext, err := filepath.Abs(cfg.Context)
 	if err != nil {
 		return fmt.Errorf("failed to resolve context path: %w", err)
@@ -44,23 +72,23 @@ func Deploy(cfg *config.Config) error {
 	}
 
 	// Build image on server
-	fmt.Printf("Building image %s:%d...\n", cfg.ImageName(), newVersion)
+	fmt.Fprintf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
 	if err := client.BuildImage(tempDir, newVersion); err != nil {
 		return fmt.Errorf("failed to build image: %w", err)
 	}
 
 	// Update compose.yaml
-	fmt.Println("Updating compose.yaml...")
+	fmt.Fprintln(output, "Updating compose.yaml...")
 	if err := client.UpdateCompose(newVersion); err != nil {
 		return fmt.Errorf("failed to update compose.yaml: %w", err)
 	}
 
 	// Restart stack
-	fmt.Println("Restarting stack...")
+	fmt.Fprintln(output, "Restarting stack...")
 	if err := client.RestartStack(); err != nil {
 		return fmt.Errorf("failed to restart stack: %w", err)
 	}
 
-	fmt.Printf("\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
+	fmt.Fprintf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
 	return nil
 }

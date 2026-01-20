@@ -1,10 +1,7 @@
 package remote
 
 import (
-	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -13,40 +10,61 @@ import (
 	"github.com/byteink/ssd/config"
 )
 
-// Client handles remote operations via SSH
-type Client struct {
-	server string
-	cfg    *config.Config
+// RemoteClient defines the interface for remote operations
+type RemoteClient interface {
+	SSH(command string) (string, error)
+	SSHInteractive(command string) error
+	Rsync(localPath, remotePath string) error
+	GetCurrentVersion() (int, error)
+	BuildImage(buildDir string, version int) error
+	UpdateCompose(version int) error
+	RestartStack() error
+	GetContainerStatus() (string, error)
+	GetLogs(follow bool, tail int) error
+	Cleanup(path string) error
+	MakeTempDir() (string, error)
 }
 
-// NewClient creates a new remote client
+// Ensure Client implements RemoteClient
+var _ RemoteClient = (*Client)(nil)
+
+// Client handles remote operations via SSH
+type Client struct {
+	server   string
+	cfg      *config.Config
+	executor CommandExecutor
+}
+
+// NewClient creates a new remote client with the default executor
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		server: cfg.Server,
-		cfg:    cfg,
+		server:   cfg.Server,
+		cfg:      cfg,
+		executor: NewRealExecutor(),
+	}
+}
+
+// NewClientWithExecutor creates a client with a custom executor (for testing)
+func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client {
+	return &Client{
+		server:   cfg.Server,
+		cfg:      cfg,
+		executor: executor,
 	}
 }
 
 // SSH executes a command on the remote server
 func (c *Client) SSH(command string) (string, error) {
-	cmd := exec.Command("ssh", c.server, command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ssh command failed: %s\n%s", err, stderr.String())
+	output, err := c.executor.Run("ssh", c.server, command)
+	if err != nil {
+		return "", fmt.Errorf("ssh command failed: %w", err)
 	}
-
-	return stdout.String(), nil
+	return output, nil
 }
 
 // SSHInteractive runs an SSH command with output streamed to terminal
 func (c *Client) SSHInteractive(command string) error {
-	cmd := exec.Command("ssh", c.server, command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return c.executor.RunInteractive("ssh", c.server, command)
 }
 
 // Rsync syncs local directory to remote server
@@ -77,11 +95,7 @@ func (c *Client) Rsync(localPath, remotePath string) error {
 
 	args = append(args, localPath, fmt.Sprintf("%s:%s", c.server, remotePath))
 
-	cmd := exec.Command("rsync", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	return c.executor.RunInteractive("rsync", args...)
 }
 
 // GetCurrentVersion reads the current image version from compose.yaml on the server

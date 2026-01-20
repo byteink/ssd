@@ -1,0 +1,195 @@
+package testhelpers
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+// SSHContainer wraps an SSH server container for testing
+type SSHContainer struct {
+	Container testcontainers.Container
+	Host      string
+	Port      string
+	User      string
+	KeyPath   string
+	tmpDir    string
+}
+
+// StartSSHContainer starts an OpenSSH server container for testing
+func StartSSHContainer(ctx context.Context, t *testing.T) (*SSHContainer, error) {
+	t.Helper()
+
+	// Create temporary directory for SSH keys
+	tmpDir, err := os.MkdirTemp("", "ssd-test-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	// Generate test SSH key pair
+	keyPath := filepath.Join(tmpDir, "test_key")
+	pubKeyPath := keyPath + ".pub"
+
+	// Generate key using ssh-keygen
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-q")
+	if err := cmd.Run(); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("failed to generate SSH key: %w", err)
+	}
+
+	pubKey, err := os.ReadFile(pubKeyPath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("failed to read public key: %w", err)
+	}
+
+	req := testcontainers.ContainerRequest{
+		Image:        "linuxserver/openssh-server:latest",
+		ExposedPorts: []string{"2222/tcp"},
+		Env: map[string]string{
+			"PUID":            "1000",
+			"PGID":            "1000",
+			"TZ":              "UTC",
+			"USER_NAME":       "testuser",
+			"PUBLIC_KEY":      string(pubKey),
+			"SUDO_ACCESS":     "true",
+			"PASSWORD_ACCESS": "false",
+		},
+		WaitingFor: wait.ForLog("Server listening on").WithStartupTimeout(120 * time.Second),
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("failed to start container: %w", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		container.Terminate(ctx)
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("failed to get container host: %w", err)
+	}
+
+	port, err := container.MappedPort(ctx, "2222")
+	if err != nil {
+		container.Terminate(ctx)
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("failed to get mapped port: %w", err)
+	}
+
+	// Wait a bit for SSH to be fully ready
+	time.Sleep(3 * time.Second)
+
+	return &SSHContainer{
+		Container: container,
+		Host:      host,
+		Port:      port.Port(),
+		User:      "testuser",
+		KeyPath:   keyPath,
+		tmpDir:    tmpDir,
+	}, nil
+}
+
+// SSHCommand returns a configured SSH command for this container
+func (s *SSHContainer) SSHCommand(command string) *exec.Cmd {
+	args := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-i", s.KeyPath,
+		"-p", s.Port,
+		fmt.Sprintf("%s@%s", s.User, s.Host),
+		command,
+	}
+	return exec.Command("ssh", args...)
+}
+
+// RunSSH executes a command via SSH and returns the output
+func (s *SSHContainer) RunSSH(command string) (string, error) {
+	cmd := s.SSHCommand(command)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("SSH command failed: %s\nstderr: %s", err, stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+// WriteSSHConfig writes a temporary SSH config file for use with this container
+func (s *SSHContainer) WriteSSHConfig(hostAlias string) (string, error) {
+	configContent := fmt.Sprintf(`Host %s
+    HostName %s
+    Port %s
+    User %s
+    IdentityFile %s
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+`, hostAlias, s.Host, s.Port, s.User, s.KeyPath)
+
+	configPath := filepath.Join(s.tmpDir, "ssh_config")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return "", fmt.Errorf("failed to write SSH config: %w", err)
+	}
+	return configPath, nil
+}
+
+// Cleanup terminates the container and removes temp files
+func (s *SSHContainer) Cleanup(ctx context.Context) {
+	if s.Container != nil {
+		s.Container.Terminate(ctx)
+	}
+	if s.tmpDir != "" {
+		os.RemoveAll(s.tmpDir)
+	}
+}
+
+// SSHConfigExecutor is a custom executor that uses a specific SSH config file
+type SSHConfigExecutor struct {
+	ConfigPath string
+}
+
+// Run executes a command using the custom SSH config
+func (e *SSHConfigExecutor) Run(name string, args ...string) (string, error) {
+	if name == "ssh" {
+		// Inject -F flag for SSH config
+		newArgs := []string{"-F", e.ConfigPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	}
+	cmd := exec.Command(name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("command failed: %s\n%s", err, stderr.String())
+	}
+	return stdout.String(), nil
+}
+
+// RunInteractive executes a command with terminal output
+func (e *SSHConfigExecutor) RunInteractive(name string, args ...string) error {
+	if name == "ssh" {
+		newArgs := []string{"-F", e.ConfigPath}
+		newArgs = append(newArgs, args...)
+		args = newArgs
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}

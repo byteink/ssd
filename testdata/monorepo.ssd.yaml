@@ -1,0 +1,10 @@
+server: myserver
+stack: /stacks/myproject
+
+services:
+  web:
+    name: myproject-web
+    context: ./apps/web
+  api:
+    name: myproject-api
+    context: ./apps/api
