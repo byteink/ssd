@@ -329,7 +329,6 @@ func TestAcquireLock_ConcurrentDeploys(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
 	ready := make(chan struct{})
-	var readyCount int32
 
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
