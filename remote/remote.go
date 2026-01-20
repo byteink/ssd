@@ -103,7 +103,7 @@ func (c *Client) Rsync(localPath, remotePath string) error {
 // GetCurrentVersion reads the current image version from compose.yaml on the server
 func (c *Client) GetCurrentVersion() (int, error) {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
-	output, err := c.SSH(fmt.Sprintf("cat %s 2>/dev/null || echo ''", composePath))
+	output, err := c.SSH(fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
 	if err != nil {
 		return 0, nil // No compose.yaml means version 0
 	}
@@ -202,6 +202,9 @@ func (c *Client) GetLogs(follow bool, tail int) error {
 
 // Cleanup removes a directory on the remote server
 func (c *Client) Cleanup(path string) error {
+	if err := ValidateTempPath(path); err != nil {
+		return err
+	}
 	_, err := c.SSH(fmt.Sprintf("rm -rf %s", shellescape.Quote(path)))
 	return err
 }

@@ -428,6 +428,42 @@ func TestClient_Cleanup(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
+func TestClient_Cleanup_InvalidPath(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup("/var/lib/something")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must start with /tmp/")
+	mockExec.AssertNotCalled(t, "Run")
+}
+
+func TestClient_Cleanup_EmptyPath(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup("")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path cannot be empty")
+	mockExec.AssertNotCalled(t, "Run")
+}
+
+func TestClient_Cleanup_PathTraversal(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup("/tmp/../etc/passwd")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must not contain ..")
+	mockExec.AssertNotCalled(t, "Run")
+}
+
 func TestClient_MakeTempDir(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
