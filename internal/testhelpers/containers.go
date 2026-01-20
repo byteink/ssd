@@ -164,14 +164,14 @@ type SSHConfigExecutor struct {
 }
 
 // Run executes a command using the custom SSH config
-func (e *SSHConfigExecutor) Run(name string, args ...string) (string, error) {
+func (e *SSHConfigExecutor) Run(ctx context.Context, name string, args ...string) (string, error) {
 	if name == "ssh" {
 		// Inject -F flag for SSH config
 		newArgs := []string{"-F", e.ConfigPath}
 		newArgs = append(newArgs, args...)
 		args = newArgs
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -182,13 +182,13 @@ func (e *SSHConfigExecutor) Run(name string, args ...string) (string, error) {
 }
 
 // RunInteractive executes a command with terminal output
-func (e *SSHConfigExecutor) RunInteractive(name string, args ...string) error {
+func (e *SSHConfigExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
 	if name == "ssh" {
 		newArgs := []string{"-F", e.ConfigPath}
 		newArgs = append(newArgs, args...)
 		args = newArgs
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

@@ -103,7 +103,7 @@ type dockerSSHExecutor struct {
 	dockerHost string
 }
 
-func (e *dockerSSHExecutor) Run(name string, args ...string) (string, error) {
+func (e *dockerSSHExecutor) Run(ctx context.Context, name string, args ...string) (string, error) {
 	if name == "ssh" && len(args) >= 2 {
 		// Inject DOCKER_HOST into SSH command
 		command := args[len(args)-1]
@@ -116,7 +116,7 @@ func (e *dockerSSHExecutor) Run(name string, args ...string) (string, error) {
 		newArgs = append(newArgs, args...)
 		args = newArgs
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -126,7 +126,7 @@ func (e *dockerSSHExecutor) Run(name string, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-func (e *dockerSSHExecutor) RunInteractive(name string, args ...string) error {
+func (e *dockerSSHExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
 	if name == "ssh" && len(args) >= 2 {
 		command := args[len(args)-1]
 		args[len(args)-1] = fmt.Sprintf("export DOCKER_HOST=%s && %s", e.dockerHost, command)
@@ -138,7 +138,7 @@ func (e *dockerSSHExecutor) RunInteractive(name string, args ...string) error {
 		newArgs = append(newArgs, args...)
 		args = newArgs
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
