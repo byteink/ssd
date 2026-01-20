@@ -212,3 +212,22 @@ func (c *Client) MakeTempDir() (string, error) {
 	}
 	return strings.TrimSpace(output), nil
 }
+
+// ValidateTempPath validates that a path is safe for temporary operations
+func ValidateTempPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	normalized := filepath.Clean(path)
+
+	if !strings.HasPrefix(normalized, "/tmp/") {
+		return fmt.Errorf("path must start with /tmp/")
+	}
+
+	if strings.Contains(normalized, "..") {
+		return fmt.Errorf("path must not contain ..")
+	}
+
+	return nil
+}

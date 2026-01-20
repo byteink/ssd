@@ -218,3 +218,36 @@ func ValidateName(name string) error {
 
 	return nil
 }
+
+// ValidateStackPath validates a stack path for security and correctness
+func ValidateStackPath(path string) error {
+	// Reject empty paths
+	if path == "" {
+		return fmt.Errorf("stack path cannot be empty")
+	}
+
+	// Max length check (Linux PATH_MAX is 4096)
+	if len(path) > 4096 {
+		return fmt.Errorf("stack path exceeds maximum length of 4096 characters")
+	}
+
+	// Must be absolute path
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("stack path must be absolute (start with /)")
+	}
+
+	// Reject path traversal attempts
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("stack path contains path traversal sequence (..)")
+	}
+
+	// Shell metacharacters to reject for command injection prevention
+	dangerousChars := ";|&$`(){}[]<>\\\"'*?"
+	for _, r := range path {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("stack path contains shell metacharacter: %c", r)
+		}
+	}
+
+	return nil
+}
