@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -21,37 +22,37 @@ type MockDeployer struct {
 	mock.Mock
 }
 
-func (m *MockDeployer) GetCurrentVersion() (int, error) {
+func (m *MockDeployer) GetCurrentVersion(ctx context.Context) (int, error) {
 	args := m.Called()
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockDeployer) MakeTempDir() (string, error) {
+func (m *MockDeployer) MakeTempDir(ctx context.Context) (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockDeployer) Rsync(localPath, remotePath string) error {
+func (m *MockDeployer) Rsync(ctx context.Context, localPath, remotePath string) error {
 	args := m.Called(localPath, remotePath)
 	return args.Error(0)
 }
 
-func (m *MockDeployer) BuildImage(buildDir string, version int) error {
+func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version int) error {
 	args := m.Called(buildDir, version)
 	return args.Error(0)
 }
 
-func (m *MockDeployer) UpdateCompose(version int) error {
+func (m *MockDeployer) UpdateCompose(ctx context.Context, version int) error {
 	args := m.Called(version)
 	return args.Error(0)
 }
 
-func (m *MockDeployer) RestartStack() error {
+func (m *MockDeployer) RestartStack(ctx context.Context) error {
 	args := m.Called()
 	return args.Error(0)
 }
 
-func (m *MockDeployer) Cleanup(path string) error {
+func (m *MockDeployer) Cleanup(ctx context.Context, path string) error {
 	args := m.Called(path)
 	return args.Error(0)
 }
