@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -151,4 +153,33 @@ func (c *Config) StackPath() string {
 // ImageName returns the Docker image name (without tag)
 func (c *Config) ImageName() string {
 	return fmt.Sprintf("ssd-%s", c.Name)
+}
+
+// ValidateServer validates a server hostname/identifier
+// Returns an error if the server name contains shell metacharacters or is invalid
+func ValidateServer(server string) error {
+	if server == "" {
+		return fmt.Errorf("server cannot be empty")
+	}
+
+	if len(server) > 253 {
+		return fmt.Errorf("server name exceeds maximum length of 253 characters")
+	}
+
+	// Check for shell metacharacters
+	dangerous := ";|&$`(){}[]<>\\\"'"
+	for _, r := range server {
+		if strings.ContainsRune(dangerous, r) {
+			return fmt.Errorf("server name contains invalid character: %q", r)
+		}
+	}
+
+	// Validate allowed characters: alphanumeric, hyphen, underscore, dot
+	for _, r := range server {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' && r != '.' {
+			return fmt.Errorf("server name contains invalid character: %q", r)
+		}
+	}
+
+	return nil
 }
