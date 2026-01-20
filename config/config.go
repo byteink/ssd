@@ -155,6 +155,14 @@ func applyDefaults(cfg *Config, serviceName string) *Config {
 		result.Stack = filepath.Join("/stacks", result.Name)
 	}
 
+	// Validate stack path
+	if err := ValidateStackPath(result.Stack); err != nil {
+		// Since applyDefaults returns *Config, we cannot return error directly
+		// The validation error will be caught when GetService calls ValidateStackPath
+		// For now, we validate but don't fail here to maintain function signature
+		// Validation will happen in GetService after defaults are applied
+	}
+
 	// Default dockerfile: ./Dockerfile
 	if result.Dockerfile == "" {
 		result.Dockerfile = "./Dockerfile"
