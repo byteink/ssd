@@ -246,7 +246,8 @@ func TestApplyDefaults_AllDefaults(t *testing.T) {
 	os.Chdir(tmpDir)
 
 	cfg := &Config{Server: "myserver"}
-	result := applyDefaults(cfg, "")
+	result, err := applyDefaults(cfg, "")
+	require.NoError(t, err)
 
 	assert.Equal(t, "myserver", result.Server)
 	assert.Equal(t, "./Dockerfile", result.Dockerfile)

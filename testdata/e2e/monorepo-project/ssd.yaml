@@ -1,0 +1,10 @@
+server: testserver
+stack: /stacks/monorepo
+
+services:
+  web:
+    name: monorepo-web
+    context: ./apps/web
+  api:
+    name: monorepo-api
+    context: ./apps/api

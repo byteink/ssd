@@ -74,7 +74,10 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 			cfg.Stack = r.Stack
 		}
 
-		result := applyDefaults(&cfg, serviceName)
+		result, err := applyDefaults(&cfg, serviceName)
+		if err != nil {
+			return nil, err
+		}
 
 		// Validate name
 		if err := ValidateName(result.Name); err != nil {
@@ -102,7 +105,10 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		Context:    r.Context,
 	}
 
-	result := applyDefaults(cfg, "")
+	result, err := applyDefaults(cfg, "")
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate name
 	if err := ValidateName(result.Name); err != nil {
@@ -134,8 +140,8 @@ func (r *RootConfig) IsSingleService() bool {
 	return len(r.Services) == 0
 }
 
-// applyDefaults fills in default values for a config
-func applyDefaults(cfg *Config, serviceName string) *Config {
+// applyDefaults fills in default values for a config and validates the stack path
+func applyDefaults(cfg *Config, serviceName string) (*Config, error) {
 	result := *cfg
 
 	// Default name: use service name or current directory name
@@ -157,10 +163,7 @@ func applyDefaults(cfg *Config, serviceName string) *Config {
 
 	// Validate stack path
 	if err := ValidateStackPath(result.Stack); err != nil {
-		// Since applyDefaults returns *Config, we cannot return error directly
-		// The validation error will be caught when GetService calls ValidateStackPath
-		// For now, we validate but don't fail here to maintain function signature
-		// Validation will happen in GetService after defaults are applied
+		return nil, fmt.Errorf("invalid stack path: %w", err)
 	}
 
 	// Default dockerfile: ./Dockerfile
@@ -173,7 +176,7 @@ func applyDefaults(cfg *Config, serviceName string) *Config {
 		result.Context = "."
 	}
 
-	return &result
+	return &result, nil
 }
 
 // StackPath returns the full path to the stack directory on the server

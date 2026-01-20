@@ -1,0 +1,5 @@
+services:
+  app:
+    image: ssd-myapp:1
+    ports:
+      - "8080:8080"

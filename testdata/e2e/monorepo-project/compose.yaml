@@ -1,0 +1,10 @@
+services:
+  web:
+    image: ssd-monorepo-web:1
+    container_name: monorepo-web
+    restart: unless-stopped
+
+  api:
+    image: ssd-monorepo-api:1
+    container_name: monorepo-api
+    restart: unless-stopped

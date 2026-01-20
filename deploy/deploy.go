@@ -1,12 +1,16 @@
 package deploy
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/remote"
+	"golang.org/x/sys/unix"
 )
 
 // Deployer defines the interface for deployment operations
