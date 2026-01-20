@@ -149,7 +149,7 @@ func (c *Client) UpdateCompose(version int) error {
 	newImage := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Read current compose.yaml
-	output, err := c.SSH(fmt.Sprintf("cat %s", composePath))
+	output, err := c.SSH(fmt.Sprintf("cat %s", shellescape.Quote(composePath)))
 	if err != nil {
 		return fmt.Errorf("failed to read compose.yaml: %w", err)
 	}
@@ -161,7 +161,7 @@ func (c *Client) UpdateCompose(version int) error {
 
 	// Write back
 	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
-	cmd := fmt.Sprintf("echo '%s' > %s", escapedContent, composePath)
+	cmd := fmt.Sprintf("echo '%s' > %s", escapedContent, shellescape.Quote(composePath))
 	_, err = c.SSH(cmd)
 	return err
 }
@@ -201,7 +201,7 @@ func (c *Client) GetLogs(follow bool, tail int) error {
 
 // Cleanup removes a directory on the remote server
 func (c *Client) Cleanup(path string) error {
-	_, err := c.SSH(fmt.Sprintf("rm -rf %s", path))
+	_, err := c.SSH(fmt.Sprintf("rm -rf %s", shellescape.Quote(path)))
 	return err
 }
 

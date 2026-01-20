@@ -74,7 +74,19 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 			cfg.Stack = r.Stack
 		}
 
-		return applyDefaults(&cfg, serviceName), nil
+		result := applyDefaults(&cfg, serviceName)
+
+		// Validate name
+		if err := ValidateName(result.Name); err != nil {
+			return nil, fmt.Errorf("invalid service name: %w", err)
+		}
+
+		// Validate server
+		if err := ValidateServer(result.Server); err != nil {
+			return nil, fmt.Errorf("invalid server: %w", err)
+		}
+
+		return result, nil
 	}
 
 	// Single-service mode
@@ -90,7 +102,19 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		Context:    r.Context,
 	}
 
-	return applyDefaults(cfg, ""), nil
+	result := applyDefaults(cfg, "")
+
+	// Validate name
+	if err := ValidateName(result.Name); err != nil {
+		return nil, fmt.Errorf("invalid service name: %w", err)
+	}
+
+	// Validate server
+	if err := ValidateServer(result.Server); err != nil {
+		return nil, fmt.Errorf("invalid server: %w", err)
+	}
+
+	return result, nil
 }
 
 // ListServices returns all service names in a multi-service config
