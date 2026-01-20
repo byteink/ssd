@@ -195,7 +195,7 @@ func (c *Client) GetLogs(follow bool, tail int) error {
 		followArg = "-f"
 	}
 
-	cmd := fmt.Sprintf("cd %s && docker compose logs %s %s", stackPath, followArg, tailArg)
+	cmd := fmt.Sprintf("cd %s && docker compose logs %s %s", shellescape.Quote(stackPath), followArg, tailArg)
 	return c.SSHInteractive(cmd)
 }
 

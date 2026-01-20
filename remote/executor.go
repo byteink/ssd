@@ -2,9 +2,11 @@ package remote
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // CommandExecutor abstracts command execution for testing
