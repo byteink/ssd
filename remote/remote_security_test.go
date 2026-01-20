@@ -367,6 +367,89 @@ func TestShellInjection_CleanupPathValidation(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
+// TestCleanup_RejectsAbsolutePathOutsideTmp verifies /etc is rejected
+func TestCleanup_RejectsAbsolutePathOutsideTmp(t *testing.T) {
+	cfg := &config.Config{
+		Name:   "myapp",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup(context.Background(), "/etc")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must be in /tmp")
+}
+
+// TestCleanup_RejectsPathTraversal verifies /tmp/../etc is rejected
+func TestCleanup_RejectsPathTraversal(t *testing.T) {
+	cfg := &config.Config{
+		Name:   "myapp",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup(context.Background(), "/tmp/../etc")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must be in /tmp")
+}
+
+// TestCleanup_RejectsRootPath verifies / is rejected
+func TestCleanup_RejectsRootPath(t *testing.T) {
+	cfg := &config.Config{
+		Name:   "myapp",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup(context.Background(), "/")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must be in /tmp")
+}
+
+// TestCleanup_RejectsEmptyPath verifies empty string is rejected
+func TestCleanup_RejectsEmptyPath(t *testing.T) {
+	cfg := &config.Config{
+		Name:   "myapp",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.Cleanup(context.Background(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path must be in /tmp")
+}
+
+// TestCleanup_AcceptsValidTempPath verifies /tmp/ssd-xxx is allowed
+func TestCleanup_AcceptsValidTempPath(t *testing.T) {
+	cfg := &config.Config{
+		Name:   "myapp",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "rm -rf") &&
+			(strings.Contains(cmd, "'/tmp/ssd-12345'") ||
+				strings.Contains(cmd, `"/tmp/ssd-12345"`))
+	})).Return("", nil)
+
+	err := client.Cleanup(context.Background(), "/tmp/ssd-12345")
+	require.NoError(t, err)
+
+	mockExec.AssertExpectations(t)
+}
+
 // TestShellInjection_RsyncPathsWithSpecialChars verifies rsync handles special chars safely
 func TestShellInjection_RsyncPathsWithSpecialChars(t *testing.T) {
 	cfg := &config.Config{

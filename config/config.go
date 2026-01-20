@@ -43,9 +43,16 @@ func Load(path string) (*RootConfig, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	return LoadFromBytes(data)
+}
+
+// LoadFromBytes parses raw YAML bytes into RootConfig
+// Does not panic on any input, returns error instead
+// Enables fuzz testing without file system
+func LoadFromBytes(data []byte) (*RootConfig, error) {
 	var cfg RootConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
 	return &cfg, nil
