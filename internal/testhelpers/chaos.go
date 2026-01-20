@@ -28,9 +28,9 @@ type ChaosExecutor struct {
 // NewChaosExecutor creates a new ChaosExecutor wrapping the provided executor
 func NewChaosExecutor(inner Executor) *ChaosExecutor {
 	return &ChaosExecutor{
-		inner:        inner,
-		failAfterN:   -1,
-		rng:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		inner:         inner,
+		failAfterN:    -1,
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
 		failProbility: 0.0,
 	}
 }

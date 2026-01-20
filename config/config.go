@@ -79,11 +79,6 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 			return nil, err
 		}
 
-		// Validate name
-		if err := ValidateName(result.Name); err != nil {
-			return nil, fmt.Errorf("invalid service name: %w", err)
-		}
-
 		// Validate server
 		if err := ValidateServer(result.Server); err != nil {
 			return nil, fmt.Errorf("invalid server: %w", err)
@@ -108,11 +103,6 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 	result, err := applyDefaults(cfg, "")
 	if err != nil {
 		return nil, err
-	}
-
-	// Validate name
-	if err := ValidateName(result.Name); err != nil {
-		return nil, fmt.Errorf("invalid service name: %w", err)
 	}
 
 	// Validate server
@@ -153,6 +143,11 @@ func applyDefaults(cfg *Config, serviceName string) (*Config, error) {
 				result.Name = filepath.Base(cwd)
 			}
 		}
+	}
+
+	// Validate name before using it in stack path
+	if err := ValidateName(result.Name); err != nil {
+		return nil, fmt.Errorf("invalid service name: %w", err)
 	}
 
 	// Default stack: /stacks/{name}

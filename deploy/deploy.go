@@ -1,12 +1,16 @@
 package deploy
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/remote"
+	"golang.org/x/sys/unix"
 )
 
 // Deployer defines the interface for deployment operations
@@ -100,8 +104,44 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	return nil
 }
 
-// acquireLock is a no-op function that returns an unlock function
-// Lock functionality has been removed as it's not currently needed
+// acquireLock creates a file-based lock for the given stack path
+// Returns an unlock function that must be called when deployment completes
+// Timeout is 5 minutes
 func acquireLock(stackPath string) (func(), error) {
-	return func() {}, nil
+	hash := sha256.Sum256([]byte(stackPath))
+	lockPath := filepath.Join(os.TempDir(), fmt.Sprintf("ssd-lock-%x", hash[:8]))
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create lock file: %w", err)
+	}
+
+	timeout := 5 * time.Minute
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		err = unix.Flock(int(lockFile.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+
+		if err != unix.EWOULDBLOCK {
+			lockFile.Close()
+			return nil, fmt.Errorf("failed to acquire lock: %w", err)
+		}
+
+		if time.Now().After(deadline) {
+			lockFile.Close()
+			return nil, fmt.Errorf("timeout waiting for deployment lock after %v", timeout)
+		}
+
+		<-ticker.C
+	}
+
+	return func() {
+		unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+		lockFile.Close()
+	}, nil
 }
