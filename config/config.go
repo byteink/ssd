@@ -183,3 +183,38 @@ func ValidateServer(server string) error {
 
 	return nil
 }
+
+// ValidateName validates a service name for security and correctness
+func ValidateName(name string) error {
+	// Reject empty names
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+
+	// Max length check
+	if len(name) > 128 {
+		return fmt.Errorf("name exceeds maximum length of 128 characters")
+	}
+
+	// Reject names starting with - or .
+	if strings.HasPrefix(name, "-") || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("name cannot start with '-' or '.'")
+	}
+
+	// Shell metacharacters to reject
+	dangerousChars := ";|&$`(){}[]<>\\\"'"
+	for _, r := range name {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("name contains invalid character: %c", r)
+		}
+	}
+
+	// Validate characters: only alphanumeric, hyphens, underscores
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return fmt.Errorf("name contains invalid character: %c (only alphanumeric, hyphens, and underscores allowed)", r)
+		}
+	}
+
+	return nil
+}
