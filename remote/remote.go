@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/byteink/ssd/config"
@@ -103,29 +104,25 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 // parseVersionFromContent extracts the version number from compose.yaml content
 // Returns 0, nil if no version found; error on parse failure
 func parseVersionFromContent(content, appName string) (int, error) {
-	// Validate that appName is valid UTF-8 to prevent regexp compilation panics
-	if !strings.ContainsRune(appName, '\uFFFD') && len(appName) > 0 {
-		// Try new format first: ssd-{name}:{version}
-		imageName := fmt.Sprintf("ssd-%s", appName)
-		pattern := fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName))
-		re, err := regexp.Compile(pattern)
-		if err == nil {
-			matches := re.FindStringSubmatch(content)
-			if len(matches) >= 2 {
-				return strconv.Atoi(matches[1])
-			}
-		}
+	// Validate inputs are valid UTF-8 to prevent regexp compilation panics
+	if !utf8.ValidString(appName) || !utf8.ValidString(content) {
+		return 0, nil
+	}
 
-		// Try : ssd-{name}:{version}
-		legacyName := fmt.Sprintf("ssd-%s", appName)
-		pattern = fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(legacyName))
-		re, err = regexp.Compile(pattern)
-		if err == nil {
-			matches := re.FindStringSubmatch(content)
-			if len(matches) >= 2 {
-				return strconv.Atoi(matches[1])
-			}
-		}
+	// Try new format first: ssd-{name}:{version}
+	imageName := fmt.Sprintf("ssd-%s", appName)
+	re := regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName)))
+	matches := re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		return strconv.Atoi(matches[1])
+	}
+
+	// Try : ssd-{name}:{version}
+	legacyName := fmt.Sprintf("ssd-%s", appName)
+	re = regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(legacyName)))
+	matches = re.FindStringSubmatch(content)
+	if len(matches) >= 2 {
+		return strconv.Atoi(matches[1])
 	}
 
 	return 0, nil
