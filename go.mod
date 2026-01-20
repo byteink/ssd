@@ -1,6 +1,6 @@
 module github.com/byteink/ssd
 
-go 1.25.6
+go 1.24.0
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0
