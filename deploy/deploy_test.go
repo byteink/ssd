@@ -2,18 +2,12 @@ package deploy
 
 import (
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/byteink/ssd/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 // MockDeployer is a mock implementation of the Deployer interface
@@ -290,4 +284,180 @@ func TestDeploy_UsesCorrectTempDir(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertExpectations(t)
+}
+
+func TestAcquireLock_Success(t *testing.T) {
+	stackPath := "/stacks/test-app"
+	unlock, err := acquireLock(stackPath)
+	require.NoError(t, err)
+	require.NotNil(t, unlock)
+
+	unlock()
+}
+
+func TestAcquireLock_SamePathTwice(t *testing.T) {
+	stackPath := "/stacks/test-concurrent"
+
+	unlock1, err := acquireLock(stackPath)
+	require.NoError(t, err)
+	defer unlock1()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := acquireLock(stackPath)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "timeout waiting for deployment lock")
+	case <-time.After(6 * time.Second):
+		t.Fatal("expected timeout error but goroutine did not complete")
+	}
+}
+
+func TestAcquireLock_ConcurrentDeploys(t *testing.T) {
+	stackPath := "/stacks/concurrent-test"
+
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			unlock, err := acquireLock(stackPath)
+			if err != nil {
+				results <- fmt.Errorf("goroutine %d: %w", id, err)
+				return
+			}
+
+			time.Sleep(100 * time.Millisecond)
+			unlock()
+			results <- nil
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	timeoutCount := 0
+
+	for err := range results {
+		if err == nil {
+			successCount++
+		} else if err != nil && err.Error() != "" {
+			timeoutCount++
+		}
+	}
+
+	assert.Equal(t, 1, successCount, "exactly one deployment should succeed")
+	assert.Equal(t, 1, timeoutCount, "exactly one deployment should timeout")
+}
+
+func TestAcquireLock_DifferentPaths(t *testing.T) {
+	unlock1, err := acquireLock("/stacks/app1")
+	require.NoError(t, err)
+	defer unlock1()
+
+	unlock2, err := acquireLock("/stacks/app2")
+	require.NoError(t, err)
+	defer unlock2()
+}
+
+func TestAcquireLock_UnlockReleases(t *testing.T) {
+	stackPath := "/stacks/unlock-test"
+
+	unlock1, err := acquireLock(stackPath)
+	require.NoError(t, err)
+	unlock1()
+
+	unlock2, err := acquireLock(stackPath)
+	require.NoError(t, err)
+	defer unlock2()
+}
+
+func TestAcquireLock_LockFileCreated(t *testing.T) {
+	stackPath := "/stacks/lockfile-test"
+	unlock, err := acquireLock(stackPath)
+	require.NoError(t, err)
+	defer unlock()
+
+	expectedPath := filepath.Join(os.TempDir(), "ssd-lock-")
+	files, err := filepath.Glob(expectedPath + "*")
+	require.NoError(t, err)
+	assert.NotEmpty(t, files, "lock file should exist")
+}
+
+func TestDeploy_WithLocking(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestDeploy_LockReleasedOnError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(0, errors.New("connection failed"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+	require.Error(t, err)
+
+	unlock, err := acquireLock(cfg.StackPath())
+	require.NoError(t, err, "lock should be released after deployment error")
+	unlock()
+}
+
+func TestAcquireLock_InvalidFile(t *testing.T) {
+	origTempDir := os.TempDir
+	defer func() { os.TempDir = origTempDir }()
+
+	os.TempDir = func() string {
+		return "/nonexistent/path/that/does/not/exist"
+	}
+
+	_, err := acquireLock("/stacks/test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create lock file")
+}
+
+func TestAcquireLock_FlockBehavior(t *testing.T) {
+	lockPath := filepath.Join(os.TempDir(), "ssd-test-flock")
+	defer os.Remove(lockPath)
+
+	f1, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	require.NoError(t, err)
+	defer f1.Close()
+
+	err = unix.Flock(int(f1.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	require.NoError(t, err)
+
+	f2, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	require.NoError(t, err)
+	defer f2.Close()
+
+	err = unix.Flock(int(f2.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	assert.Equal(t, unix.EWOULDBLOCK, err)
+
+	err = unix.Flock(int(f1.Fd()), unix.LOCK_UN)
+	require.NoError(t, err)
+
+	err = unix.Flock(int(f2.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	require.NoError(t, err)
 }
