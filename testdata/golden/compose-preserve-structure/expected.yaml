@@ -1,0 +1,9 @@
+# My app config
+services:
+  app:
+    image: ssd-myapp:2
+    environment: &env
+      NODE_ENV: production
+  worker:
+    image: worker:latest
+    environment: *env
