@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,13 +42,17 @@ func StartSSHContainer(ctx context.Context, t *testing.T) (*SSHContainer, error)
 	// Generate key using ssh-keygen
 	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-q")
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tmpDir)
+		if cleanupErr := os.RemoveAll(tmpDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp dir: %v", cleanupErr)
+		}
 		return nil, fmt.Errorf("failed to generate SSH key: %w", err)
 	}
 
 	pubKey, err := os.ReadFile(pubKeyPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		if cleanupErr := os.RemoveAll(tmpDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp dir: %v", cleanupErr)
+		}
 		return nil, fmt.Errorf("failed to read public key: %w", err)
 	}
 
@@ -71,21 +76,31 @@ func StartSSHContainer(ctx context.Context, t *testing.T) (*SSHContainer, error)
 		Started:          true,
 	})
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		if cleanupErr := os.RemoveAll(tmpDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp dir: %v", cleanupErr)
+		}
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
 	host, err := container.Host(ctx)
 	if err != nil {
-		container.Terminate(ctx)
-		os.RemoveAll(tmpDir)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			log.Printf("failed to terminate container: %v", termErr)
+		}
+		if cleanupErr := os.RemoveAll(tmpDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp dir: %v", cleanupErr)
+		}
 		return nil, fmt.Errorf("failed to get container host: %w", err)
 	}
 
 	port, err := container.MappedPort(ctx, "2222")
 	if err != nil {
-		container.Terminate(ctx)
-		os.RemoveAll(tmpDir)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			log.Printf("failed to terminate container: %v", termErr)
+		}
+		if cleanupErr := os.RemoveAll(tmpDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp dir: %v", cleanupErr)
+		}
 		return nil, fmt.Errorf("failed to get mapped port: %w", err)
 	}
 
@@ -151,10 +166,14 @@ func (s *SSHContainer) WriteSSHConfig(hostAlias string) (string, error) {
 // Cleanup terminates the container and removes temp files
 func (s *SSHContainer) Cleanup(ctx context.Context) {
 	if s.Container != nil {
-		s.Container.Terminate(ctx)
+		if err := s.Container.Terminate(ctx); err != nil {
+			log.Printf("failed to terminate container: %v", err)
+		}
 	}
 	if s.tmpDir != "" {
-		os.RemoveAll(s.tmpDir)
+		if err := os.RemoveAll(s.tmpDir); err != nil {
+			log.Printf("failed to cleanup temp dir: %v", err)
+		}
 	}
 }
 

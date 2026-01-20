@@ -248,7 +248,11 @@ func ValidateName(name string) error {
 
 	// Validate characters: only alphanumeric, hyphens, underscores
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		isAllowed := isLower || isUpper || isDigit || r == '-' || r == '_'
+		if !isAllowed {
 			return fmt.Errorf("name contains invalid character: %c (only alphanumeric, hyphens, and underscores allowed)", r)
 		}
 	}

@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Rules
+
+- **TDD**: Write tests first, then implementation
+- **Never weaken tests**: Fix code, not tests
+- **Never relax linting**: Fix errors, don't disable rules or use `_ =`
+
 ## Build & Run
 
 ```bash

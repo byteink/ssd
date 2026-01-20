@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"testing"
 
 	"github.com/docker/go-connections/nat"
@@ -40,13 +41,17 @@ func StartDinDContainer(ctx context.Context, t *testing.T) (*DinDContainer, erro
 
 	host, err := container.Host(ctx)
 	if err != nil {
-		container.Terminate(ctx)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			log.Printf("failed to terminate container: %v", termErr)
+		}
 		return nil, fmt.Errorf("failed to get container host: %w", err)
 	}
 
 	mappedPort, err := container.MappedPort(ctx, "2375")
 	if err != nil {
-		container.Terminate(ctx)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			log.Printf("failed to terminate container: %v", termErr)
+		}
 		return nil, fmt.Errorf("failed to get mapped port: %w", err)
 	}
 

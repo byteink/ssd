@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +14,20 @@ import (
 	"github.com/byteink/ssd/remote"
 	"golang.org/x/sys/unix"
 )
+
+// logf writes formatted output, logging errors to stderr if write fails
+func logf(w io.Writer, format string, args ...interface{}) {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		log.Printf("failed to write output: %v", err)
+	}
+}
+
+// logln writes a line to output, logging errors to stderr if write fails
+func logln(w io.Writer, msg string) {
+	if _, err := fmt.Fprintln(w, msg); err != nil {
+		log.Printf("failed to write output: %v", err)
+	}
+}
 
 // Deployer defines the interface for deployment operations
 type Deployer interface {
@@ -55,28 +70,30 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	defer unlock()
 
 	// Get current version
-	fmt.Fprintf(output, "Checking current version on %s...\n", cfg.Server)
+	logf(output, "Checking current version on %s...\n", cfg.Server)
 	currentVersion, err := client.GetCurrentVersion(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current version: %w", err)
 	}
 
 	newVersion := currentVersion + 1
-	fmt.Fprintf(output, "Current version: %d, deploying version: %d\n", currentVersion, newVersion)
+	logf(output, "Current version: %d, deploying version: %d\n", currentVersion, newVersion)
 
 	// Create temp directory on server
-	fmt.Fprintln(output, "Creating temp build directory...")
+	logln(output, "Creating temp build directory...")
 	tempDir, err := client.MakeTempDir(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() {
-		fmt.Fprintln(output, "Cleaning up temp directory...")
-		client.Cleanup(ctx, tempDir)
+		logln(output, "Cleaning up temp directory...")
+		if cleanupErr := client.Cleanup(ctx, tempDir); cleanupErr != nil {
+			log.Printf("failed to cleanup temp directory: %v", cleanupErr)
+		}
 	}()
 
 	// Rsync code to server
-	fmt.Fprintf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
+	logf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
 	localContext, err := filepath.Abs(cfg.Context)
 	if err != nil {
 		return fmt.Errorf("failed to resolve context path: %w", err)
@@ -86,24 +103,24 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	}
 
 	// Build image on server
-	fmt.Fprintf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
+	logf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
 	if err := client.BuildImage(ctx, tempDir, newVersion); err != nil {
 		return fmt.Errorf("failed to build image: %w", err)
 	}
 
 	// Update compose.yaml
-	fmt.Fprintln(output, "Updating compose.yaml...")
+	logln(output, "Updating compose.yaml...")
 	if err := client.UpdateCompose(ctx, newVersion); err != nil {
 		return fmt.Errorf("failed to update compose.yaml: %w", err)
 	}
 
 	// Restart stack
-	fmt.Fprintln(output, "Restarting stack...")
+	logln(output, "Restarting stack...")
 	if err := client.RestartStack(ctx); err != nil {
 		return fmt.Errorf("failed to restart stack: %w", err)
 	}
 
-	fmt.Fprintf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
+	logf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
 	return nil
 }
 
@@ -135,12 +152,16 @@ func acquireLockWithTimeout(stackPath string, timeout time.Duration) (func(), er
 		}
 
 		if err != unix.EWOULDBLOCK {
-			lockFile.Close()
+			if closeErr := lockFile.Close(); closeErr != nil {
+				log.Printf("failed to close lock file: %v", closeErr)
+			}
 			return nil, fmt.Errorf("failed to acquire lock: %w", err)
 		}
 
 		if time.Now().After(deadline) {
-			lockFile.Close()
+			if closeErr := lockFile.Close(); closeErr != nil {
+				log.Printf("failed to close lock file: %v", closeErr)
+			}
 			return nil, fmt.Errorf("timeout waiting for deployment lock after %v", timeout)
 		}
 
@@ -148,7 +169,11 @@ func acquireLockWithTimeout(stackPath string, timeout time.Duration) (func(), er
 	}
 
 	return func() {
-		unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
-		lockFile.Close()
+		if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_UN); err != nil {
+			log.Printf("failed to unlock file: %v", err)
+		}
+		if err := lockFile.Close(); err != nil {
+			log.Printf("failed to close lock file: %v", err)
+		}
 	}, nil
 }

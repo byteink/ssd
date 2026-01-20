@@ -443,18 +443,30 @@ func TestAcquireLock_InvalidFile(t *testing.T) {
 
 func TestAcquireLock_FlockBehavior(t *testing.T) {
 	lockPath := filepath.Join(os.TempDir(), "ssd-test-flock")
-	defer os.Remove(lockPath)
+	t.Cleanup(func() {
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			t.Logf("failed to remove lock file: %v", err)
+		}
+	})
 
 	f1, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	require.NoError(t, err)
-	defer f1.Close()
+	t.Cleanup(func() {
+		if err := f1.Close(); err != nil {
+			t.Logf("failed to close f1: %v", err)
+		}
+	})
 
 	err = unix.Flock(int(f1.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	require.NoError(t, err)
 
 	f2, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	require.NoError(t, err)
-	defer f2.Close()
+	t.Cleanup(func() {
+		if err := f2.Close(); err != nil {
+			t.Logf("failed to close f2: %v", err)
+		}
+	})
 
 	err = unix.Flock(int(f2.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	assert.Equal(t, unix.EWOULDBLOCK, err)

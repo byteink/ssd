@@ -55,7 +55,11 @@ func TestLoad_DefaultPath(t *testing.T) {
 	// Create a temp directory with ssd.yaml
 	tmpDir, err := os.MkdirTemp("", "ssd-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("failed to remove temp dir: %v", err)
+		}
+	})
 
 	// Write a test config
 	configContent := "server: tempserver\nname: tempapp"
@@ -63,10 +67,15 @@ func TestLoad_DefaultPath(t *testing.T) {
 	require.NoError(t, err)
 
 	// Change to temp dir
-	oldDir, _ := os.Getwd()
+	oldDir, err := os.Getwd()
+	require.NoError(t, err)
 	err = os.Chdir(tmpDir)
 	require.NoError(t, err)
-	defer os.Chdir(oldDir)
+	t.Cleanup(func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Logf("failed to restore working directory: %v", err)
+		}
+	})
 
 	// Load with empty path (should use default "ssd.yaml")
 	cfg, err := Load("")
@@ -237,13 +246,24 @@ func TestRootConfig_IsSingleService(t *testing.T) {
 
 func TestApplyDefaults_AllDefaults(t *testing.T) {
 	// Save and restore working directory
-	oldDir, _ := os.Getwd()
-	defer os.Chdir(oldDir)
+	oldDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Logf("failed to restore working directory: %v", err)
+		}
+	})
 
 	// Create temp dir with known name
-	tmpDir, _ := os.MkdirTemp("", "testproject")
-	defer os.RemoveAll(tmpDir)
-	os.Chdir(tmpDir)
+	tmpDir, err := os.MkdirTemp("", "testproject")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("failed to remove temp dir: %v", err)
+		}
+	})
+	err = os.Chdir(tmpDir)
+	require.NoError(t, err)
 
 	cfg := &Config{Server: "myserver"}
 	result, err := applyDefaults(cfg, "")

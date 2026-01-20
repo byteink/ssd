@@ -136,10 +136,7 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 	imageTag := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Build command with dockerfile path relative to build context
-	dockerfile := c.cfg.Dockerfile
-	if strings.HasPrefix(dockerfile, "./") {
-		dockerfile = dockerfile[2:]
-	}
+	dockerfile := strings.TrimPrefix(c.cfg.Dockerfile, "./")
 
 	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile))
 	return c.SSHInteractive(ctx, cmd)
@@ -231,7 +228,7 @@ func ValidateTempPath(path string) error {
 	}
 
 	if strings.Contains(normalized, "..") {
-		return fmt.Errorf("path must not contain ..")
+		return fmt.Errorf("path must not contain path traversal sequence")
 	}
 
 	return nil
