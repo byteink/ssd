@@ -47,7 +47,7 @@ func (s *SSHIntegrationSuite) newClient() *Client {
 	cfg := &config.Config{
 		Name:       "testapp",
 		Server:     "testserver",
-		Stack:      "/home/testuser/stacks/testapp",
+		Stack:      "/tmp/stacks/testapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
 	}
@@ -113,7 +113,7 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_NoComposeFile() {
 	client := s.newClient()
 
 	// Ensure no compose.yaml exists
-	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 
 	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
@@ -123,45 +123,53 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_NoComposeFile() {
 func (s *SSHIntegrationSuite) TestGetCurrentVersion_WithComposeFile() {
 	client := s.newClient()
 
-	// Create stack directory and compose file
-	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(context.Background(), `echo 'services:
+	// Create stack directory and compose file using heredoc for reliable multi-line content
+	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
+	require.NoError(s.T(), err)
+	_, err = client.SSH(context.Background(), `cat > /tmp/stacks/testapp/compose.yaml << 'EOF'
+services:
   app:
     image: ssd-testapp:7
     ports:
-      - "8080:8080"' > /home/testuser/stacks/testapp/compose.yaml`)
+      - "8080:8080"
+EOF`)
+	require.NoError(s.T(), err)
 
 	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), 7, version)
 
 	// Cleanup
-	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestUpdateCompose() {
 	client := s.newClient()
 
-	// Create stack directory and compose file
-	client.SSH(context.Background(), "mkdir -p /home/testuser/stacks/testapp")
-	client.SSH(context.Background(), `echo 'services:
+	// Create stack directory and compose file using heredoc for reliable multi-line content
+	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
+	require.NoError(s.T(), err)
+	_, err = client.SSH(context.Background(), `cat > /tmp/stacks/testapp/compose.yaml << 'EOF'
+services:
   app:
     image: ssd-testapp:1
     ports:
-      - "8080:8080"' > /home/testuser/stacks/testapp/compose.yaml`)
+      - "8080:8080"
+EOF`)
+	require.NoError(s.T(), err)
 
 	// Update to version 2
-	err := client.UpdateCompose(context.Background(), 2)
+	err = client.UpdateCompose(context.Background(), 2)
 	require.NoError(s.T(), err)
 
 	// Verify
-	output, err := client.SSH(context.Background(), "cat /home/testuser/stacks/testapp/compose.yaml")
+	output, err := client.SSH(context.Background(), "cat /tmp/stacks/testapp/compose.yaml")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, "ssd-testapp:2")
 	assert.NotContains(s.T(), output, "ssd-testapp:1")
 
 	// Cleanup
-	client.SSH(context.Background(), "rm -rf /home/testuser/stacks/testapp")
+	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
 func TestSSHIntegrationSuite(t *testing.T) {

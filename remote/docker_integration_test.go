@@ -25,14 +25,11 @@ func TestDocker_SimpleBuild(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	sshContainer, err := testhelpers.StartSSHDockerContainer(ctx, t)
 	require.NoError(t, err)
 	defer sshContainer.Cleanup(ctx)
 
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	_, err = sshContainer.RunSSH("command -v docker || (curl -fsSL https://get.docker.com | sh)")
 	require.NoError(t, err)
 
 	localDir, err := os.MkdirTemp("", "docker-test-*")
@@ -83,14 +80,11 @@ func TestDocker_CustomDockerfilePath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	sshContainer, err := testhelpers.StartSSHDockerContainer(ctx, t)
 	require.NoError(t, err)
 	defer sshContainer.Cleanup(ctx)
 
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	_, err = sshContainer.RunSSH("command -v docker || (curl -fsSL https://get.docker.com | sh)")
 	require.NoError(t, err)
 
 	localDir, err := os.MkdirTemp("", "docker-test-*")
@@ -143,14 +137,11 @@ func TestDocker_BuildWithBuildArgs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	sshContainer, err := testhelpers.StartSSHDockerContainer(ctx, t)
 	require.NoError(t, err)
 	defer sshContainer.Cleanup(ctx)
 
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	_, err = sshContainer.RunSSH("command -v docker || (curl -fsSL https://get.docker.com | sh)")
 	require.NoError(t, err)
 
 	localDir, err := os.MkdirTemp("", "docker-test-*")
@@ -202,14 +193,11 @@ func TestDocker_ImageTagging(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	sshContainer, err := testhelpers.StartSSHDockerContainer(ctx, t)
 	require.NoError(t, err)
 	defer sshContainer.Cleanup(ctx)
 
 	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	_, err = sshContainer.RunSSH("command -v docker || (curl -fsSL https://get.docker.com | sh)")
 	require.NoError(t, err)
 
 	localDir, err := os.MkdirTemp("", "docker-test-*")
