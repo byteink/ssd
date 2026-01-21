@@ -477,3 +477,166 @@ func TestAcquireLock_FlockBehavior(t *testing.T) {
 	err = unix.Flock(int(f2.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	require.NoError(t, err)
 }
+
+// Restart tests
+
+func TestRestart_Success(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("RestartStack").Return(nil)
+
+	err := RestartWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestRestart_Error(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("RestartStack").Return(errors.New("compose up failed"))
+
+	err := RestartWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to restart stack")
+}
+
+func TestRestart_LockReleasedOnError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("RestartStack").Return(errors.New("failed"))
+
+	err := RestartWithClient(cfg, mockClient, nil)
+	require.Error(t, err)
+
+	// Lock should be released
+	unlock, err := acquireLock(cfg.StackPath())
+	require.NoError(t, err, "lock should be released after restart error")
+	unlock()
+}
+
+// Rollback tests
+
+func TestRollback_Success(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Current version is 5, rollback to 4
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("UpdateCompose", 4).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestRollback_GetVersionError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(0, errors.New("SSH failed"))
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get current version")
+}
+
+func TestRollback_CannotRollbackVersion0(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rollback: no previous version")
+}
+
+func TestRollback_CannotRollbackVersion1(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rollback: no previous version")
+}
+
+func TestRollback_UpdateComposeError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("UpdateCompose", 4).Return(errors.New("permission denied"))
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to update compose.yaml")
+}
+
+func TestRollback_RestartError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("UpdateCompose", 4).Return(nil)
+	mockClient.On("RestartStack").Return(errors.New("compose up failed"))
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to restart stack")
+}
+
+func TestRollback_VersionDecrement(t *testing.T) {
+	tests := []struct {
+		name            string
+		currentVersion  int
+		expectedVersion int
+	}{
+		{"version 2 to 1", 2, 1},
+		{"version 10 to 9", 10, 9},
+		{"version 100 to 99", 100, 99},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockDeployer)
+			cfg := newTestConfig()
+
+			mockClient.On("GetCurrentVersion").Return(tt.currentVersion, nil)
+			mockClient.On("UpdateCompose", tt.expectedVersion).Return(nil)
+			mockClient.On("RestartStack").Return(nil)
+
+			err := RollbackWithClient(cfg, mockClient, nil)
+
+			require.NoError(t, err)
+			mockClient.AssertCalled(t, "UpdateCompose", tt.expectedVersion)
+		})
+	}
+}
+
+func TestRollback_LockReleasedOnError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(0, errors.New("connection failed"))
+
+	err := RollbackWithClient(cfg, mockClient, nil)
+	require.Error(t, err)
+
+	unlock, err := acquireLock(cfg.StackPath())
+	require.NoError(t, err, "lock should be released after rollback error")
+	unlock()
+}

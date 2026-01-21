@@ -27,6 +27,10 @@ func main() {
 		fmt.Printf("ssd version %s\n", version)
 	case "deploy":
 		runDeploy(args)
+	case "restart":
+		runRestart(args)
+	case "rollback":
+		runRollback(args)
 	case "status":
 		runStatus(args)
 	case "logs":
@@ -72,6 +76,38 @@ func runDeploy(args []string) {
 	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
 
 	if err := deploy.Deploy(cfg); err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runRestart(args []string) {
+	serviceName := ""
+	if len(args) > 0 {
+		serviceName = args[0]
+	}
+
+	cfg := loadConfig(serviceName)
+
+	fmt.Printf("Restarting %s on %s...\n\n", cfg.Name, cfg.Server)
+
+	if err := deploy.Restart(cfg); err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runRollback(args []string) {
+	serviceName := ""
+	if len(args) > 0 {
+		serviceName = args[0]
+	}
+
+	cfg := loadConfig(serviceName)
+
+	fmt.Printf("Rolling back %s on %s...\n\n", cfg.Name, cfg.Server)
+
+	if err := deploy.Rollback(cfg); err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -172,7 +208,9 @@ func printUsage() {
 	fmt.Println("Agentless remote deployment tool for Docker Compose stacks.")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ssd deploy [service]     Deploy application")
+	fmt.Println("  ssd deploy [service]     Deploy application (build + restart)")
+	fmt.Println("  ssd restart [service]    Restart stack without rebuilding")
+	fmt.Println("  ssd rollback [service]   Rollback to previous version")
 	fmt.Println("  ssd status [service]     Check deployment status")
 	fmt.Println("  ssd logs [service] [-f]  View logs (-f to follow)")
 	fmt.Println("  ssd config [service]     Show current configuration")

@@ -119,3 +119,87 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	logf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
 	return nil
 }
+
+// Restart restarts the stack without building a new image
+func Restart(cfg *config.Config) error {
+	client := remote.NewClient(cfg)
+	return RestartWithClient(cfg, client, nil)
+}
+
+// RestartWithClient restarts with a custom client (for testing)
+func RestartWithClient(cfg *config.Config, client Deployer, opts *Options) error {
+	ctx := context.Background()
+
+	output := io.Discard
+	if opts != nil && opts.Output != nil {
+		output = opts.Output
+	}
+
+	// Acquire deployment lock
+	unlock, err := acquireLock(cfg.StackPath())
+	if err != nil {
+		return fmt.Errorf("failed to acquire deployment lock: %w", err)
+	}
+	defer unlock()
+
+	// Restart stack
+	logln(output, "Restarting stack...")
+	if err := client.RestartStack(ctx); err != nil {
+		return fmt.Errorf("failed to restart stack: %w", err)
+	}
+
+	logf(output, "\nRestarted %s successfully!\n", cfg.Name)
+	return nil
+}
+
+// Rollback rolls back to the previous version
+func Rollback(cfg *config.Config) error {
+	client := remote.NewClient(cfg)
+	return RollbackWithClient(cfg, client, nil)
+}
+
+// RollbackWithClient rolls back with a custom client (for testing)
+func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) error {
+	ctx := context.Background()
+
+	output := io.Discard
+	if opts != nil && opts.Output != nil {
+		output = opts.Output
+	}
+
+	// Acquire deployment lock
+	unlock, err := acquireLock(cfg.StackPath())
+	if err != nil {
+		return fmt.Errorf("failed to acquire deployment lock: %w", err)
+	}
+	defer unlock()
+
+	// Get current version
+	logf(output, "Checking current version on %s...\n", cfg.Server)
+	currentVersion, err := client.GetCurrentVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current version: %w", err)
+	}
+
+	if currentVersion <= 1 {
+		return fmt.Errorf("cannot rollback: no previous version (current: %d)", currentVersion)
+	}
+
+	previousVersion := currentVersion - 1
+	logf(output, "Current version: %d, rolling back to: %d\n", currentVersion, previousVersion)
+
+	// Update compose.yaml to previous version
+	logln(output, "Updating compose.yaml...")
+	if err := client.UpdateCompose(ctx, previousVersion); err != nil {
+		return fmt.Errorf("failed to update compose.yaml: %w", err)
+	}
+
+	// Restart stack
+	logln(output, "Restarting stack...")
+	if err := client.RestartStack(ctx); err != nil {
+		return fmt.Errorf("failed to restart stack: %w", err)
+	}
+
+	logf(output, "\nRolled back %s to version %d successfully!\n", cfg.Name, previousVersion)
+	return nil
+}
