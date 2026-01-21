@@ -89,7 +89,9 @@ ssd deploy web
 ## Commands
 
 ```bash
-ssd deploy [service]     # Deploy application
+ssd deploy [service]     # Deploy application (build + restart)
+ssd restart [service]    # Restart stack without rebuilding
+ssd rollback [service]   # Rollback to previous version
 ssd status [service]     # Check deployment status
 ssd logs [service] [-f]  # View logs (-f to follow)
 ssd config [service]     # Show current configuration

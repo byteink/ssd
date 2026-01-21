@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **TDD**: Write tests first, then implementation
 - **Never weaken tests**: Fix code, not tests
 - **Never relax linting**: Fix errors, don't disable rules or use `_ =`
+- **Keep docs updated**: When adding/changing features, update both `README.md` and `CLAUDE.md`
 
 ## Build & Run
 
