@@ -218,8 +218,35 @@ func runEnv(args []string) {
 }
 
 func runEnvSet(service string, args []string) {
-	// TODO: Implement env set
-	fmt.Printf("runEnvSet called for service=%s with args=%v\n", service, args)
+	if len(args) == 0 {
+		fmt.Println("Usage: ssd env <service> set KEY=VALUE")
+		os.Exit(1)
+	}
+
+	arg := args[0]
+	parts := strings.SplitN(arg, "=", 2)
+	if len(parts) != 2 {
+		fmt.Printf("Error: Invalid format. Expected KEY=VALUE, got: %s\n", arg)
+		os.Exit(1)
+	}
+
+	key := parts[0]
+	value := parts[1]
+
+	if key == "" {
+		fmt.Println("Error: KEY cannot be empty")
+		os.Exit(1)
+	}
+
+	cfg := loadConfig(service)
+	client := remote.NewClient(cfg)
+
+	if err := client.SetEnvVar(context.Background(), service, key, value); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Set %s=%s for service %s\n", key, value, service)
 }
 
 func runEnvList(service string, args []string) {

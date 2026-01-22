@@ -782,7 +782,7 @@ func TestClient_CreateEnvFile(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/.env")
+		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
 	})).Return("", nil)
 
 	err := client.CreateEnvFile(context.Background(), "myservice")
@@ -812,7 +812,7 @@ func TestClient_CreateEnvFile_Idempotent(t *testing.T) {
 	// Call twice to verify idempotency
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/.env")
+		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
 	})).Return("", nil).Twice()
 
 	err := client.CreateEnvFile(context.Background(), "myservice")
@@ -878,13 +878,13 @@ func TestClient_SetEnvVar(t *testing.T) {
 	// First call reads env file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+		return strings.Contains(cmd, "cat /stacks/myapp/myservice.env")
 	})).Return(existingContent, nil).Once()
 
 	// Second call writes updated env file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/.env") &&
+		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
 			strings.Contains(cmd, "OLD_VAR=old_value") &&
 			strings.Contains(cmd, "NEW_VAR=new_value")
 	})).Return("", nil).Once()
@@ -963,13 +963,13 @@ func TestClient_RemoveEnvVar(t *testing.T) {
 	// First call reads env file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+		return strings.Contains(cmd, "cat /stacks/myapp/myservice.env")
 	})).Return(existingContent, nil).Once()
 
 	// Second call writes filtered env file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/.env") &&
+		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
 			strings.Contains(cmd, "DB_HOST=localhost") &&
 			!strings.Contains(cmd, "DB_PORT=5432") &&
 			strings.Contains(cmd, "DB_USER=admin")
