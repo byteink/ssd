@@ -18,13 +18,23 @@ type ComposeFile struct {
 
 // Service represents a Docker Compose service definition
 type Service struct {
-	Image    string   `yaml:"image"`
-	Restart  string   `yaml:"restart"`
-	EnvFile  string   `yaml:"env_file,omitempty"`
-	Ports    []string `yaml:"ports,omitempty"`
-	Command  []string `yaml:"command,omitempty"`
-	Networks []string `yaml:"networks"`
-	Volumes  []string `yaml:"volumes,omitempty"`
+	Image       string       `yaml:"image"`
+	Restart     string       `yaml:"restart"`
+	EnvFile     string       `yaml:"env_file,omitempty"`
+	Ports       []string     `yaml:"ports,omitempty"`
+	Command     []string     `yaml:"command,omitempty"`
+	Networks    []string     `yaml:"networks"`
+	Volumes     []string     `yaml:"volumes,omitempty"`
+	Labels      []string     `yaml:"labels,omitempty"`
+	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty"`
+}
+
+// HealthCheck represents a Docker Compose healthcheck definition
+type HealthCheck struct {
+	Test     []string `yaml:"test"`
+	Interval string   `yaml:"interval,omitempty"`
+	Timeout  string   `yaml:"timeout,omitempty"`
+	Retries  int      `yaml:"retries,omitempty"`
 }
 
 // Network represents a Docker Compose network definition
@@ -84,6 +94,21 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 				svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", volumeName, mountPath))
 				volumesUsed[volumeName] = true
 			}
+		}
+
+		// Add healthcheck if configured
+		if cfg.HealthCheck != nil {
+			svc.HealthCheck = &HealthCheck{
+				Test:     []string{"CMD", "sh", "-c", cfg.HealthCheck.Cmd},
+				Interval: cfg.HealthCheck.Interval,
+				Timeout:  cfg.HealthCheck.Timeout,
+				Retries:  cfg.HealthCheck.Retries,
+			}
+		}
+
+		// Add Traefik labels if domain is configured
+		if cfg.Domain != "" {
+			svc.Labels = generateTraefikLabels(project, name, cfg)
 		}
 
 		compose.Services[name] = svc

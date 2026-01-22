@@ -467,6 +467,272 @@ func TestAtomicWrite_FailedWritePreservesOriginal(t *testing.T) {
 	}
 }
 
+func TestGenerateCompose_WithHealthCheck(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   3000,
+			HealthCheck: &config.HealthCheck{
+				Cmd:      "curl -f http://localhost:3000/health || exit 1",
+				Interval: "30s",
+				Timeout:  "10s",
+				Retries:  3,
+			},
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify healthcheck block exists
+	healthcheck, ok := webService["healthcheck"].(map[string]interface{})
+	if !ok {
+		t.Fatal("healthcheck missing or not a map")
+	}
+
+	// Verify test command
+	test, ok := healthcheck["test"].([]interface{})
+	if !ok {
+		t.Fatal("healthcheck test missing or not an array")
+	}
+	if len(test) != 4 {
+		t.Fatalf("healthcheck test length = %d, want 4", len(test))
+	}
+	if test[0] != "CMD" || test[1] != "sh" || test[2] != "-c" {
+		t.Errorf("healthcheck test format incorrect, got %v", test)
+	}
+	if test[3] != "curl -f http://localhost:3000/health || exit 1" {
+		t.Errorf("healthcheck test cmd = %v, want curl command", test[3])
+	}
+
+	// Verify interval
+	if healthcheck["interval"] != "30s" {
+		t.Errorf("healthcheck interval = %v, want 30s", healthcheck["interval"])
+	}
+
+	// Verify timeout
+	if healthcheck["timeout"] != "10s" {
+		t.Errorf("healthcheck timeout = %v, want 10s", healthcheck["timeout"])
+	}
+
+	// Verify retries
+	if healthcheck["retries"] != 3 {
+		t.Errorf("healthcheck retries = %v, want 3", healthcheck["retries"])
+	}
+}
+
+func TestGenerateCompose_WithoutHealthCheck(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify healthcheck block does not exist
+	if _, ok := webService["healthcheck"]; ok {
+		t.Error("healthcheck should not be present when not configured")
+	}
+}
+
+func TestGenerateCompose_WithDomainAndHTTPS(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			HTTPS:  &trueVal,
+			Port:   3000,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify labels exist
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Required labels for HTTPS service
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=websecure",
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=3000",
+		"traefik.http.routers.myapp-web-http.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-http.middlewares=redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+}
+
+func TestGenerateCompose_WithDomainNoHTTPS(t *testing.T) {
+	falseVal := false
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			HTTPS:  &falseVal,
+			Port:   8080,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify labels exist
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Required labels for HTTP-only service
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=web",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=8080",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+
+	// Verify redirect labels and certresolver are NOT present
+	disallowedLabels := []string{
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.routers.myapp-web-http.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-http.middlewares=redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	for _, disallowed := range disallowedLabels {
+		for _, actual := range labelStrings {
+			if actual == disallowed {
+				t.Errorf("Unexpected label %q found in HTTP-only config", disallowed)
+			}
+		}
+	}
+}
+
+func TestGenerateCompose_NoDomain(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify no labels when domain is not set
+	if labels, ok := webService["labels"]; ok {
+		t.Errorf("Labels should not exist when domain is not set, but found: %v", labels)
+	}
+}
+
 func TestGenerateTraefikCompose(t *testing.T) {
 	email := "admin@example.com"
 	result := GenerateTraefikCompose(email)
