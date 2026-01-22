@@ -293,3 +293,56 @@ func ValidateStackPath(path string) error {
 
 	return nil
 }
+
+// ValidateDomain validates a domain name for security and correctness
+func ValidateDomain(domain string) error {
+	// Reject empty string
+	if domain == "" {
+		return fmt.Errorf("domain cannot be empty")
+	}
+
+	// Reject protocol prefix
+	if strings.HasPrefix(domain, "http://") || strings.HasPrefix(domain, "https://") {
+		return fmt.Errorf("domain cannot contain protocol prefix")
+	}
+
+	// Reject paths
+	if strings.Contains(domain, "/") {
+		return fmt.Errorf("domain cannot contain path")
+	}
+
+	// Reject ports
+	if strings.Contains(domain, ":") {
+		return fmt.Errorf("domain cannot contain port")
+	}
+
+	// Reject spaces
+	if strings.Contains(domain, " ") {
+		return fmt.Errorf("domain cannot contain spaces")
+	}
+
+	// Max length check (DNS limit)
+	if len(domain) > 253 {
+		return fmt.Errorf("domain exceeds maximum length of 253 characters")
+	}
+
+	// Reject shell metacharacters
+	dangerousChars := ";|&$`(){}[]<>\\\"'"
+	for _, r := range domain {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("domain contains invalid character: %c", r)
+		}
+	}
+
+	// Validate allowed characters: letters, digits, hyphens, dots
+	for _, r := range domain {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		isAllowed := isLetter || isDigit || r == '-' || r == '.'
+		if !isAllowed {
+			return fmt.Errorf("domain contains invalid character: %c (only letters, digits, hyphens, and dots allowed)", r)
+		}
+	}
+
+	return nil
+}

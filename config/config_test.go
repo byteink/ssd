@@ -735,3 +735,108 @@ services:
 		})
 	}
 }
+
+func TestValidateDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{
+			name:    "empty string",
+			domain:  "",
+			wantErr: true,
+		},
+		{
+			name:    "http protocol prefix",
+			domain:  "http://example.com",
+			wantErr: true,
+		},
+		{
+			name:    "https protocol prefix",
+			domain:  "https://x.com",
+			wantErr: true,
+		},
+		{
+			name:    "with path",
+			domain:  "x.com/path",
+			wantErr: true,
+		},
+		{
+			name:    "with port",
+			domain:  "x.com:8080",
+			wantErr: true,
+		},
+		{
+			name:    "with space",
+			domain:  "x.com bad",
+			wantErr: true,
+		},
+		{
+			name:    "with semicolon",
+			domain:  "x.com;rm",
+			wantErr: true,
+		},
+		{
+			name:    "with pipe",
+			domain:  "x.com|ls",
+			wantErr: true,
+		},
+		{
+			name:    "with ampersand",
+			domain:  "x.com&pwd",
+			wantErr: true,
+		},
+		{
+			name:    "with backtick",
+			domain:  "x.com`id`",
+			wantErr: true,
+		},
+		{
+			name:    "with dollar sign",
+			domain:  "x.com$(date)",
+			wantErr: true,
+		},
+		{
+			name:    "exceeds max length",
+			domain:  "a" + string(make([]byte, 253)) + ".com",
+			wantErr: true,
+		},
+		{
+			name:    "valid simple domain",
+			domain:  "example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid subdomain",
+			domain:  "api.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid multi-level subdomain",
+			domain:  "api.staging.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid with hyphen",
+			domain:  "my-app.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid short domain",
+			domain:  "x.co",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDomain(tt.domain)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
