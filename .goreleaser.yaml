@@ -48,6 +48,7 @@ brews:
     repository:
       owner: byteink
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     folder: Formula
     homepage: https://github.com/byteink/ssd
     description: Agentless remote deployment tool for Docker Compose stacks
