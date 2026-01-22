@@ -58,6 +58,41 @@ func (m *MockDeployer) Cleanup(ctx context.Context, path string) error {
 	return args.Error(0)
 }
 
+func (m *MockDeployer) StackExists(ctx context.Context) (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockDeployer) CreateStack(ctx context.Context, composeContent string) error {
+	args := m.Called(composeContent)
+	return args.Error(0)
+}
+
+func (m *MockDeployer) EnsureNetwork(ctx context.Context, name string) error {
+	args := m.Called(name)
+	return args.Error(0)
+}
+
+func (m *MockDeployer) CreateEnvFile(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
+func (m *MockDeployer) IsServiceRunning(ctx context.Context, serviceName string) (bool, error) {
+	args := m.Called(serviceName)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockDeployer) PullImage(ctx context.Context, image string) error {
+	args := m.Called(image)
+	return args.Error(0)
+}
+
+func (m *MockDeployer) StartService(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
 func newTestConfig() *config.Config {
 	return &config.Config{
 		Name:       "myapp",
