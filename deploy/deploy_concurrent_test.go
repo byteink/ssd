@@ -44,7 +44,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
 	mockClient1.On("UpdateCompose", 2).Return(nil)
-	mockClient1.On("RestartStack").Run(func(args mock.Arguments) {
+	mockClient1.On("StartService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "first-completed")
 		mu.Unlock()
@@ -67,7 +67,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 3).Return(nil)
 	mockClient2.On("UpdateCompose", 3).Return(nil)
-	mockClient2.On("RestartStack").Run(func(args mock.Arguments) {
+	mockClient2.On("StartService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "second-completed")
 		mu.Unlock()
@@ -162,7 +162,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
 	mockClient1.On("UpdateCompose", 2).Return(nil)
-	mockClient1.On("RestartStack").Return(nil)
+	mockClient1.On("StartService", "app1").Return(nil)
 	mockClient1.On("Cleanup", "/tmp/build1").Return(nil)
 
 	// Second deployment
@@ -181,7 +181,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 4).Return(nil)
 	mockClient2.On("UpdateCompose", 4).Return(nil)
-	mockClient2.On("RestartStack").Return(nil)
+	mockClient2.On("StartService", "app2").Return(nil)
 	mockClient2.On("Cleanup", "/tmp/build2").Return(nil)
 
 	var wg sync.WaitGroup
@@ -243,7 +243,7 @@ func TestConcurrent_LockTimeout(t *testing.T) {
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
 	mockClient1.On("UpdateCompose", 2).Return(nil)
-	mockClient1.On("RestartStack").Return(nil)
+	mockClient1.On("StartService", "myapp").Return(nil)
 	mockClient1.On("Cleanup", "/tmp/build1").Return(nil)
 
 	var wg sync.WaitGroup
@@ -315,7 +315,7 @@ func TestConcurrent_LockReleasedOnFailure(t *testing.T) {
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 2).Return(nil)
 	mockClient2.On("UpdateCompose", 2).Return(nil)
-	mockClient2.On("RestartStack").Return(nil)
+	mockClient2.On("StartService", "myapp").Return(nil)
 	mockClient2.On("Cleanup", "/tmp/build2").Return(nil)
 
 	// First deployment should fail
@@ -374,7 +374,7 @@ func TestConcurrent_RaceConditions(t *testing.T) {
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 				mockClient.On("BuildImage", "/tmp/build", version).Return(nil)
 				mockClient.On("UpdateCompose", version).Return(nil)
-				mockClient.On("RestartStack").Return(nil)
+				mockClient.On("StartService", "racetest").Return(nil)
 				mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 				err := DeployWithClient(cfg, mockClient, nil)
@@ -444,7 +444,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 6).Return(nil)
 	mockClient1.On("UpdateCompose", 6).Return(nil)
-	mockClient1.On("RestartStack").Run(func(args mock.Arguments) {
+	mockClient1.On("StartService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "first-completed")
 		mu.Unlock()
@@ -467,7 +467,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 7).Return(nil)
 	mockClient2.On("UpdateCompose", 7).Return(nil)
-	mockClient2.On("RestartStack").Run(func(args mock.Arguments) {
+	mockClient2.On("StartService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "second-completed")
 		mu.Unlock()
@@ -557,7 +557,7 @@ func TestConcurrent_MultipleStacksNoInterference(t *testing.T) {
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 				mockClient.On("BuildImage", "/tmp/build", version).Return(nil)
 				mockClient.On("UpdateCompose", version).Return(nil)
-				mockClient.On("RestartStack").Return(nil)
+				mockClient.On("StartService", "app").Return(nil)
 				mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 				errors <- DeployWithClient(cfg, mockClient, nil)

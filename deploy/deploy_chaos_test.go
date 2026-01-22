@@ -19,16 +19,16 @@ func TestChaos_ComposeUpdatedRestartFails(t *testing.T) {
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 4).Return(nil)
 	mockClient.On("UpdateCompose", 4).Return(nil)
-	mockClient.On("RestartStack").Return(errors.New("docker compose up failed"))
+	mockClient.On("StartService", "myapp").Return(errors.New("docker compose up failed"))
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	err := DeployWithClient(cfg, mockClient, nil)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to restart stack")
+	assert.Contains(t, err.Error(), "failed to start service")
 	assert.Contains(t, err.Error(), "docker compose up failed")
 	mockClient.AssertCalled(t, "UpdateCompose", 4)
-	mockClient.AssertCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "StartService", "myapp")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
@@ -51,7 +51,7 @@ func TestChaos_BuildSucceededUpdateFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission denied on compose.yaml")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 6)
 	mockClient.AssertCalled(t, "UpdateCompose", 6)
-	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertNotCalled(t, "StartService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
@@ -65,13 +65,13 @@ func TestChaos_CleanupFailsAfterSuccess(t *testing.T) {
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
 	mockClient.On("UpdateCompose", 3).Return(nil)
-	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("StartService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(errors.New("failed to remove temp directory"))
 
 	err := DeployWithClient(cfg, mockClient, nil)
 
 	require.NoError(t, err)
-	mockClient.AssertCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "StartService", "myapp")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
@@ -95,7 +95,7 @@ func TestChaos_MkTempFailsDiskFull(t *testing.T) {
 	mockClient.AssertNotCalled(t, "Rsync", mock.Anything, mock.Anything)
 	mockClient.AssertNotCalled(t, "BuildImage", mock.Anything, mock.Anything)
 	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
-	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertNotCalled(t, "StartService")
 	mockClient.AssertNotCalled(t, "Cleanup", mock.Anything)
 }
 
@@ -119,7 +119,7 @@ func TestChaos_DiskFullDuringBuild(t *testing.T) {
 	assert.Contains(t, err.Error(), "no space left on device")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 2)
 	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
-	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertNotCalled(t, "StartService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
@@ -143,7 +143,7 @@ func TestChaos_OutOfMemoryDuringBuild(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot allocate memory")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 3)
 	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
-	mockClient.AssertNotCalled(t, "RestartStack")
+	mockClient.AssertNotCalled(t, "StartService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
@@ -159,12 +159,12 @@ func TestChaos_TempDirCleanupRace(t *testing.T) {
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
 	mockClient.On("UpdateCompose", 5).Return(nil)
-	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("StartService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(racErr)
 
 	err := DeployWithClient(cfg, mockClient, nil)
 
 	require.NoError(t, err)
-	mockClient.AssertCalled(t, "RestartStack")
+	mockClient.AssertCalled(t, "StartService", "myapp")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }

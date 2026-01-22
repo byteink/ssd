@@ -203,10 +203,10 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 	}
 
-	// Restart stack
-	logln(output, "Restarting stack...")
-	if err := client.RestartStack(ctx); err != nil {
-		return fmt.Errorf("failed to restart stack: %w", err)
+	// Deploy only this service, not all
+	logf(output, "Starting service %s...\n", cfg.Name)
+	if err := client.StartService(ctx, cfg.Name); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
 	}
 
 	logf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)
@@ -235,10 +235,10 @@ func RestartWithClient(cfg *config.Config, client Deployer, opts *Options) error
 	}
 	defer unlock()
 
-	// Restart stack
-	logln(output, "Restarting stack...")
-	if err := client.RestartStack(ctx); err != nil {
-		return fmt.Errorf("failed to restart stack: %w", err)
+	// Restart only this service, not all
+	logf(output, "Restarting service %s...\n", cfg.Name)
+	if err := client.StartService(ctx, cfg.Name); err != nil {
+		return fmt.Errorf("failed to restart service: %w", err)
 	}
 
 	logf(output, "\nRestarted %s successfully!\n", cfg.Name)
@@ -293,10 +293,10 @@ func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) erro
 		return fmt.Errorf("failed to update compose.yaml: %w", err)
 	}
 
-	// Restart stack
-	logln(output, "Restarting stack...")
-	if err := client.RestartStack(ctx); err != nil {
-		return fmt.Errorf("failed to restart stack: %w", err)
+	// Rollback only this service, not all
+	logf(output, "Starting service %s with version %d...\n", cfg.Name, previousVersion)
+	if err := client.StartService(ctx, cfg.Name); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
 	}
 
 	logf(output, "\nRolled back %s to version %d successfully!\n", cfg.Name, previousVersion)
