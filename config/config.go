@@ -154,6 +154,11 @@ func applyDefaults(cfg *Config, serviceName string) (*Config, error) {
 		result.Context = "."
 	}
 
+	// Default port: 80
+	if result.Port == 0 {
+		result.Port = 80
+	}
+
 	return &result, nil
 }
 
