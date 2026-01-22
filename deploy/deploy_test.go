@@ -108,6 +108,7 @@ func TestDeploy_Success(t *testing.T) {
 	cfg := newTestConfig()
 
 	// Setup expectations in order
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(4, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/ssd-build-123", nil)
 	mockClient.On("Rsync", mock.AnythingOfType("string"), "/tmp/ssd-build-123").Return(nil)
@@ -127,6 +128,7 @@ func TestDeploy_FirstDeploy(t *testing.T) {
 	cfg := newTestConfig()
 
 	// First deploy - version starts at 0
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -145,6 +147,7 @@ func TestDeploy_GetVersionError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, errors.New("SSH connection failed"))
 
 	err := DeployWithClient(cfg, mockClient, nil)
@@ -158,6 +161,7 @@ func TestDeploy_MakeTempDirError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("", errors.New("disk full"))
 
@@ -172,6 +176,7 @@ func TestDeploy_RsyncError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(errors.New("connection reset"))
@@ -188,6 +193,7 @@ func TestDeploy_BuildError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -205,6 +211,7 @@ func TestDeploy_UpdateComposeError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -223,6 +230,7 @@ func TestDeploy_RestartError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -242,6 +250,7 @@ func TestDeploy_CleanupCalledEvenOnSuccess(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -273,6 +282,7 @@ func TestDeploy_VersionIncrement(t *testing.T) {
 			mockClient := new(MockDeployer)
 			cfg := newTestConfig()
 
+			mockClient.On("StackExists").Return(true, nil)
 			mockClient.On("GetCurrentVersion").Return(tt.currentVersion, nil)
 			mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 			mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -295,6 +305,7 @@ func TestDeploy_CleanupErrorIgnored(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -315,6 +326,7 @@ func TestDeploy_UsesCorrectTempDir(t *testing.T) {
 
 	customTempDir := "/var/tmp/ssd-custom-abc123"
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return(customTempDir, nil)
 	mockClient.On("Rsync", mock.Anything, customTempDir).Return(nil) // Must use custom dir
@@ -445,6 +457,7 @@ func TestDeploy_WithLocking(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -463,6 +476,7 @@ func TestDeploy_LockReleasedOnError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(0, errors.New("connection failed"))
 
 	err := DeployWithClient(cfg, mockClient, nil)
@@ -693,4 +707,163 @@ func TestRollback_PrebuiltService(t *testing.T) {
 	mockClient.AssertNotCalled(t, "GetCurrentVersion")
 	mockClient.AssertNotCalled(t, "UpdateCompose")
 	mockClient.AssertNotCalled(t, "RestartStack")
+}
+
+// Auto-create stack tests
+
+func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Stack doesn't exist yet
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
+
+	// Normal deploy flow
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
+	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
+}
+
+func TestDeploy_AutoCreateStack_SecondDeploySkipsCreation(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Stack already exists
+	mockClient.On("StackExists").Return(true, nil)
+	// CreateStack, EnsureNetwork, CreateEnvFile should NOT be called
+
+	// Normal deploy flow
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertNotCalled(t, "CreateStack")
+	mockClient.AssertNotCalled(t, "EnsureNetwork")
+	mockClient.AssertNotCalled(t, "CreateEnvFile")
+}
+
+func TestDeploy_AutoCreateStack_StackExistsCheckError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// StackExists returns an error
+	mockClient.On("StackExists").Return(false, errors.New("SSH connection failed"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to check stack existence")
+	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertNotCalled(t, "CreateStack")
+}
+
+func TestDeploy_AutoCreateStack_CreateStackError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Stack doesn't exist, but creation fails
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(errors.New("permission denied"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create stack")
+	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
+	mockClient.AssertNotCalled(t, "EnsureNetwork")
+}
+
+func TestDeploy_AutoCreateStack_EnsureNetworkError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Stack creation succeeds, but network creation fails
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(errors.New("network error"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ensure network")
+	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertNotCalled(t, "CreateEnvFile")
+}
+
+func TestDeploy_AutoCreateStack_CreateEnvFileError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	// Networks succeed, but env file creation fails
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(errors.New("permission denied"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create env file")
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
+}
+
+func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Domain:     "example.com",
+	}
+
+	// Stack creation with domain should still ensure traefik_web
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "web").Return(nil)
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
 }

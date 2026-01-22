@@ -32,6 +32,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 
 	// First deployment - holds lock for 200ms
 	mockClient1 := new(MockDeployer)
+	mockClient1.On("StackExists").Return(true, nil)
 	mockClient1.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		firstStarted.Store(true)
 		mu.Lock()
@@ -53,6 +54,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 
 	// Second deployment - should wait for first
 	mockClient2 := new(MockDeployer)
+	mockClient2.On("StackExists").Return(true, nil)
 	mockClient2.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		secondStarted.Store(true)
 		mu.Lock()
@@ -146,6 +148,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 
 	// First deployment
 	mockClient1 := new(MockDeployer)
+	mockClient1.On("StackExists").Return(true, nil)
 	mockClient1.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		deploy1Started.Store(true)
 		deploy1InProgress.Store(true)
@@ -164,6 +167,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 
 	// Second deployment
 	mockClient2 := new(MockDeployer)
+	mockClient2.On("StackExists").Return(true, nil)
 	mockClient2.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		deploy2Started.Store(true)
 		deploy2InProgress.Store(true)
@@ -231,6 +235,7 @@ func TestConcurrent_LockTimeout(t *testing.T) {
 
 	// First deployment holds lock for 500ms
 	mockClient1 := new(MockDeployer)
+	mockClient1.On("StackExists").Return(true, nil)
 	mockClient1.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		time.Sleep(500 * time.Millisecond)
 	}).Return(1, nil)
@@ -299,10 +304,12 @@ func TestConcurrent_LockReleasedOnFailure(t *testing.T) {
 
 	// First deployment fails
 	mockClient1 := new(MockDeployer)
+	mockClient1.On("StackExists").Return(true, nil)
 	mockClient1.On("GetCurrentVersion").Return(0, errors.New("connection failed"))
 
 	// Second deployment succeeds
 	mockClient2 := new(MockDeployer)
+	mockClient2.On("StackExists").Return(true, nil)
 	mockClient2.On("GetCurrentVersion").Return(1, nil)
 	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
@@ -361,6 +368,7 @@ func TestConcurrent_RaceConditions(t *testing.T) {
 				mockClient := new(MockDeployer)
 				version := goroutineID*numDeploysPerGoroutine + j + 1
 
+				mockClient.On("StackExists").Return(true, nil)
 				mockClient.On("GetCurrentVersion").Return(version-1, nil)
 				mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -424,6 +432,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 
 	// First deployment - holds lock for 200ms
 	mockClient1 := new(MockDeployer)
+	mockClient1.On("StackExists").Return(true, nil)
 	mockClient1.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		firstStarted.Store(true)
 		mu.Lock()
@@ -445,6 +454,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 
 	// Second deployment - should wait for first
 	mockClient2 := new(MockDeployer)
+	mockClient2.On("StackExists").Return(true, nil)
 	mockClient2.On("GetCurrentVersion").Run(func(args mock.Arguments) {
 		secondStarted.Store(true)
 		mu.Lock()
@@ -541,6 +551,7 @@ func TestConcurrent_MultipleStacksNoInterference(t *testing.T) {
 				defer wg.Done()
 
 				mockClient := new(MockDeployer)
+				mockClient.On("StackExists").Return(true, nil)
 				mockClient.On("GetCurrentVersion").Return(version-1, nil)
 				mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)

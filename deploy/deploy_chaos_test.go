@@ -13,6 +13,7 @@ func TestChaos_ComposeUpdatedRestartFails(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(3, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -35,6 +36,7 @@ func TestChaos_BuildSucceededUpdateFails(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(5, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -57,6 +59,7 @@ func TestChaos_CleanupFailsAfterSuccess(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(2, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -78,6 +81,7 @@ func TestChaos_MkTempFailsDiskFull(t *testing.T) {
 
 	diskFullErr := errors.New("no space left on device")
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("", diskFullErr)
 
@@ -101,6 +105,7 @@ func TestChaos_DiskFullDuringBuild(t *testing.T) {
 
 	diskFullErr := errors.New("no space left on device")
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(1, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -124,6 +129,7 @@ func TestChaos_OutOfMemoryDuringBuild(t *testing.T) {
 
 	oomErr := errors.New("cannot allocate memory")
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(2, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
@@ -147,6 +153,7 @@ func TestChaos_TempDirCleanupRace(t *testing.T) {
 
 	racErr := errors.New("directory not empty")
 
+	mockClient.On("StackExists").Return(true, nil)
 	mockClient.On("GetCurrentVersion").Return(4, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)

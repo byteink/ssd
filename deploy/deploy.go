@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 
+	"github.com/byteink/ssd/compose"
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/remote"
 )
@@ -71,6 +72,49 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		return fmt.Errorf("failed to acquire deployment lock: %w", err)
 	}
 	defer unlock()
+
+	// Check if stack exists, create if needed
+	stackExists, err := client.StackExists(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check stack existence: %w", err)
+	}
+
+	if !stackExists {
+		logln(output, "Stack does not exist, creating...")
+
+		// Generate compose file
+		services := map[string]*config.Config{
+			cfg.Name: cfg,
+		}
+		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), 0)
+		if err != nil {
+			return fmt.Errorf("failed to generate compose file: %w", err)
+		}
+
+		// Create stack directory and compose.yaml
+		if err := client.CreateStack(ctx, composeContent); err != nil {
+			return fmt.Errorf("failed to create stack: %w", err)
+		}
+
+		// Ensure traefik_web network exists
+		if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
+			return fmt.Errorf("failed to ensure network traefik_web: %w", err)
+		}
+
+		// Ensure project internal network exists
+		project := filepath.Base(cfg.StackPath())
+		internalNetwork := project + "_internal"
+		if err := client.EnsureNetwork(ctx, internalNetwork); err != nil {
+			return fmt.Errorf("failed to ensure network %s: %w", internalNetwork, err)
+		}
+
+		// Create env file for the service
+		if err := client.CreateEnvFile(ctx, cfg.Name); err != nil {
+			return fmt.Errorf("failed to create env file for %s: %w", cfg.Name, err)
+		}
+
+		logln(output, "Stack created successfully")
+	}
 
 	// Get current version
 	logf(output, "Checking current version on %s...\n", cfg.Server)
