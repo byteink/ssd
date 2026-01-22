@@ -48,6 +48,8 @@ type Deployer interface {
 type Options struct {
 	// Output is where to write progress messages (defaults to os.Stdout)
 	Output io.Writer
+	// Dependencies maps dependency service names to their configs
+	Dependencies map[string]*config.Config
 }
 
 // Deploy performs a full deployment using the default client
@@ -125,6 +127,37 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 	newVersion := currentVersion + 1
 	logf(output, "Current version: %d, deploying version: %d\n", currentVersion, newVersion)
+
+	// Check and start dependencies if needed
+	for _, dep := range cfg.DependsOn {
+		logf(output, "Checking dependency: %s...\n", dep)
+
+		running, err := client.IsServiceRunning(ctx, dep)
+		if err != nil {
+			return fmt.Errorf("failed to check if dependency %s is running: %w", dep, err)
+		}
+
+		if !running {
+			logf(output, "Dependency %s not running, starting...\n", dep)
+
+			// Check if dependency is pre-built and needs image pull
+			if opts != nil && opts.Dependencies != nil {
+				if depCfg, exists := opts.Dependencies[dep]; exists && depCfg.IsPrebuilt() {
+					logf(output, "Pulling pre-built image %s...\n", depCfg.Image)
+					if err := client.PullImage(ctx, depCfg.Image); err != nil {
+						return fmt.Errorf("failed to pull image for dependency %s: %w", dep, err)
+					}
+				}
+			}
+
+			if err := client.StartService(ctx, dep); err != nil {
+				return fmt.Errorf("failed to start dependency %s: %w", dep, err)
+			}
+			logf(output, "Dependency %s started successfully\n", dep)
+		} else {
+			logf(output, "Dependency %s already running\n", dep)
+		}
+	}
 
 	// Create temp directory on server
 	logln(output, "Creating temp build directory...")

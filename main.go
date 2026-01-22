@@ -78,11 +78,44 @@ func runDeploy(args []string) {
 	}
 	serviceName := args[0]
 
-	cfg := loadConfig(serviceName)
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := rootCfg.GetService(serviceName)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		if !rootCfg.IsSingleService() {
+			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
+		}
+		os.Exit(1)
+	}
+
+	// Load dependency configs if any
+	var depConfigs map[string]*config.Config
+	if len(cfg.DependsOn) > 0 {
+		depConfigs = make(map[string]*config.Config)
+		for _, dep := range cfg.DependsOn {
+			depCfg, err := rootCfg.GetService(dep)
+			if err != nil {
+				fmt.Printf("Warning: Could not load dependency %s config: %v\n", dep, err)
+				continue
+			}
+			depConfigs[dep] = depCfg
+		}
+	}
 
 	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
 
-	if err := deploy.Deploy(cfg); err != nil {
+	client := remote.NewClient(cfg)
+	opts := &deploy.Options{
+		Output:       os.Stdout,
+		Dependencies: depConfigs,
+	}
+
+	if err := deploy.DeployWithClient(cfg, client, opts); err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
 	}

@@ -867,3 +867,321 @@ func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
 	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
 	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
 }
+
+// Dependency tests
+
+func TestDeploy_DependencyNotRunning_Started(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// Dependency check: db not running
+	mockClient.On("IsServiceRunning", "db").Return(false, nil)
+	mockClient.On("StartService", "db").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertCalled(t, "StartService", "db")
+}
+
+func TestDeploy_DependencyRunning_NotRestarted(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// Dependency check: db already running
+	mockClient.On("IsServiceRunning", "db").Return(true, nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertNotCalled(t, "StartService", "db")
+}
+
+func TestDeploy_MultipleDependencies_AllHandled(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db", "redis", "cache"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// db not running, redis running, cache not running
+	mockClient.On("IsServiceRunning", "db").Return(false, nil)
+	mockClient.On("IsServiceRunning", "redis").Return(true, nil)
+	mockClient.On("IsServiceRunning", "cache").Return(false, nil)
+
+	mockClient.On("StartService", "db").Return(nil)
+	mockClient.On("StartService", "cache").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertCalled(t, "IsServiceRunning", "redis")
+	mockClient.AssertCalled(t, "IsServiceRunning", "cache")
+	mockClient.AssertCalled(t, "StartService", "db")
+	mockClient.AssertNotCalled(t, "StartService", "redis")
+	mockClient.AssertCalled(t, "StartService", "cache")
+}
+
+func TestDeploy_DependencyCheckError_FailsDeployment(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// IsServiceRunning returns error
+	mockClient.On("IsServiceRunning", "db").Return(false, errors.New("docker ps failed"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to check if dependency db is running")
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertNotCalled(t, "StartService", "db")
+	mockClient.AssertNotCalled(t, "MakeTempDir")
+}
+
+func TestDeploy_DependencyStartError_FailsDeployment(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("IsServiceRunning", "db").Return(false, nil)
+
+	// StartService returns error
+	mockClient.On("StartService", "db").Return(errors.New("failed to start container"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to start dependency db")
+	mockClient.AssertCalled(t, "StartService", "db")
+	mockClient.AssertNotCalled(t, "MakeTempDir")
+}
+
+func TestDeploy_NoDependencies_SkipsDependencyChecks(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  nil, // No dependencies
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "IsServiceRunning")
+	mockClient.AssertNotCalled(t, "StartService")
+}
+
+func TestDeploy_PrebuiltDependency_PullsImage(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"postgres"},
+	}
+
+	// Pre-built postgres dependency
+	postgresCfg := &config.Config{
+		Name:   "postgres",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"postgres": postgresCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// Dependency not running, needs pull
+	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("PullImage", "postgres:16").Return(nil)
+	mockClient.On("StartService", "postgres").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "postgres")
+	mockClient.AssertCalled(t, "PullImage", "postgres:16")
+	mockClient.AssertCalled(t, "StartService", "postgres")
+}
+
+func TestDeploy_PrebuiltDependency_PullError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"postgres"},
+	}
+
+	postgresCfg := &config.Config{
+		Name:   "postgres",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"postgres": postgresCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("PullImage", "postgres:16").Return(errors.New("image not found"))
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to pull image for dependency postgres")
+	mockClient.AssertCalled(t, "PullImage", "postgres:16")
+	mockClient.AssertNotCalled(t, "StartService", "postgres")
+	mockClient.AssertNotCalled(t, "MakeTempDir")
+}
+
+func TestDeploy_CustomBuildDependency_NoPull(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"api"},
+	}
+
+	// Custom-built API dependency (no Image field)
+	apiCfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"api": apiCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// Dependency not running, but no pull for custom builds
+	mockClient.On("IsServiceRunning", "api").Return(false, nil)
+	mockClient.On("StartService", "api").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "api")
+	mockClient.AssertNotCalled(t, "PullImage")
+	mockClient.AssertCalled(t, "StartService", "api")
+}
