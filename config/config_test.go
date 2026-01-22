@@ -466,3 +466,30 @@ func TestRootConfig_GetService_EmptyServiceNameWithServices(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "service name required")
 }
+
+func TestApplyDefaults_PortDefault(t *testing.T) {
+	// Port not set → should default to 80
+	cfg := &Config{
+		Name:   "myapp",
+		Server: "myserver",
+	}
+
+	result, err := applyDefaults(cfg, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, 80, result.Port)
+}
+
+func TestApplyDefaults_PortPreserved(t *testing.T) {
+	// Port explicitly set → should preserve it
+	cfg := &Config{
+		Name:   "myapp",
+		Server: "myserver",
+		Port:   3000,
+	}
+
+	result, err := applyDefaults(cfg, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, 3000, result.Port)
+}
