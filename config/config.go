@@ -179,6 +179,11 @@ func (c *Config) ImageName() string {
 	return fmt.Sprintf("ssd-%s-%s", project, c.Name)
 }
 
+// IsPrebuilt returns true if this config uses a pre-built image
+func (c *Config) IsPrebuilt() bool {
+	return c.Image != ""
+}
+
 // ValidateServer validates a server hostname/identifier
 // Returns an error if the server name contains shell metacharacters or is invalid
 func ValidateServer(server string) error {
