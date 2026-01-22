@@ -26,6 +26,7 @@ type Service struct {
 	Networks    []string     `yaml:"networks"`
 	Volumes     []string     `yaml:"volumes,omitempty"`
 	Labels      []string     `yaml:"labels,omitempty"`
+	DependsOn   []string     `yaml:"depends_on,omitempty"`
 	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty"`
 }
 
@@ -94,6 +95,11 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 				svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", volumeName, mountPath))
 				volumesUsed[volumeName] = true
 			}
+		}
+
+		// Add depends_on if configured
+		if len(cfg.DependsOn) > 0 {
+			svc.DependsOn = cfg.DependsOn
 		}
 
 		// Add healthcheck if configured
