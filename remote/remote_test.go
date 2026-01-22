@@ -170,7 +170,7 @@ func TestClient_GetCurrentVersion_NewFormat(t *testing.T) {
 
 	composeContent := `services:
   app:
-    image: ssd-myapp:5
+    image: ssd-myapp-myapp:5
     ports:
       - "8080:8080"`
 
@@ -221,7 +221,7 @@ func TestClient_GetCurrentVersion_MultiDigit(t *testing.T) {
 
 	composeContent := `services:
   app:
-    image: ssd-myapp:123`
+    image: ssd-myapp-myapp:123`
 
 	mockExec.On("Run", "ssh", mock.Anything).Return(composeContent, nil)
 
@@ -240,7 +240,7 @@ func TestClient_BuildImage(t *testing.T) {
 		cmd := args[1]
 		return strings.Contains(cmd, "cd /tmp/build123") &&
 			strings.Contains(cmd, "docker build") &&
-			strings.Contains(cmd, "-t ssd-myapp:5") &&
+			strings.Contains(cmd, "-t ssd-myapp-myapp:5") &&
 			strings.Contains(cmd, "-f Dockerfile")
 	})).Return(nil)
 
@@ -278,13 +278,13 @@ func TestClient_UpdateCompose(t *testing.T) {
 	// First call reads the compose file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		return strings.Contains(args[1], "cat /stacks/myapp/compose.yaml")
-	})).Return("services:\n  app:\n    image: ssd-myapp:4", nil)
+	})).Return("services:\n  app:\n    image: ssd-myapp-myapp:4", nil)
 
 	// Second call writes the updated compose file
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
 		return strings.Contains(cmd, "echo") &&
-			strings.Contains(cmd, "ssd-myapp:5") &&
+			strings.Contains(cmd, "ssd-myapp-myapp:5") &&
 			strings.Contains(cmd, "> /stacks/myapp/compose.yaml")
 	})).Return("", nil)
 

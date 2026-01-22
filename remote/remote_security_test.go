@@ -301,7 +301,8 @@ func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	// Compose content with single quotes that could break escaping
-	composeContent := "services:\n  app:\n    image: ssd-myapp:1\n    environment:\n      - KEY='value with 'quotes'"
+	// Image name format: ssd-{project}-{service} where project = basename(stack)
+	composeContent := "services:\n  app:\n    image: ssd-myapp-myapp:1\n    environment:\n      - KEY='value with 'quotes'"
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		return strings.Contains(args[1], "cat")
@@ -312,8 +313,8 @@ func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 		cmd := args[1]
 		// Single quotes in content should be escaped as '\''
 		return strings.Contains(cmd, "echo") &&
-			strings.Contains(cmd, "ssd-myapp:2") &&
-			!strings.Contains(cmd, "echo 'image: ssd-myapp:2' > /stacks/myapp/compose.yaml")
+			strings.Contains(cmd, "ssd-myapp-myapp:2") &&
+			!strings.Contains(cmd, "echo 'image: ssd-myapp-myapp:2' > /stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
 	err := client.UpdateCompose(context.Background(), 2)

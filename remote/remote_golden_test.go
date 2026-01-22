@@ -13,11 +13,14 @@ import (
 
 // transformCompose applies the same transformation logic as UpdateCompose
 // but operates on strings directly for testing purposes
+// project and service are both appName to simulate the common case where they match
 func transformCompose(input string, appName string, newVersion int) string {
-	newImage := fmt.Sprintf("ssd-%s:%d", appName, newVersion)
+	// Image name format: ssd-{project}-{service}
+	// For simplicity in tests, project == service == appName
+	newImage := fmt.Sprintf("ssd-%s-%s:%d", appName, appName, newVersion)
 
 	// Replace image tag
-	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(appName) + `):(\d+)`)
+	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(appName) + `-` + regexp.QuoteMeta(appName) + `):(\d+)`)
 	return oldImagePattern.ReplaceAllString(input, fmt.Sprintf("${1}%s", newImage))
 }
 
@@ -66,16 +69,16 @@ func TestGolden_UpdateCompose(t *testing.T) {
 func TestGolden_UpdateCompose_MultipleOccurrences(t *testing.T) {
 	input := `services:
   app:
-    image: ssd-myapp:3
+    image: ssd-myapp-myapp:3
   app-backup:
-    image: ssd-myapp:3
+    image: ssd-myapp-myapp:3
 `
 
 	expected := `services:
   app:
-    image: ssd-myapp:7
+    image: ssd-myapp-myapp:7
   app-backup:
-    image: ssd-myapp:7
+    image: ssd-myapp-myapp:7
 `
 
 	result := transformCompose(input, "myapp", 7)
@@ -100,16 +103,16 @@ func TestGolden_UpdateCompose_NoMatch(t *testing.T) {
 func TestGolden_UpdateCompose_MixedSpacing(t *testing.T) {
 	input := `services:
   app:
-    image:  ssd-myapp:4
+    image:  ssd-myapp-myapp:4
   other:
-    image:	ssd-myapp:4
+    image:	ssd-myapp-myapp:4
 `
 
 	expected := `services:
   app:
-    image:  ssd-myapp:10
+    image:  ssd-myapp-myapp:10
   other:
-    image:	ssd-myapp:10
+    image:	ssd-myapp-myapp:10
 `
 
 	result := transformCompose(input, "myapp", 10)

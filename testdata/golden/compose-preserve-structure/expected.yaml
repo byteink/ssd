@@ -1,7 +1,7 @@
 # My app config
 services:
   app:
-    image: ssd-myapp:2
+    image: ssd-myapp-myapp:2
     environment: &env
       NODE_ENV: production
   worker:

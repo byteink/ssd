@@ -1,6 +1,6 @@
 services:
   app:
-    image: ssd-myapp:10
+    image: ssd-myapp-myapp:10
     container_name: myapp-container
     ports:
       - "8080:8080"

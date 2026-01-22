@@ -112,15 +112,15 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 }
 
 // parseVersionFromContent extracts the version number from compose.yaml content
+// imageName should be the full image name prefix (e.g., "ssd-myapp-api" without the :version tag)
 // Returns 0, nil if no version found; error on parse failure
-func parseVersionFromContent(content, appName string) (int, error) {
+func parseVersionFromContent(content, imageName string) (int, error) {
 	// Validate inputs are valid UTF-8 to prevent regexp compilation panics
-	if !utf8.ValidString(appName) || !utf8.ValidString(content) {
+	if !utf8.ValidString(imageName) || !utf8.ValidString(content) {
 		return 0, nil
 	}
 
-	// Match ssd-{name}:{version}
-	imageName := fmt.Sprintf("ssd-%s", appName)
+	// Match imageName:{version}
 	re := regexp.MustCompile(fmt.Sprintf(`image:\s*%s:(\d+)`, regexp.QuoteMeta(imageName)))
 	matches := re.FindStringSubmatch(content)
 	if len(matches) >= 2 {
@@ -138,7 +138,10 @@ func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 		return 0, nil // No compose.yaml means version 0
 	}
 
-	return parseVersionFromContent(output, c.cfg.Name)
+	// Image name format: ssd-{project}-{service} where project = basename(stack)
+	project := filepath.Base(c.cfg.Stack)
+	imageName := fmt.Sprintf("ssd-%s-%s", project, c.cfg.Name)
+	return parseVersionFromContent(output, imageName)
 }
 
 // BuildImage builds a Docker image on the remote server
@@ -164,7 +167,9 @@ func (c *Client) UpdateCompose(ctx context.Context, version int) error {
 	}
 
 	// Replace image tag
-	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(c.cfg.Name) + `):(\d+)`)
+	// Image name format: ssd-{project}-{service} where project = basename(stack)
+	project := filepath.Base(c.cfg.Stack)
+	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(project) + `-` + regexp.QuoteMeta(c.cfg.Name) + `):(\d+)`)
 	newContent := oldImagePattern.ReplaceAllString(output, fmt.Sprintf("${1}%s", newImage))
 
 	// Write back
