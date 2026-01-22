@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -332,5 +333,136 @@ func TestGenerateCompose_ProjectNameFromStack(t *testing.T) {
 		if _, ok := networksMap[expectedNetwork]; !ok {
 			t.Errorf("stack %s: network %q missing", tt.stack, expectedNetwork)
 		}
+	}
+}
+
+func TestAtomicWrite_ValidYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	destPath := tmpDir + "/compose.yaml"
+
+	validYAML := `services:
+  web:
+    image: nginx:latest
+    restart: unless-stopped
+networks:
+  traefik_web:
+    external: true
+`
+
+	err := AtomicWrite(validYAML, destPath)
+	if err != nil {
+		t.Fatalf("AtomicWrite failed: %v", err)
+	}
+
+	// Verify file was written
+	content, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("Failed to read written file: %v", err)
+	}
+
+	if string(content) != validYAML {
+		t.Errorf("File content doesn't match\nGot:\n%s\nWant:\n%s", string(content), validYAML)
+	}
+
+	// Verify temp file was cleaned up
+	tmpPath := destPath + ".tmp"
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("Temp file %s still exists", tmpPath)
+	}
+}
+
+func TestAtomicWrite_InvalidYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	destPath := tmpDir + "/compose.yaml"
+
+	invalidYAML := `services:
+  web:
+    image: nginx:latest
+    restart: [invalid: yaml
+`
+
+	err := AtomicWrite(invalidYAML, destPath)
+	if err == nil {
+		t.Fatal("Expected error for invalid YAML, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "invalid YAML") {
+		t.Errorf("Error message should mention invalid YAML, got: %v", err)
+	}
+
+	// Verify no file was written
+	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
+		t.Errorf("Destination file should not exist after failed write")
+	}
+
+	// Verify temp file was cleaned up
+	tmpPath := destPath + ".tmp"
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("Temp file %s should be cleaned up after error", tmpPath)
+	}
+}
+
+func TestAtomicWrite_OverwriteExisting(t *testing.T) {
+	tmpDir := t.TempDir()
+	destPath := tmpDir + "/compose.yaml"
+
+	// Write initial content
+	initialYAML := `services:
+  old:
+    image: old:1
+`
+	if err := os.WriteFile(destPath, []byte(initialYAML), 0644); err != nil {
+		t.Fatalf("Failed to write initial file: %v", err)
+	}
+
+	// Overwrite with new content
+	newYAML := `services:
+  new:
+    image: new:2
+`
+	err := AtomicWrite(newYAML, destPath)
+	if err != nil {
+		t.Fatalf("AtomicWrite failed: %v", err)
+	}
+
+	// Verify new content
+	content, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
+	}
+
+	if string(content) != newYAML {
+		t.Errorf("File not properly overwritten\nGot:\n%s\nWant:\n%s", string(content), newYAML)
+	}
+}
+
+func TestAtomicWrite_FailedWritePreservesOriginal(t *testing.T) {
+	tmpDir := t.TempDir()
+	destPath := tmpDir + "/compose.yaml"
+
+	// Write initial valid content
+	originalYAML := `services:
+  web:
+    image: original:1
+`
+	if err := os.WriteFile(destPath, []byte(originalYAML), 0644); err != nil {
+		t.Fatalf("Failed to write initial file: %v", err)
+	}
+
+	// Try to write invalid YAML
+	invalidYAML := `invalid: [yaml content`
+	err := AtomicWrite(invalidYAML, destPath)
+	if err == nil {
+		t.Fatal("Expected error for invalid YAML")
+	}
+
+	// Verify original file is unchanged
+	content, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
+	}
+
+	if string(content) != originalYAML {
+		t.Errorf("Original file was modified\nGot:\n%s\nWant:\n%s", string(content), originalYAML)
 	}
 }

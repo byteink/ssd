@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/byteink/ssd/config"
@@ -101,4 +102,33 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 	}
 
 	return string(data), nil
+}
+
+// AtomicWrite writes content to destPath atomically after validating it as YAML.
+// The write is atomic: if validation fails, the destination file is not modified.
+// This prevents partial writes or invalid YAML from being written to disk.
+func AtomicWrite(content, destPath string) error {
+	tmpPath := destPath + ".tmp"
+
+	// Write to temp file
+	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	// Validate YAML
+	var parsed interface{}
+	if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
+		// Clean up temp file on validation failure
+		os.Remove(tmpPath)
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+
+	// Atomic rename (on same filesystem)
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		// Clean up temp file on rename failure
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	return nil
 }

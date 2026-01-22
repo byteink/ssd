@@ -75,9 +75,9 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		return nil, fmt.Errorf("services: is required")
 	}
 
-	// Service name is required for multi-service config
+	// Service name is required
 	if serviceName == "" {
-		return nil, fmt.Errorf("service name required for multi-service config")
+		return nil, fmt.Errorf("service name required")
 	}
 
 	svc, ok := r.Services[serviceName]
@@ -102,6 +102,25 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 	// Validate server
 	if err := ValidateServer(result.Server); err != nil {
 		return nil, fmt.Errorf("invalid server: %w", err)
+	}
+
+	// Validate domain if set
+	if result.Domain != "" {
+		if err := ValidateDomain(result.Domain); err != nil {
+			return nil, fmt.Errorf("invalid domain: %w", err)
+		}
+	}
+
+	// Validate volume names
+	for volumeName := range result.Volumes {
+		if err := ValidateVolumeName(volumeName); err != nil {
+			return nil, fmt.Errorf("invalid volume name %q: %w", volumeName, err)
+		}
+	}
+
+	// Validate healthcheck if set
+	if err := ValidateHealthCheck(result.HealthCheck); err != nil {
+		return nil, fmt.Errorf("invalid healthcheck: %w", err)
 	}
 
 	return result, nil
@@ -341,6 +360,107 @@ func ValidateDomain(domain string) error {
 		isAllowed := isLetter || isDigit || r == '-' || r == '.'
 		if !isAllowed {
 			return fmt.Errorf("domain contains invalid character: %c (only letters, digits, hyphens, and dots allowed)", r)
+		}
+	}
+
+	return nil
+}
+
+// ValidateVolumeName validates a Docker volume name for security and correctness
+func ValidateVolumeName(name string) error {
+	if name == "" {
+		return fmt.Errorf("volume name cannot be empty")
+	}
+
+	if len(name) > 128 {
+		return fmt.Errorf("volume name exceeds maximum length of 128 characters")
+	}
+
+	// Reject names starting with - or .
+	if strings.HasPrefix(name, "-") || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("volume name cannot start with '-' or '.'")
+	}
+
+	// Shell metacharacters to reject
+	dangerousChars := ";|&$`(){}[]<>\\\"' *?"
+	for _, r := range name {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("volume name contains invalid character: %c", r)
+		}
+	}
+
+	// Validate characters: only alphanumeric, hyphens, underscores, dots
+	for _, r := range name {
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		isAllowed := isLower || isUpper || isDigit || r == '-' || r == '_' || r == '.'
+		if !isAllowed {
+			return fmt.Errorf("volume name contains invalid character: %c (only alphanumeric, hyphens, underscores, and dots allowed)", r)
+		}
+	}
+
+	return nil
+}
+
+// ValidateHealthCheck validates a healthcheck configuration for security and correctness
+func ValidateHealthCheck(hc *HealthCheck) error {
+	if hc == nil {
+		return nil
+	}
+
+	if hc.Cmd == "" {
+		return fmt.Errorf("healthcheck cmd cannot be empty")
+	}
+
+	// Validate interval format if set
+	if hc.Interval != "" {
+		if err := validateDuration(hc.Interval); err != nil {
+			return fmt.Errorf("invalid healthcheck interval: %w", err)
+		}
+	}
+
+	// Validate timeout format if set
+	if hc.Timeout != "" {
+		if err := validateDuration(hc.Timeout); err != nil {
+			return fmt.Errorf("invalid healthcheck timeout: %w", err)
+		}
+	}
+
+	// Validate retries range
+	if hc.Retries < 0 || hc.Retries > 100 {
+		return fmt.Errorf("healthcheck retries must be between 0 and 100")
+	}
+
+	return nil
+}
+
+// validateDuration validates a Docker duration string (e.g., "30s", "1m", "1h")
+func validateDuration(d string) error {
+	if d == "" {
+		return fmt.Errorf("duration cannot be empty")
+	}
+
+	if len(d) < 2 {
+		return fmt.Errorf("duration must include number and unit (e.g., 30s, 1m)")
+	}
+
+	// Check last character is a valid unit
+	unit := d[len(d)-1]
+	validUnits := "smh" // seconds, minutes, hours
+	if !strings.ContainsRune(validUnits, rune(unit)) {
+		return fmt.Errorf("duration unit must be s (seconds), m (minutes), or h (hours)")
+	}
+
+	// Check number part is valid
+	numPart := d[:len(d)-1]
+	if numPart == "" {
+		return fmt.Errorf("duration must include a number")
+	}
+
+	for _, r := range numPart {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("duration number contains invalid character: %c", r)
 		}
 	}
 

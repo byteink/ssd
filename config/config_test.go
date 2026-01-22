@@ -840,3 +840,451 @@ func TestValidateDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateVolumeName(t *testing.T) {
+	tests := []struct {
+		name    string
+		volume  string
+		wantErr bool
+	}{
+		{
+			name:    "empty string",
+			volume:  "",
+			wantErr: true,
+		},
+		{
+			name:    "starts with hyphen",
+			volume:  "-myvolume",
+			wantErr: true,
+		},
+		{
+			name:    "starts with dot",
+			volume:  ".myvolume",
+			wantErr: true,
+		},
+		{
+			name:    "contains semicolon",
+			volume:  "vol;name",
+			wantErr: true,
+		},
+		{
+			name:    "contains pipe",
+			volume:  "vol|name",
+			wantErr: true,
+		},
+		{
+			name:    "contains space",
+			volume:  "vol name",
+			wantErr: true,
+		},
+		{
+			name:    "contains asterisk",
+			volume:  "vol*",
+			wantErr: true,
+		},
+		{
+			name:    "exceeds max length",
+			volume:  string(make([]byte, 129)),
+			wantErr: true,
+		},
+		{
+			name:    "valid simple name",
+			volume:  "myvolume",
+			wantErr: false,
+		},
+		{
+			name:    "valid with hyphen",
+			volume:  "my-volume",
+			wantErr: false,
+		},
+		{
+			name:    "valid with underscore",
+			volume:  "my_volume",
+			wantErr: false,
+		},
+		{
+			name:    "valid with dot",
+			volume:  "my.volume",
+			wantErr: false,
+		},
+		{
+			name:    "valid mixed",
+			volume:  "my-volume_1.0",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateVolumeName(tt.volume)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateHealthCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		hc      *HealthCheck
+		wantErr bool
+	}{
+		{
+			name:    "nil healthcheck",
+			hc:      nil,
+			wantErr: false,
+		},
+		{
+			name: "empty cmd",
+			hc: &HealthCheck{
+				Cmd: "",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid interval format",
+			hc: &HealthCheck{
+				Cmd:      "exit 0",
+				Interval: "30",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid timeout format",
+			hc: &HealthCheck{
+				Cmd:     "exit 0",
+				Timeout: "invalid",
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative retries",
+			hc: &HealthCheck{
+				Cmd:     "exit 0",
+				Retries: -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "retries too high",
+			hc: &HealthCheck{
+				Cmd:     "exit 0",
+				Retries: 101,
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid minimal",
+			hc: &HealthCheck{
+				Cmd: "exit 0",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid full",
+			hc: &HealthCheck{
+				Cmd:      "curl -f http://localhost/health",
+				Interval: "30s",
+				Timeout:  "10s",
+				Retries:  3,
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid with minutes",
+			hc: &HealthCheck{
+				Cmd:      "exit 0",
+				Interval: "1m",
+				Timeout:  "30s",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid with hours",
+			hc: &HealthCheck{
+				Cmd:      "exit 0",
+				Interval: "1h",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateHealthCheck(tt.hc)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRootConfig_GetService_ValidatesDomain(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "invalid domain with protocol",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:   "web",
+						Domain: "http://example.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid domain",
+		},
+		{
+			name: "invalid domain with path",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:   "web",
+						Domain: "example.com/path",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid domain",
+		},
+		{
+			name: "valid domain",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:   "web",
+						Domain: "example.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "no domain set",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRootConfig_GetService_ValidatesVolumes(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "invalid volume name with semicolon",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"db": {
+						Name: "db",
+						Volumes: map[string]string{
+							"bad;volume": "/var/lib/data",
+						},
+					},
+				},
+			},
+			serviceName: "db",
+			expectError: "invalid volume name",
+		},
+		{
+			name: "invalid volume name with space",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"db": {
+						Name: "db",
+						Volumes: map[string]string{
+							"bad volume": "/var/lib/data",
+						},
+					},
+				},
+			},
+			serviceName: "db",
+			expectError: "invalid volume name",
+		},
+		{
+			name: "valid volumes",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"db": {
+						Name: "db",
+						Volumes: map[string]string{
+							"db-data":   "/var/lib/postgresql/data",
+							"db_config": "/etc/postgresql",
+						},
+					},
+				},
+			},
+			serviceName: "db",
+			expectError: "",
+		},
+		{
+			name: "no volumes",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRootConfig_GetService_ValidatesHealthCheck(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "invalid healthcheck - empty cmd",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+						HealthCheck: &HealthCheck{
+							Cmd: "",
+						},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid healthcheck",
+		},
+		{
+			name: "invalid healthcheck - bad interval",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+						HealthCheck: &HealthCheck{
+							Cmd:      "exit 0",
+							Interval: "invalid",
+						},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid healthcheck",
+		},
+		{
+			name: "invalid healthcheck - negative retries",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+						HealthCheck: &HealthCheck{
+							Cmd:     "exit 0",
+							Retries: -1,
+						},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid healthcheck",
+		},
+		{
+			name: "valid healthcheck",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+						HealthCheck: &HealthCheck{
+							Cmd:      "curl -f http://localhost/health",
+							Interval: "30s",
+							Timeout:  "10s",
+							Retries:  3,
+						},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "no healthcheck",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name: "web",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
