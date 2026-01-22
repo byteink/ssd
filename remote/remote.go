@@ -27,6 +27,7 @@ type RemoteClient interface {
 	Cleanup(ctx context.Context, path string) error
 	MakeTempDir(ctx context.Context) (string, error)
 	StackExists(ctx context.Context) (bool, error)
+	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 }
 
 // Ensure Client implements RemoteClient
@@ -231,6 +232,26 @@ func (c *Client) StackExists(ctx context.Context) (bool, error) {
 	}
 
 	return strings.TrimSpace(output) == "yes", nil
+}
+
+// IsServiceRunning checks if a service is running in the stack
+func (c *Client) IsServiceRunning(ctx context.Context, serviceName string) (bool, error) {
+	stackPath := c.cfg.StackPath()
+	cmd := fmt.Sprintf("cd %s && docker compose ps --format json %s",
+		shellescape.Quote(stackPath),
+		shellescape.Quote(serviceName))
+
+	output, err := c.SSH(ctx, cmd)
+	if err != nil {
+		return false, err
+	}
+
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return false, nil
+	}
+
+	return strings.Contains(trimmed, `"State":"running"`), nil
 }
 
 // ValidateTempPath validates that a path is safe for temporary operations

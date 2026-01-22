@@ -18,8 +18,8 @@ func TestLoad_SimpleConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "testserver", cfg.Server)
-	assert.Equal(t, "myapp", cfg.Name)
-	assert.Empty(t, cfg.Services)
+	assert.Len(t, cfg.Services, 1)
+	assert.Contains(t, cfg.Services, "myapp")
 }
 
 func TestLoad_MonorepoConfig(t *testing.T) {
@@ -62,7 +62,7 @@ func TestLoad_DefaultPath(t *testing.T) {
 	})
 
 	// Write a test config
-	configContent := "server: tempserver\nname: tempapp"
+	configContent := "server: tempserver\nservices:\n  tempapp:\n    name: tempapp"
 	err = os.WriteFile(filepath.Join(tmpDir, "ssd.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
@@ -81,16 +81,18 @@ func TestLoad_DefaultPath(t *testing.T) {
 	cfg, err := Load("")
 	require.NoError(t, err)
 	assert.Equal(t, "tempserver", cfg.Server)
-	assert.Equal(t, "tempapp", cfg.Name)
+	assert.Contains(t, cfg.Services, "tempapp")
 }
 
-func TestRootConfig_GetService_SingleService(t *testing.T) {
+func TestRootConfig_GetService_WithService(t *testing.T) {
 	cfg := &RootConfig{
-		Name:   "myapp",
 		Server: "myserver",
+		Services: map[string]*Config{
+			"myapp": {Name: "myapp"},
+		},
 	}
 
-	svc, err := cfg.GetService("")
+	svc, err := cfg.GetService("myapp")
 	require.NoError(t, err)
 
 	assert.Equal(t, "myapp", svc.Name)
@@ -100,15 +102,14 @@ func TestRootConfig_GetService_SingleService(t *testing.T) {
 	assert.Equal(t, ".", svc.Context)
 }
 
-func TestRootConfig_GetService_SingleServiceMissingServer(t *testing.T) {
+func TestRootConfig_GetService_NoServices(t *testing.T) {
 	cfg := &RootConfig{
-		Name: "myapp",
-		// Missing Server
+		Server: "myserver",
 	}
 
 	_, err := cfg.GetService("")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "server is required")
+	assert.Contains(t, err.Error(), "services: is required")
 }
 
 func TestRootConfig_GetService_MultiService(t *testing.T) {
@@ -190,9 +191,8 @@ func TestRootConfig_ListServices(t *testing.T) {
 	assert.Contains(t, services, "worker")
 }
 
-func TestRootConfig_ListServices_SingleService(t *testing.T) {
+func TestRootConfig_ListServices_NoServices(t *testing.T) {
 	cfg := &RootConfig{
-		Name:   "app",
 		Server: "server",
 	}
 
@@ -216,12 +216,7 @@ func TestRootConfig_IsSingleService(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "single service",
-			cfg:      &RootConfig{Name: "app", Server: "server"},
-			expected: true,
-		},
-		{
-			name:     "multi service",
+			name:     "has services",
 			cfg:      &RootConfig{Services: map[string]*Config{"web": {}}},
 			expected: false,
 		},
@@ -231,8 +226,8 @@ func TestRootConfig_IsSingleService(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "nil config",
-			cfg:      &RootConfig{},
+			name:     "no services",
+			cfg:      &RootConfig{Server: "server"},
 			expected: true,
 		},
 	}
@@ -344,25 +339,18 @@ func TestRootConfig_GetService_InvalidName(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "single service with invalid name characters",
+			name: "service with invalid name characters",
 			config: &RootConfig{
-				Name:   "my;app",
 				Server: "myserver",
+				Services: map[string]*Config{
+					"app": {Name: "my;app"},
+				},
 			},
-			serviceName: "",
+			serviceName: "app",
 			expectError: "invalid service name",
 		},
 		{
-			name: "single service with empty name after defaults",
-			config: &RootConfig{
-				Name:   "",
-				Server: "myserver",
-			},
-			serviceName: "",
-			expectError: "", // Should use directory name as default
-		},
-		{
-			name: "multi service with invalid name",
+			name: "service with invalid name",
 			config: &RootConfig{
 				Server: "myserver",
 				Services: map[string]*Config{
@@ -376,14 +364,9 @@ func TestRootConfig_GetService_InvalidName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := tt.config.GetService(tt.serviceName)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, svc)
-			}
+			_, err := tt.config.GetService(tt.serviceName)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
 		})
 	}
 }
@@ -396,16 +379,7 @@ func TestRootConfig_GetService_InvalidServer(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "single service with invalid server characters",
-			config: &RootConfig{
-				Name:   "myapp",
-				Server: "my;server",
-			},
-			serviceName: "",
-			expectError: "invalid server",
-		},
-		{
-			name: "multi service with inherited invalid server",
+			name: "service with inherited invalid server",
 			config: &RootConfig{
 				Server: "bad|server",
 				Services: map[string]*Config{

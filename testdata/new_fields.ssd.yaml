@@ -1,0 +1,9 @@
+server: myserver
+services:
+  web:
+    name: test-web
+    domain: x.com
+    https: false
+    port: 3000
+    image: postgres:16
+    context: ./web
