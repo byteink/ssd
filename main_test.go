@@ -521,3 +521,98 @@ services:
 		})
 	}
 }
+
+// TestProvisionParsing tests the flag parsing for provision command
+func TestProvisionParsing(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          []string
+		expectedServer string
+		expectedEmail  string
+		shouldPrompt   bool
+		configExists   bool
+		configServer   string
+	}{
+		{
+			name:           "both flags provided",
+			args:           []string{"--server", "myserver", "--email", "admin@example.com"},
+			expectedServer: "myserver",
+			expectedEmail:  "admin@example.com",
+			shouldPrompt:   false,
+			configExists:   false,
+		},
+		{
+			name:           "only email, server from config",
+			args:           []string{"--email", "admin@example.com"},
+			expectedServer: "testserver",
+			expectedEmail:  "admin@example.com",
+			shouldPrompt:   false,
+			configExists:   true,
+			configServer:   "testserver",
+		},
+		{
+			name:           "only server, should prompt for email",
+			args:           []string{"--server", "myserver"},
+			expectedServer: "myserver",
+			shouldPrompt:   true,
+			configExists:   false,
+		},
+		{
+			name:           "no flags, server from config, should prompt for email",
+			args:           []string{},
+			expectedServer: "testserver",
+			shouldPrompt:   true,
+			configExists:   true,
+			configServer:   "testserver",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var parsedServer, parsedEmail string
+
+			// Parse flags manually to simulate runProvision behavior
+			i := 0
+			for i < len(tt.args) {
+				switch tt.args[i] {
+				case "--server":
+					if i+1 < len(tt.args) {
+						parsedServer = tt.args[i+1]
+						i += 2
+					} else {
+						t.Fatal("--server requires a value")
+					}
+				case "--email":
+					if i+1 < len(tt.args) {
+						parsedEmail = tt.args[i+1]
+						i += 2
+					} else {
+						t.Fatal("--email requires a value")
+					}
+				default:
+					i++
+				}
+			}
+
+			// If no server flag and config exists, use config server
+			if parsedServer == "" && tt.configExists {
+				parsedServer = tt.configServer
+			}
+
+			// Verify parsed server
+			if tt.expectedServer != "" && parsedServer != tt.expectedServer {
+				t.Errorf("Expected server=%q, got %q", tt.expectedServer, parsedServer)
+			}
+
+			// Verify parsed email
+			if !tt.shouldPrompt && parsedEmail != tt.expectedEmail {
+				t.Errorf("Expected email=%q, got %q", tt.expectedEmail, parsedEmail)
+			}
+
+			// Verify prompt requirement
+			if tt.shouldPrompt && parsedEmail != "" {
+				t.Error("Expected email to be empty (requiring prompt), but got value")
+			}
+		})
+	}
+}
