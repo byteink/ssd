@@ -868,6 +868,86 @@ func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
 	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
 }
 
+// Pre-built image tests
+
+func TestDeploy_PrebuiltService_PullsImage(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/nginx",
+		Image:  "nginx:latest", // Pre-built image
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "nginx:latest").Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "PullImage", "nginx:latest")
+	mockClient.AssertNotCalled(t, "Rsync")
+	mockClient.AssertNotCalled(t, "BuildImage")
+	mockClient.AssertNotCalled(t, "UpdateCompose")
+}
+
+func TestDeploy_PrebuiltService_PullError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/nginx",
+		Image:  "nginx:latest",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "nginx:latest").Return(errors.New("image not found"))
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to pull image")
+	mockClient.AssertCalled(t, "PullImage", "nginx:latest")
+	mockClient.AssertNotCalled(t, "BuildImage")
+	mockClient.AssertNotCalled(t, "UpdateCompose")
+}
+
+func TestDeploy_BuiltService_BuildsImage(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "myapp",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		// No Image field - custom build
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("RestartStack").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "Rsync", mock.Anything, "/tmp/build")
+	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 1)
+	mockClient.AssertCalled(t, "UpdateCompose", 1)
+	mockClient.AssertNotCalled(t, "PullImage")
+}
+
 // Dependency tests
 
 func TestDeploy_DependencyNotRunning_Started(t *testing.T) {

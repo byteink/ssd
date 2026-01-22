@@ -172,26 +172,35 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 	}()
 
-	// Rsync code to server
-	logf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
-	localContext, err := filepath.Abs(cfg.Context)
-	if err != nil {
-		return fmt.Errorf("failed to resolve context path: %w", err)
-	}
-	if err := client.Rsync(ctx, localContext, tempDir); err != nil {
-		return fmt.Errorf("failed to sync code: %w", err)
-	}
+	// Check if this is a pre-built image
+	if cfg.IsPrebuilt() {
+		// Pull latest image
+		logf(output, "Pulling pre-built image %s...\n", cfg.Image)
+		if err := client.PullImage(ctx, cfg.Image); err != nil {
+			return fmt.Errorf("failed to pull image: %w", err)
+		}
+	} else {
+		// Rsync code to server
+		logf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
+		localContext, err := filepath.Abs(cfg.Context)
+		if err != nil {
+			return fmt.Errorf("failed to resolve context path: %w", err)
+		}
+		if err := client.Rsync(ctx, localContext, tempDir); err != nil {
+			return fmt.Errorf("failed to sync code: %w", err)
+		}
 
-	// Build image on server
-	logf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
-	if err := client.BuildImage(ctx, tempDir, newVersion); err != nil {
-		return fmt.Errorf("failed to build image: %w", err)
-	}
+		// Build image on server
+		logf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
+		if err := client.BuildImage(ctx, tempDir, newVersion); err != nil {
+			return fmt.Errorf("failed to build image: %w", err)
+		}
 
-	// Update compose.yaml
-	logln(output, "Updating compose.yaml...")
-	if err := client.UpdateCompose(ctx, newVersion); err != nil {
-		return fmt.Errorf("failed to update compose.yaml: %w", err)
+		// Update compose.yaml
+		logln(output, "Updating compose.yaml...")
+		if err := client.UpdateCompose(ctx, newVersion); err != nil {
+			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		}
 	}
 
 	// Restart stack
