@@ -29,6 +29,10 @@ type RemoteClient interface {
 	StackExists(ctx context.Context) (bool, error)
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	EnsureNetwork(ctx context.Context, name string) error
+	CreateEnvFile(ctx context.Context, serviceName string) error
+	GetEnvFile(ctx context.Context, serviceName string) (string, error)
+	SetEnvVar(ctx context.Context, serviceName, key, value string) error
+	RemoveEnvVar(ctx context.Context, serviceName, key string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -279,4 +283,83 @@ func ValidateTempPath(path string) error {
 	}
 
 	return nil
+}
+
+// CreateEnvFile creates an empty .env file with mode 600 in the stack directory
+func (c *Client) CreateEnvFile(ctx context.Context, serviceName string) error {
+	envPath := filepath.Join(c.cfg.StackPath(), ".env")
+	cmd := fmt.Sprintf("install -m 600 /dev/null %s", shellescape.Quote(envPath))
+	_, err := c.SSH(ctx, cmd)
+	return err
+}
+
+// GetEnvFile reads the .env file from the stack directory
+func (c *Client) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
+	envPath := filepath.Join(c.cfg.StackPath(), ".env")
+	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(envPath)))
+	if err != nil {
+		return "", err
+	}
+	return output, nil
+}
+
+// SetEnvVar sets or updates an environment variable in the .env file
+func (c *Client) SetEnvVar(ctx context.Context, serviceName, key, value string) error {
+	content, err := c.GetEnvFile(ctx, serviceName)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(content, "\n")
+	prefix := key + "="
+	found := false
+	newValue := prefix + value
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			lines[i] = newValue
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			lines = append(lines, newValue)
+		} else {
+			lines = append(lines[:len(lines)-1], newValue, "")
+		}
+	}
+
+	newContent := strings.Join(lines, "\n")
+	envPath := filepath.Join(c.cfg.StackPath(), ".env")
+	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
+	cmd := fmt.Sprintf("echo '%s' | install -m 600 /dev/stdin %s", escapedContent, shellescape.Quote(envPath))
+	_, err = c.SSH(ctx, cmd)
+	return err
+}
+
+// RemoveEnvVar removes an environment variable from the .env file
+func (c *Client) RemoveEnvVar(ctx context.Context, serviceName, key string) error {
+	content, err := c.GetEnvFile(ctx, serviceName)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(content, "\n")
+	prefix := key + "="
+	filtered := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if !strings.HasPrefix(line, prefix) {
+			filtered = append(filtered, line)
+		}
+	}
+
+	newContent := strings.Join(filtered, "\n")
+	envPath := filepath.Join(c.cfg.StackPath(), ".env")
+	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
+	cmd := fmt.Sprintf("echo '%s' | install -m 600 /dev/stdin %s", escapedContent, shellescape.Quote(envPath))
+	_, err = c.SSH(ctx, cmd)
+	return err
 }

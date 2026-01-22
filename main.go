@@ -236,9 +236,24 @@ func printConfig(cfg *config.Config, indent string) {
 	fmt.Printf("%sserver: %s\n", indent, cfg.Server)
 	fmt.Printf("%sstack: %s\n", indent, cfg.Stack)
 	fmt.Printf("%sstack_path: %s\n", indent, cfg.StackPath())
+	if cfg.Domain != "" {
+		fmt.Printf("%sdomain: %s\n", indent, cfg.Domain)
+	}
+	// HTTPS defaults to true if not explicitly set
+	https := true
+	if cfg.HTTPS != nil {
+		https = *cfg.HTTPS
+	}
+	fmt.Printf("%shttps: %v\n", indent, https)
+	fmt.Printf("%sport: %d\n", indent, cfg.Port)
+	if cfg.Image != "" {
+		fmt.Printf("%simage: %s (pre-built)\n", indent, cfg.Image)
+	}
 	fmt.Printf("%sdockerfile: %s\n", indent, cfg.Dockerfile)
 	fmt.Printf("%scontext: %s\n", indent, cfg.Context)
-	fmt.Printf("%simage: %s\n", indent, cfg.ImageName())
+	if cfg.Image == "" {
+		fmt.Printf("%simage: %s\n", indent, cfg.ImageName())
+	}
 }
 
 func printUsage() {

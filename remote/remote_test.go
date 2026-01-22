@@ -774,3 +774,273 @@ func TestClient_EnsureNetwork_EmptyName(t *testing.T) {
 
 	require.NoError(t, err)
 }
+
+func TestClient_CreateEnvFile(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/.env")
+	})).Return("", nil)
+
+	err := client.CreateEnvFile(context.Background(), "myservice")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_CreateEnvFile_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("permission denied"))
+
+	err := client.CreateEnvFile(context.Background(), "myservice")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_GetEnvFile(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	envContent := "DB_HOST=localhost\nDB_PORT=5432\n"
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+	})).Return(envContent, nil)
+
+	content, err := client.GetEnvFile(context.Background(), "myservice")
+
+	require.NoError(t, err)
+	assert.Equal(t, envContent, content)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_GetEnvFile_Missing(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
+
+	content, err := client.GetEnvFile(context.Background(), "myservice")
+
+	require.NoError(t, err)
+	assert.Equal(t, "", content)
+}
+
+func TestClient_GetEnvFile_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
+
+	_, err := client.GetEnvFile(context.Background(), "myservice")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_SetEnvVar(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	existingContent := "OLD_VAR=old_value\n"
+
+	// First call reads env file
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+	})).Return(existingContent, nil).Once()
+
+	// Second call writes updated env file
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/.env") &&
+			strings.Contains(cmd, "OLD_VAR=old_value") &&
+			strings.Contains(cmd, "NEW_VAR=new_value")
+	})).Return("", nil).Once()
+
+	err := client.SetEnvVar(context.Background(), "myservice", "NEW_VAR", "new_value")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_SetEnvVar_UpdateExisting(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	existingContent := "DB_HOST=localhost\nDB_PORT=5432\n"
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat")
+	})).Return(existingContent, nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install") &&
+			strings.Contains(cmd, "DB_HOST=newhost") &&
+			!strings.Contains(cmd, "DB_HOST=localhost")
+	})).Return("", nil).Once()
+
+	err := client.SetEnvVar(context.Background(), "myservice", "DB_HOST", "newhost")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_SetEnvVar_EmptyFile(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install") &&
+			strings.Contains(cmd, "MY_VAR=value")
+	})).Return("", nil).Once()
+
+	err := client.SetEnvVar(context.Background(), "myservice", "MY_VAR", "value")
+
+	require.NoError(t, err)
+}
+
+func TestClient_SetEnvVar_GetError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("permission denied"))
+
+	err := client.SetEnvVar(context.Background(), "myservice", "KEY", "value")
+
+	require.Error(t, err)
+}
+
+func TestClient_RemoveEnvVar(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	existingContent := "DB_HOST=localhost\nDB_PORT=5432\nDB_USER=admin\n"
+
+	// First call reads env file
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+	})).Return(existingContent, nil).Once()
+
+	// Second call writes filtered env file
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/.env") &&
+			strings.Contains(cmd, "DB_HOST=localhost") &&
+			!strings.Contains(cmd, "DB_PORT=5432") &&
+			strings.Contains(cmd, "DB_USER=admin")
+	})).Return("", nil).Once()
+
+	err := client.RemoveEnvVar(context.Background(), "myservice", "DB_PORT")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_RemoveEnvVar_NotFound(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	existingContent := "DB_HOST=localhost\n"
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat")
+	})).Return(existingContent, nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install") &&
+			strings.Contains(cmd, "DB_HOST=localhost")
+	})).Return("", nil).Once()
+
+	err := client.RemoveEnvVar(context.Background(), "myservice", "NONEXISTENT")
+
+	require.NoError(t, err) // Should succeed even if var doesn't exist
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_RemoveEnvVar_EmptyFile(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install")
+	})).Return("", nil).Once()
+
+	err := client.RemoveEnvVar(context.Background(), "myservice", "ANY_KEY")
+
+	require.NoError(t, err) // Should succeed even with empty file
+}
+
+func TestClient_RemoveEnvVar_GetError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
+
+	err := client.RemoveEnvVar(context.Background(), "myservice", "KEY")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_RemoveEnvVar_PreservesOtherVars(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	existingContent := "VAR1=value1\nVAR2=value2\nVAR3=value3\nVAR4=value4\n"
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cat")
+	})).Return(existingContent, nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install") &&
+			strings.Contains(cmd, "VAR1=value1") &&
+			!strings.Contains(cmd, "VAR2=value2") &&
+			strings.Contains(cmd, "VAR3=value3") &&
+			strings.Contains(cmd, "VAR4=value4")
+	})).Return("", nil).Once()
+
+	err := client.RemoveEnvVar(context.Background(), "myservice", "VAR2")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
