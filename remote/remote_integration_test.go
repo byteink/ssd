@@ -172,6 +172,49 @@ EOF`)
 	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
+func (s *SSHIntegrationSuite) TestCreateEnvFile() {
+	client := s.newClient()
+
+	// Ensure stack directory exists
+	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
+	require.NoError(s.T(), err)
+
+	// Create env file
+	err = client.CreateEnvFile(context.Background(), "myservice")
+	require.NoError(s.T(), err)
+
+	// Verify file exists
+	output, err := client.SSH(context.Background(), "ls -la /tmp/stacks/testapp/.env")
+	require.NoError(s.T(), err)
+	assert.Contains(s.T(), output, ".env")
+
+	// Verify permissions are 600
+	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/.env")
+	require.NoError(s.T(), err)
+	assert.Contains(s.T(), strings.TrimSpace(output), "600")
+
+	// Verify file is empty
+	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/.env")
+	require.NoError(s.T(), err)
+	assert.Equal(s.T(), "", output)
+
+	// Test idempotency - call again
+	err = client.CreateEnvFile(context.Background(), "myservice")
+	require.NoError(s.T(), err)
+
+	// Verify still empty and still 600
+	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/.env")
+	require.NoError(s.T(), err)
+	assert.Equal(s.T(), "", output)
+
+	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/.env")
+	require.NoError(s.T(), err)
+	assert.Contains(s.T(), strings.TrimSpace(output), "600")
+
+	// Cleanup
+	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
+}
+
 func TestSSHIntegrationSuite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests in short mode")

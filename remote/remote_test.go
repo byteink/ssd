@@ -804,6 +804,26 @@ func TestClient_CreateEnvFile_SSHError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ssh command failed")
 }
 
+func TestClient_CreateEnvFile_Idempotent(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Call twice to verify idempotency
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/.env")
+	})).Return("", nil).Twice()
+
+	err := client.CreateEnvFile(context.Background(), "myservice")
+	require.NoError(t, err)
+
+	err = client.CreateEnvFile(context.Background(), "myservice")
+	require.NoError(t, err)
+
+	mockExec.AssertExpectations(t)
+}
+
 func TestClient_GetEnvFile(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
