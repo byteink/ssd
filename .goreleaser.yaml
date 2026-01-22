@@ -58,14 +58,6 @@ brews:
     test: |
       system "#{bin}/ssd", "version"
 
-scoops:
-  - repository:
-      owner: byteink
-      name: scoop-bucket
-    homepage: https://github.com/byteink/ssd
-    description: Agentless remote deployment tool for Docker Compose stacks
-    license: MIT
-
 nfpms:
   - package_name: ssd
     homepage: https://github.com/byteink/ssd
