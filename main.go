@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/deploy"
+	"github.com/byteink/ssd/provision"
 	"github.com/byteink/ssd/remote"
 )
 
@@ -39,6 +41,8 @@ func main() {
 		runConfig(args)
 	case "env":
 		runEnv(args)
+	case "provision":
+		runProvision(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -286,6 +290,74 @@ func runEnvRm(service string, args []string) {
 	fmt.Printf("Removed %s from service %s\n", key, service)
 }
 
+func runProvision(args []string) {
+	var server, email string
+
+	// Parse flags
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--server":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --server requires a value")
+				os.Exit(1)
+			}
+			server = args[i+1]
+			i += 2
+		case "--email":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --email requires a value")
+				os.Exit(1)
+			}
+			email = args[i+1]
+			i += 2
+		default:
+			fmt.Printf("Error: Unknown flag: %s\n", args[i])
+			fmt.Println("Usage: ssd provision [--server SERVER] [--email EMAIL]")
+			os.Exit(1)
+		}
+	}
+
+	// If no server flag, try to get from config
+	if server == "" {
+		rootCfg, err := config.Load("")
+		if err == nil && rootCfg.Server != "" {
+			server = rootCfg.Server
+		}
+	}
+
+	if server == "" {
+		fmt.Println("Error: server not specified and not found in config")
+		fmt.Println("Usage: ssd provision --server SERVER [--email EMAIL]")
+		os.Exit(1)
+	}
+
+	// If no email flag, prompt user
+	if email == "" {
+		fmt.Print("Enter email for Let's Encrypt: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Printf("Error reading email: %v\n", err)
+			os.Exit(1)
+		}
+		email = strings.TrimSpace(input)
+		if email == "" {
+			fmt.Println("Error: email cannot be empty")
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("Provisioning server %s with email %s...\n\n", server, email)
+
+	if err := provision.Provision(server, email); err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\nProvisioning completed successfully!")
+}
+
 func printConfig(cfg *config.Config, indent string) {
 	fmt.Printf("%sname: %s\n", indent, cfg.Name)
 	fmt.Printf("%sserver: %s\n", indent, cfg.Server)
@@ -317,14 +389,15 @@ func printUsage() {
 	fmt.Println("Agentless remote deployment tool for Docker Compose stacks.")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ssd deploy <service>     Deploy application (build + restart)")
-	fmt.Println("  ssd restart [service]    Restart stack without rebuilding")
-	fmt.Println("  ssd rollback [service]   Rollback to previous version")
-	fmt.Println("  ssd status [service]     Check deployment status")
-	fmt.Println("  ssd logs [service] [-f]  View logs (-f to follow)")
-	fmt.Println("  ssd config [service]     Show current configuration")
-	fmt.Println("  ssd version              Show version")
-	fmt.Println("  ssd help                 Show this help")
+	fmt.Println("  ssd deploy <service>            Deploy application (build + restart)")
+	fmt.Println("  ssd restart [service]           Restart stack without rebuilding")
+	fmt.Println("  ssd rollback [service]          Rollback to previous version")
+	fmt.Println("  ssd status [service]            Check deployment status")
+	fmt.Println("  ssd logs [service] [-f]         View logs (-f to follow)")
+	fmt.Println("  ssd config [service]            Show current configuration")
+	fmt.Println("  ssd provision [--server S] [-e] Provision server with Docker and Traefik")
+	fmt.Println("  ssd version                     Show version")
+	fmt.Println("  ssd help                        Show this help")
 	fmt.Println()
 	fmt.Println("Learn more: https://github.com/byteink/ssd")
 }

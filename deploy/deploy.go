@@ -34,6 +34,13 @@ type Deployer interface {
 	UpdateCompose(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	Cleanup(ctx context.Context, path string) error
+	StackExists(ctx context.Context) (bool, error)
+	CreateStack(ctx context.Context, composeContent string) error
+	EnsureNetwork(ctx context.Context, name string) error
+	CreateEnvFile(ctx context.Context, serviceName string) error
+	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
+	PullImage(ctx context.Context, image string) error
+	StartService(ctx context.Context, serviceName string) error
 }
 
 // Options holds configuration for the deployment
