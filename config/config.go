@@ -372,8 +372,8 @@ func ValidateVolumeName(name string) error {
 		return fmt.Errorf("volume name cannot be empty")
 	}
 
-	if len(name) > 128 {
-		return fmt.Errorf("volume name exceeds maximum length of 128 characters")
+	if len(name) > 64 {
+		return fmt.Errorf("volume name exceeds maximum length of 64 characters")
 	}
 
 	// Reject names starting with - or .

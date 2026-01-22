@@ -883,8 +883,28 @@ func TestValidateVolumeName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "exceeds max length",
-			volume:  string(make([]byte, 129)),
+			name:    "contains dollar sign",
+			volume:  "data$HOME",
+			wantErr: true,
+		},
+		{
+			name:    "contains backtick",
+			volume:  "data`cmd`",
+			wantErr: true,
+		},
+		{
+			name:    "contains ampersand",
+			volume:  "data&bg",
+			wantErr: true,
+		},
+		{
+			name:    "contains backslash",
+			volume:  "data\\escape",
+			wantErr: true,
+		},
+		{
+			name:    "exceeds max length 64",
+			volume:  string(make([]byte, 65)),
 			wantErr: true,
 		},
 		{
@@ -899,7 +919,7 @@ func TestValidateVolumeName(t *testing.T) {
 		},
 		{
 			name:    "valid with underscore",
-			volume:  "my_volume",
+			volume:  "db_data",
 			wantErr: false,
 		},
 		{
