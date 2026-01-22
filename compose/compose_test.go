@@ -733,6 +733,110 @@ func TestGenerateCompose_NoDomain(t *testing.T) {
 	}
 }
 
+func TestGenerateCompose_WithDependsOn(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:      "web",
+			Server:    "myserver",
+			Stack:     "/stacks/myapp",
+			Port:      80,
+			DependsOn: []string{"db", "redis"},
+		},
+		"db": {
+			Name:   "db",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "postgres:16-alpine",
+		},
+		"redis": {
+			Name:   "redis",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "redis:7-alpine",
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify depends_on block exists
+	dependsOn, ok := webService["depends_on"].([]interface{})
+	if !ok {
+		t.Fatal("depends_on missing or not an array")
+	}
+
+	if len(dependsOn) != 2 {
+		t.Fatalf("depends_on length = %d, want 2", len(dependsOn))
+	}
+
+	// Verify dependencies are present
+	deps := make(map[string]bool)
+	for _, dep := range dependsOn {
+		depStr, ok := dep.(string)
+		if !ok {
+			t.Fatalf("dependency is not a string: %v", dep)
+		}
+		deps[depStr] = true
+	}
+
+	if !deps["db"] {
+		t.Error("dependency 'db' not found")
+	}
+	if !deps["redis"] {
+		t.Error("dependency 'redis' not found")
+	}
+
+	// Verify other services don't have depends_on
+	dbService := servicesMap["db"].(map[string]interface{})
+	if _, ok := dbService["depends_on"]; ok {
+		t.Error("db service should not have depends_on")
+	}
+
+	redisService := servicesMap["redis"].(map[string]interface{})
+	if _, ok := redisService["depends_on"]; ok {
+		t.Error("redis service should not have depends_on")
+	}
+}
+
+func TestGenerateCompose_WithoutDependsOn(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Verify depends_on does not exist
+	if _, ok := webService["depends_on"]; ok {
+		t.Error("depends_on should not be present when not configured")
+	}
+}
+
 func TestGenerateTraefikCompose(t *testing.T) {
 	email := "admin@example.com"
 	result := GenerateTraefikCompose(email)
