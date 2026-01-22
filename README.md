@@ -45,40 +45,42 @@ That's it! `ssd` will:
 
 ## Configuration
 
-### Minimal (uses smart defaults):
+### Minimal (single service):
 ```yaml
 # ssd.yaml
 server: myserver
+services:
+  app:
+    # name defaults to service key ("app")
+    # stack defaults to /stacks/app
 ```
-
-Defaults:
-- `name`: Current directory name
-- `stack`: `/stacks/{name}`
-- `image`: `ssd-{name}:{version}`
-- `dockerfile`: `./Dockerfile`
-- `context`: `.`
 
 ### Custom configuration:
 ```yaml
 # ssd.yaml
 server: myserver
-name: my-app
-stack: /custom/stacks/my-app
-```
-
-### Monorepo support:
-```yaml
-# ssd.yaml
-server: myserver
-stack: /stacks/myproject
+stack: /custom/stacks/myapp   # Shared by all services
 
 services:
   web:
-    name: myproject-web
+    name: myapp-web
     context: ./apps/web
+    dockerfile: ./apps/web/Dockerfile
+```
+
+### Monorepo with multiple services:
+```yaml
+# ssd.yaml
+server: myserver
+stack: /stacks/myproject      # All services share this stack
+
+services:
+  web:
+    context: ./apps/web
+    dockerfile: ./apps/web/Dockerfile
   api:
-    name: myproject-api
     context: ./apps/api
+    dockerfile: ./apps/api/Dockerfile
 ```
 
 Deploy specific service:
@@ -86,15 +88,143 @@ Deploy specific service:
 ssd deploy web
 ```
 
+### Full-featured service with all options:
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  web:
+    name: myapp-web
+    stack: /stacks/myapp
+    context: ./apps/web
+    dockerfile: ./apps/web/Dockerfile
+    domain: example.com         # Enable Traefik routing
+    https: true                 # Default true, set false to disable
+    port: 3000                  # Container port, default 80
+    depends_on:
+      - db
+      - redis
+    volumes:
+      postgres-data: /var/lib/postgresql/data
+      redis-data: /data
+    healthcheck:
+      cmd: "curl -f http://localhost:3000/health || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+### Using pre-built images (skip build):
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  nginx:
+    image: nginx:latest        # Use pre-built image, skip build step
+    domain: example.com
+```
+
+### Full stack example (API + Database):
+```yaml
+# ssd.yaml
+server: myserver
+stack: /stacks/myapp
+
+services:
+  api:
+    context: ./apps/api
+    dockerfile: ./apps/api/Dockerfile
+    domain: api.example.com
+    port: 8080
+    depends_on:
+      - db
+    healthcheck:
+      cmd: "curl -f http://localhost:8080/health || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  db:
+    image: postgres:16-alpine
+    volumes:
+      postgres-data: /var/lib/postgresql/data
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+### Configuration Fields
+
+**Service-level fields:**
+- `name`: Service name (defaults to service key)
+- `stack`: Path to stack directory on server (defaults to `/stacks/{name}`)
+- `context`: Build context path (defaults to `.`)
+- `dockerfile`: Dockerfile path (defaults to `./Dockerfile`)
+- `image`: Pre-built image to use (skips build step if specified)
+- `domain`: Domain name for Traefik routing
+- `https`: Enable HTTPS (default: `true`)
+- `port`: Container port (default: `80`)
+- `depends_on`: List of service dependencies
+- `volumes`: Map of volume names to mount paths
+- `healthcheck`: Health check configuration
+  - `cmd`: Health check command
+  - `interval`: Check interval (e.g., `30s`)
+  - `timeout`: Command timeout (e.g., `10s`)
+  - `retries`: Number of retries before unhealthy
+
+**Root-level fields:**
+- `server`: SSH server name (from `~/.ssh/config`)
+- `stack`: Default stack path for all services
+
 ## Commands
 
+### Deployment
 ```bash
-ssd deploy [service]     # Deploy application (build + restart)
-ssd restart [service]    # Restart stack without rebuilding
-ssd rollback [service]   # Rollback to previous version
-ssd status [service]     # Check deployment status
-ssd logs [service] [-f]  # View logs (-f to follow)
-ssd config [service]     # Show current configuration
+ssd deploy <service>          # Build and deploy service
+ssd restart <service>         # Restart without rebuilding
+ssd rollback <service>        # Rollback to previous version
+ssd status <service>          # Check container status
+ssd logs <service> [-f]       # View logs, -f to follow
+```
+
+**Deploy behavior:**
+- Deploys a single service and its dependencies
+- Dependencies are started first (respects `depends_on`)
+- Example: `ssd deploy api` will also start `db` if `api` depends on it
+
+### Configuration
+```bash
+ssd config                    # Show all services config
+ssd config <service>          # Show specific service config
+```
+
+### Environment Variables
+```bash
+ssd env <service> set KEY=VALUE      # Set environment variable
+ssd env <service> list               # List all environment variables
+ssd env <service> rm KEY             # Remove environment variable
+```
+
+**Note**: Environment variables are stored in `.env` file in the stack directory on the server.
+
+### Server Provisioning
+```bash
+ssd provision                 # Provision server with Docker and Traefik
+```
+
+Provisions the target server with:
+- Docker and Docker Compose installation
+- Traefik reverse proxy with automatic HTTPS (Let's Encrypt)
+- Docker network for service discovery
+
+**Note**: This command is planned but not yet implemented.
+
+### Other
+```bash
 ssd version              # Show version
 ssd help                 # Show help
 ```
@@ -104,10 +234,10 @@ ssd help                 # Show help
 1. Reads `ssd.yaml` from current directory
 2. SSHs into the configured server (uses `~/.ssh/config`)
 3. Rsyncs code to a temp directory (excludes .git, node_modules, .next)
-4. Builds Docker image on the server
+4. Builds Docker image on the server (or skips if using pre-built `image`)
 5. Parses current version from compose.yaml, increments it
 6. Updates compose.yaml with new image tag
-7. Runs `docker compose up -d` to restart the stack
+7. Runs `docker compose up -d` to restart the service and its dependencies
 8. Cleans up temp directory
 
 ## Requirements
