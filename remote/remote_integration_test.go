@@ -124,12 +124,13 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_WithComposeFile() {
 	client := s.newClient()
 
 	// Create stack directory and compose file using heredoc for reliable multi-line content
+	// Image format: ssd-{project}-{name} where project=testapp, name=testapp
 	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
 	require.NoError(s.T(), err)
 	_, err = client.SSH(context.Background(), `cat > /tmp/stacks/testapp/compose.yaml << 'EOF'
 services:
   app:
-    image: ssd-testapp:7
+    image: ssd-testapp-testapp:7
     ports:
       - "8080:8080"
 EOF`)
@@ -147,12 +148,13 @@ func (s *SSHIntegrationSuite) TestUpdateCompose() {
 	client := s.newClient()
 
 	// Create stack directory and compose file using heredoc for reliable multi-line content
+	// Image format: ssd-{project}-{name} where project=testapp, name=testapp
 	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
 	require.NoError(s.T(), err)
 	_, err = client.SSH(context.Background(), `cat > /tmp/stacks/testapp/compose.yaml << 'EOF'
 services:
   app:
-    image: ssd-testapp:1
+    image: ssd-testapp-testapp:1
     ports:
       - "8080:8080"
 EOF`)
@@ -165,8 +167,8 @@ EOF`)
 	// Verify
 	output, err := client.SSH(context.Background(), "cat /tmp/stacks/testapp/compose.yaml")
 	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, "ssd-testapp:2")
-	assert.NotContains(s.T(), output, "ssd-testapp:1")
+	assert.Contains(s.T(), output, "ssd-testapp-testapp:2")
+	assert.NotContains(s.T(), output, "ssd-testapp-testapp:1")
 
 	// Cleanup
 	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
@@ -179,22 +181,22 @@ func (s *SSHIntegrationSuite) TestCreateEnvFile() {
 	_, err := client.SSH(context.Background(), "mkdir -p /tmp/stacks/testapp")
 	require.NoError(s.T(), err)
 
-	// Create env file
+	// Create env file - creates {serviceName}.env
 	err = client.CreateEnvFile(context.Background(), "myservice")
 	require.NoError(s.T(), err)
 
 	// Verify file exists
-	output, err := client.SSH(context.Background(), "ls -la /tmp/stacks/testapp/.env")
+	output, err := client.SSH(context.Background(), "ls -la /tmp/stacks/testapp/myservice.env")
 	require.NoError(s.T(), err)
-	assert.Contains(s.T(), output, ".env")
+	assert.Contains(s.T(), output, "myservice.env")
 
 	// Verify permissions are 600
-	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/.env")
+	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/myservice.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/myservice.env")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), strings.TrimSpace(output), "600")
 
 	// Verify file is empty
-	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/.env")
+	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/myservice.env")
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), "", output)
 
@@ -203,11 +205,11 @@ func (s *SSHIntegrationSuite) TestCreateEnvFile() {
 	require.NoError(s.T(), err)
 
 	// Verify still empty and still 600
-	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/.env")
+	output, err = client.SSH(context.Background(), "cat /tmp/stacks/testapp/myservice.env")
 	require.NoError(s.T(), err)
 	assert.Equal(s.T(), "", output)
 
-	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/.env")
+	output, err = client.SSH(context.Background(), "stat -c %a /tmp/stacks/testapp/myservice.env 2>/dev/null || stat -f %A /tmp/stacks/testapp/myservice.env")
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), strings.TrimSpace(output), "600")
 
