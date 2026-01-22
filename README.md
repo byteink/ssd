@@ -16,17 +16,22 @@ Agentless remote deployment tool for Docker Compose stacks.
 
 ## Installation
 
-**macOS (Homebrew)**
+**Quick install (Linux/macOS)**
+```bash
+curl -sSL https://raw.githubusercontent.com/byteink/ssd/main/install.sh | sh
+```
+
+**Homebrew (macOS/Linux)**
 ```bash
 brew install byteink/tap/ssd
 ```
 
-**Linux/macOS/Windows (Go)**
+**Go**
 ```bash
 go install github.com/byteink/ssd@latest
 ```
 
-**Linux (deb/rpm)**
+**Linux packages**
 
 Download from [Releases](https://github.com/byteink/ssd/releases/latest):
 - Debian/Ubuntu: `ssd_*_linux_amd64.deb`
