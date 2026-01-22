@@ -1265,3 +1265,251 @@ func TestDeploy_CustomBuildDependency_NoPull(t *testing.T) {
 	mockClient.AssertNotCalled(t, "PullImage")
 	mockClient.AssertCalled(t, "StartService", "api")
 }
+
+// Integration tests for comprehensive deploy scenarios
+
+func TestDeploy_IntegrationFirstDeployCreatesEverything(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Domain:     "example.com",
+	}
+
+	// First deploy: stack doesn't exist
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "web").Return(nil)
+
+	// Normal build and deploy
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
+	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
+	mockClient.AssertCalled(t, "CreateEnvFile", "web")
+}
+
+func TestDeploy_IntegrationSecondDeploySkipsCreation(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	// Second deploy: stack already exists
+	mockClient.On("StackExists").Return(true, nil)
+
+	// Only normal deployment steps, no creation steps
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertNotCalled(t, "CreateStack")
+	mockClient.AssertNotCalled(t, "EnsureNetwork")
+	mockClient.AssertNotCalled(t, "CreateEnvFile")
+}
+
+func TestDeploy_IntegrationWithStoppedDependency(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db", "redis"},
+	}
+
+	dbCfg := &config.Config{
+		Name:   "db",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+	}
+
+	redisCfg := &config.Config{
+		Name:   "redis",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "redis:7",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"db":    dbCfg,
+			"redis": redisCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// db stopped, redis stopped
+	mockClient.On("IsServiceRunning", "db").Return(false, nil)
+	mockClient.On("IsServiceRunning", "redis").Return(false, nil)
+
+	// Both need to be pulled and started
+	mockClient.On("PullImage", "postgres:16").Return(nil)
+	mockClient.On("StartService", "db").Return(nil)
+	mockClient.On("PullImage", "redis:7").Return(nil)
+	mockClient.On("StartService", "redis").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertCalled(t, "IsServiceRunning", "redis")
+	mockClient.AssertCalled(t, "PullImage", "postgres:16")
+	mockClient.AssertCalled(t, "StartService", "db")
+	mockClient.AssertCalled(t, "PullImage", "redis:7")
+	mockClient.AssertCalled(t, "StartService", "redis")
+}
+
+func TestDeploy_IntegrationWithRunningDependency(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"db", "redis"},
+	}
+
+	dbCfg := &config.Config{
+		Name:   "db",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+	}
+
+	redisCfg := &config.Config{
+		Name:   "redis",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "redis:7",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"db":    dbCfg,
+			"redis": redisCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+
+	// Both already running
+	mockClient.On("IsServiceRunning", "db").Return(true, nil)
+	mockClient.On("IsServiceRunning", "redis").Return(true, nil)
+
+	// Neither should be started or pulled
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertCalled(t, "IsServiceRunning", "redis")
+	mockClient.AssertNotCalled(t, "PullImage", "postgres:16")
+	mockClient.AssertNotCalled(t, "StartService", "db")
+	mockClient.AssertNotCalled(t, "PullImage", "redis:7")
+	mockClient.AssertNotCalled(t, "StartService", "redis")
+}
+
+func TestDeploy_IntegrationPrebuiltServicePullsInsteadOfBuilds(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/nginx",
+		Image:  "nginx:alpine",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "nginx:alpine").Return(nil)
+	mockClient.On("StartService", "nginx").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "PullImage", "nginx:alpine")
+	mockClient.AssertNotCalled(t, "Rsync")
+	mockClient.AssertNotCalled(t, "BuildImage")
+	mockClient.AssertNotCalled(t, "UpdateCompose")
+}
+
+func TestDeploy_IntegrationSingleServiceOnlyTargetRestarted(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+	mockClient.On("UpdateCompose", 6).Return(nil)
+	mockClient.On("StartService", "api").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "StartService", "api")
+	mockClient.AssertNotCalled(t, "RestartStack")
+}
