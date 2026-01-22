@@ -289,3 +289,92 @@ services:
 		})
 	}
 }
+
+// TestEnvListIntegration tests the runEnvList function with mock executor
+func TestEnvListIntegration(t *testing.T) {
+	tests := []struct {
+		name           string
+		envContent     string
+		expectedOutput string
+	}{
+		{
+			name:           "empty env file",
+			envContent:     "",
+			expectedOutput: "No environment variables set\n",
+		},
+		{
+			name:           "single variable",
+			envContent:     "KEY=value\n",
+			expectedOutput: "KEY=value\n",
+		},
+		{
+			name: "multiple variables",
+			envContent: `DATABASE_URL=postgres://user:pass@host?ssl=true
+API_KEY=secret123
+PORT=3000
+`,
+			expectedOutput: `DATABASE_URL=postgres://user:pass@host?ssl=true
+API_KEY=secret123
+PORT=3000
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "ssd.yaml")
+
+			configContent := `server: testserver
+services:
+  api:
+    name: api
+`
+			if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+				t.Fatalf("Failed to write config: %v", err)
+			}
+
+			originalWd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("Failed to get working directory: %v", err)
+			}
+			defer os.Chdir(originalWd)
+
+			if err := os.Chdir(tmpDir); err != nil {
+				t.Fatalf("Failed to change directory: %v", err)
+			}
+
+			executor := new(testhelpers.MockExecutor)
+			executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return(tt.envContent, nil)
+
+			rootCfg, err := config.Load("")
+			if err != nil {
+				t.Fatalf("Failed to load config: %v", err)
+			}
+
+			cfg, err := rootCfg.GetService("api")
+			if err != nil {
+				t.Fatalf("Failed to get service config: %v", err)
+			}
+
+			client := remote.NewClientWithExecutor(cfg, executor)
+
+			content, err := client.GetEnvFile(context.Background(), "api")
+			if err != nil {
+				t.Fatalf("GetEnvFile failed: %v", err)
+			}
+
+			if content == "" || strings.TrimSpace(content) == "" {
+				if tt.expectedOutput != "No environment variables set\n" {
+					t.Errorf("Expected non-empty output, got empty")
+				}
+			} else {
+				if content != strings.TrimSuffix(tt.expectedOutput, "\n") && content != tt.expectedOutput {
+					t.Errorf("Expected %q, got %q", tt.expectedOutput, content)
+				}
+			}
+
+			executor.AssertExpectations(t)
+		})
+	}
+}

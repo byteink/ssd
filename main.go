@@ -250,8 +250,21 @@ func runEnvSet(service string, args []string) {
 }
 
 func runEnvList(service string, args []string) {
-	// TODO: Implement env list
-	fmt.Printf("runEnvList called for service=%s with args=%v\n", service, args)
+	cfg := loadConfig(service)
+	client := remote.NewClient(cfg)
+
+	content, err := client.GetEnvFile(context.Background(), service)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if content == "" || strings.TrimSpace(content) == "" {
+		fmt.Println("No environment variables set")
+		return
+	}
+
+	fmt.Print(content)
 }
 
 func runEnvRm(service string, args []string) {
