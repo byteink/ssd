@@ -567,3 +567,104 @@ services:
 		})
 	}
 }
+
+func TestLoadFromBytes_Volumes(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected map[string]string
+	}{
+		{
+			name: "single volume",
+			yaml: `server: myserver
+services:
+  db:
+    name: db
+    volumes:
+      data: /var/lib/postgresql/data`,
+			expected: map[string]string{"data": "/var/lib/postgresql/data"},
+		},
+		{
+			name: "multiple volumes",
+			yaml: `server: myserver
+services:
+  db:
+    name: db
+    volumes:
+      data: /var/lib/postgresql/data
+      config: /etc/postgresql`,
+			expected: map[string]string{
+				"data":   "/var/lib/postgresql/data",
+				"config": "/etc/postgresql",
+			},
+		},
+		{
+			name: "empty volumes",
+			yaml: `server: myserver
+services:
+  db:
+    name: db
+    volumes: {}`,
+			expected: map[string]string{},
+		},
+		{
+			name: "no volumes field",
+			yaml: `server: myserver
+services:
+  db:
+    name: db`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.yaml))
+			require.NoError(t, err)
+
+			svc, err := cfg.GetService("db")
+			require.NoError(t, err)
+
+			if tt.expected == nil {
+				assert.Nil(t, svc.Volumes)
+			} else {
+				assert.Equal(t, tt.expected, svc.Volumes)
+			}
+		})
+	}
+}
+
+func TestConfig_IsPrebuilt(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected bool
+	}{
+		{
+			name:     "empty image",
+			cfg:      &Config{Image: ""},
+			expected: false,
+		},
+		{
+			name:     "prebuilt image",
+			cfg:      &Config{Image: "postgres:16"},
+			expected: true,
+		},
+		{
+			name:     "nil config with empty image",
+			cfg:      &Config{},
+			expected: false,
+		},
+		{
+			name:     "custom prebuilt image",
+			cfg:      &Config{Image: "myregistry.com/myapp:latest"},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.IsPrebuilt())
+		})
+	}
+}
