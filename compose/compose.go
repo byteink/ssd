@@ -131,6 +131,43 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 	return string(data), nil
 }
 
+// generateTraefikLabels creates Traefik routing labels for a service
+// project: project name from stack path
+// name: service name
+// cfg: service configuration
+//
+// Returns a slice of label strings in Docker Compose format
+func generateTraefikLabels(project, name string, cfg *config.Config) []string {
+	routerName := fmt.Sprintf("%s-%s", project, name)
+	labels := []string{
+		"traefik.enable=true",
+		fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", routerName, cfg.Domain),
+		fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port=%d", routerName, cfg.Port),
+	}
+
+	if cfg.UseHTTPS() {
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=websecure", routerName),
+			fmt.Sprintf("traefik.http.routers.%s.tls=true", routerName),
+			fmt.Sprintf("traefik.http.routers.%s.tls.certresolver=letsencrypt", routerName),
+		)
+
+		httpRouterName := fmt.Sprintf("%s-http", routerName)
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", httpRouterName, cfg.Domain),
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", httpRouterName),
+			fmt.Sprintf("traefik.http.routers.%s.middlewares=redirect-to-https", httpRouterName),
+			"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+		)
+	} else {
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", routerName),
+		)
+	}
+
+	return labels
+}
+
 // GenerateTraefikCompose generates a docker-compose.yaml for Traefik reverse proxy.
 // email: email address for ACME/Let's Encrypt certificate registration
 //
