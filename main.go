@@ -37,6 +37,8 @@ func main() {
 		runLogs(args)
 	case "config":
 		runConfig(args)
+	case "env":
+		runEnv(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -190,6 +192,43 @@ func runConfig(args []string) {
 
 	fmt.Println("Configuration:")
 	printConfig(cfg, "  ")
+}
+
+func runEnv(args []string) {
+	if len(args) < 2 {
+		fmt.Println("Usage: ssd env <service> <set|list|rm> [...]")
+		os.Exit(1)
+	}
+	service := args[0]
+	action := args[1]
+
+	switch action {
+	case "set":
+		runEnvSet(service, args[2:])
+	case "list":
+		runEnvList(service, args[2:])
+	case "rm":
+		runEnvRm(service, args[2:])
+	default:
+		fmt.Printf("Unknown action: %s\n", action)
+		fmt.Println("Usage: ssd env <service> <set|list|rm> [...]")
+		os.Exit(1)
+	}
+}
+
+func runEnvSet(service string, args []string) {
+	// TODO: Implement env set
+	fmt.Printf("runEnvSet called for service=%s with args=%v\n", service, args)
+}
+
+func runEnvList(service string, args []string) {
+	// TODO: Implement env list
+	fmt.Printf("runEnvList called for service=%s with args=%v\n", service, args)
+}
+
+func runEnvRm(service string, args []string) {
+	// TODO: Implement env rm
+	fmt.Printf("runEnvRm called for service=%s with args=%v\n", service, args)
 }
 
 func printConfig(cfg *config.Config, indent string) {

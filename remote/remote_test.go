@@ -528,3 +528,193 @@ func TestValidateTempPath_NormalizedPath(t *testing.T) {
 	err := ValidateTempPath("/tmp//ssd-build//123")
 	assert.NoError(t, err)
 }
+
+func TestClient_StackExists_True(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Mock the SSH command that checks directory and compose.yaml existence
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "test -d /stacks/myapp") &&
+			strings.Contains(cmd, "test -f /stacks/myapp/compose.yaml") &&
+			strings.Contains(cmd, "echo yes") &&
+			strings.Contains(cmd, "echo no")
+	})).Return("yes\n", nil)
+
+	exists, err := client.StackExists(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, exists)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_StackExists_False_NoDirectory(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Stack directory doesn't exist
+	mockExec.On("Run", "ssh", mock.Anything).Return("no\n", nil)
+
+	exists, err := client.StackExists(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestClient_StackExists_False_NoComposeFile(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Directory exists but compose.yaml doesn't
+	mockExec.On("Run", "ssh", mock.Anything).Return("no\n", nil)
+
+	exists, err := client.StackExists(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestClient_StackExists_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// SSH command fails
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
+
+	_, err := client.StackExists(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_StackExists_EmptyOutput(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Empty output should be treated as false
+	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
+
+	exists, err := client.StackExists(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestClient_StackExists_UnexpectedOutput(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Unexpected output should be treated as false
+	mockExec.On("Run", "ssh", mock.Anything).Return("maybe\n", nil)
+
+	exists, err := client.StackExists(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestClient_IsServiceRunning_Running(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Docker compose ps returns JSON with State "running"
+	composeJSON := `{"Name":"myapp-web-1","State":"running","Publishers":[{"URL":"0.0.0.0","TargetPort":8080,"PublishedPort":8080,"Protocol":"tcp"}]}`
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cd /stacks/myapp") &&
+			strings.Contains(cmd, "docker compose ps --format json") &&
+			strings.Contains(cmd, "web")
+	})).Return(composeJSON, nil)
+
+	isRunning, err := client.IsServiceRunning(context.Background(), "web")
+
+	require.NoError(t, err)
+	assert.True(t, isRunning)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_IsServiceRunning_Stopped(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Docker compose ps returns JSON with State "exited"
+	composeJSON := `{"Name":"myapp-web-1","State":"exited","ExitCode":0}`
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "docker compose ps --format json")
+	})).Return(composeJSON, nil)
+
+	isRunning, err := client.IsServiceRunning(context.Background(), "web")
+
+	require.NoError(t, err)
+	assert.False(t, isRunning)
+}
+
+func TestClient_IsServiceRunning_Missing(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Docker compose ps returns empty when service doesn't exist
+	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
+
+	isRunning, err := client.IsServiceRunning(context.Background(), "nonexistent")
+
+	require.NoError(t, err)
+	assert.False(t, isRunning)
+}
+
+func TestClient_IsServiceRunning_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// SSH command fails
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
+
+	_, err := client.IsServiceRunning(context.Background(), "web")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_IsServiceRunning_InvalidJSON(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Docker compose ps returns invalid JSON
+	mockExec.On("Run", "ssh", mock.Anything).Return("not json", nil)
+
+	isRunning, err := client.IsServiceRunning(context.Background(), "web")
+
+	require.NoError(t, err)
+	assert.False(t, isRunning) // Invalid JSON treated as not running
+}
+
+func TestClient_IsServiceRunning_EmptyState(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// JSON with no State field
+	composeJSON := `{"Name":"myapp-web-1"}`
+
+	mockExec.On("Run", "ssh", mock.Anything).Return(composeJSON, nil)
+
+	isRunning, err := client.IsServiceRunning(context.Background(), "web")
+
+	require.NoError(t, err)
+	assert.False(t, isRunning) // No state means not running
+}

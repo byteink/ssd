@@ -489,3 +489,63 @@ func TestApplyDefaults_InvalidStackPath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid stack path")
 }
+
+func TestLoadFromBytes_NoServices(t *testing.T) {
+	yamlData := []byte(`server: myserver`)
+	cfg, err := LoadFromBytes(yamlData)
+	require.NoError(t, err)
+
+	_, err = cfg.GetService("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "services: is required")
+}
+
+func TestRootConfig_GetService_EmptyServiceNameWithServices(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Services: map[string]*Config{
+			"web": {Name: "web-svc"},
+		},
+	}
+
+	_, err := cfg.GetService("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "service name required")
+}
+
+func TestValidateVolumeName(t *testing.T) {
+	tests := []struct {
+		name      string
+		volume    string
+		expectErr bool
+	}{
+		{"valid alphanumeric", "myvolume123", false},
+		{"valid with hyphens", "my-volume", false},
+		{"valid with underscores", "my_volume", false},
+		{"valid mixed", "db_data-v1", false},
+		{"empty name", "", true},
+		{"contains dollar", "data$HOME", true},
+		{"contains backslash", "data\\path", true},
+		{"contains semicolon", "data;rm", true},
+		{"contains pipe", "data|grep", true},
+		{"contains ampersand", "data&bg", true},
+		{"contains backtick", "data`cmd`", true},
+		{"starts with hyphen", "-volume", true},
+		{"too long", "this_is_a_very_long_volume_name_that_exceeds_the_maximum_limit_of_64_characters", true},
+		{"exactly 64 chars", "a234567890123456789012345678901234567890123456789012345678901234", false},
+		{"65 chars", "a2345678901234567890123456789012345678901234567890123456789012345", true},
+		{"contains space", "my volume", true},
+		{"contains slash", "data/path", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateVolumeName(tt.volume)
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

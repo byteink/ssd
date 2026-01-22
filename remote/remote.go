@@ -26,6 +26,7 @@ type RemoteClient interface {
 	GetLogs(ctx context.Context, follow bool, tail int) error
 	Cleanup(ctx context.Context, path string) error
 	MakeTempDir(ctx context.Context) (string, error)
+	StackExists(ctx context.Context) (bool, error)
 }
 
 // Ensure Client implements RemoteClient
@@ -213,6 +214,23 @@ func (c *Client) MakeTempDir(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(output), nil
+}
+
+// StackExists checks if the stack directory and compose.yaml exist on the remote server
+func (c *Client) StackExists(ctx context.Context) (bool, error) {
+	stackPath := c.cfg.StackPath()
+	composePath := filepath.Join(stackPath, "compose.yaml")
+
+	cmd := fmt.Sprintf("test -d %s && test -f %s && echo yes || echo no",
+		shellescape.Quote(stackPath),
+		shellescape.Quote(composePath))
+
+	output, err := c.SSH(ctx, cmd)
+	if err != nil {
+		return false, err
+	}
+
+	return strings.TrimSpace(output) == "yes", nil
 }
 
 // ValidateTempPath validates that a path is safe for temporary operations

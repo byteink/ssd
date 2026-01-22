@@ -17,18 +17,16 @@ type Config struct {
 	Stack      string `yaml:"stack"`
 	Dockerfile string `yaml:"dockerfile"`
 	Context    string `yaml:"context"`
+	Domain     string `yaml:"domain"`      // optional, enables Traefik
+	HTTPS      *bool  `yaml:"https"`       // default true, pointer for nil check
+	Port       int    `yaml:"port"`        // default 80
+	Image      string `yaml:"image"`       // if set, skip build (pre-built)
 }
 
 // RootConfig represents the ssd.yaml file structure
 type RootConfig struct {
-	// Single service mode
-	Name       string `yaml:"name"`
-	Server     string `yaml:"server"`
-	Stack      string `yaml:"stack"`
-	Dockerfile string `yaml:"dockerfile"`
-	Context    string `yaml:"context"`
-
-	// Multi-service mode
+	Server   string              `yaml:"server"`
+	Stack    string              `yaml:"stack"`
 	Services map[string]*Config `yaml:"services"`
 }
 
@@ -59,55 +57,33 @@ func LoadFromBytes(data []byte) (*RootConfig, error) {
 }
 
 // GetService returns the configuration for a specific service
-// If serviceName is empty and it's a single-service config, returns that config
-// If serviceName is empty and it's a multi-service config, returns an error
+// serviceName is required when Services map exists
 func (r *RootConfig) GetService(serviceName string) (*Config, error) {
-	// Multi-service mode
-	if len(r.Services) > 0 {
-		if serviceName == "" {
-			return nil, fmt.Errorf("service name required for multi-service config")
-		}
-		svc, ok := r.Services[serviceName]
-		if !ok {
-			return nil, fmt.Errorf("service %q not found", serviceName)
-		}
-
-		// Inherit root-level values if not set on service
-		cfg := *svc
-		if cfg.Server == "" {
-			cfg.Server = r.Server
-		}
-		if cfg.Stack == "" {
-			cfg.Stack = r.Stack
-		}
-
-		result, err := applyDefaults(&cfg, serviceName)
-		if err != nil {
-			return nil, err
-		}
-
-		// Validate server
-		if err := ValidateServer(result.Server); err != nil {
-			return nil, fmt.Errorf("invalid server: %w", err)
-		}
-
-		return result, nil
+	// Services map is required
+	if len(r.Services) == 0 {
+		return nil, fmt.Errorf("services: is required")
 	}
 
-	// Single-service mode
-	if r.Server == "" {
-		return nil, fmt.Errorf("server is required in config")
+	// Service name is required for multi-service config
+	if serviceName == "" {
+		return nil, fmt.Errorf("service name required for multi-service config")
 	}
 
-	cfg := &Config{
-		Name:       r.Name,
-		Server:     r.Server,
-		Stack:      r.Stack,
-		Dockerfile: r.Dockerfile,
-		Context:    r.Context,
+	svc, ok := r.Services[serviceName]
+	if !ok {
+		return nil, fmt.Errorf("service %q not found", serviceName)
 	}
 
-	result, err := applyDefaults(cfg, "")
+	// Inherit root-level values if not set on service
+	cfg := *svc
+	if cfg.Server == "" {
+		cfg.Server = r.Server
+	}
+	if cfg.Stack == "" {
+		cfg.Stack = r.Stack
+	}
+
+	result, err := applyDefaults(&cfg, serviceName)
 	if err != nil {
 		return nil, err
 	}

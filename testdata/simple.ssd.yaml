@@ -1,2 +1,4 @@
 server: testserver
-name: myapp
+services:
+  myapp:
+    name: myapp
