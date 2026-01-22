@@ -52,36 +52,108 @@ goreleaser release --snapshot --clean   # Test release locally
 ## Conventions
 
 - **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)
-- **Image naming**: `ssd-{name}:{version}` (auto-incremented)
-- **Version tracking**: Parsed from compose.yaml image tag (`ssd-{name}:{version}`)
-- **Config inheritance**: Root-level `server` and `stack` are inherited by services in monorepo mode
+- **Image naming**: `ssd-{project}-{name}:{version}` where project is extracted from stack path
+- **Version tracking**: Parsed from compose.yaml image tag, auto-incremented on deploy
+- **Config inheritance**: Root-level `server` and `stack` are inherited by services
+- **Services-only mode**: All configs must use `services:` map (single-service mode removed)
 
 ## ssd.yaml Patterns
 
-### Simple project
+### Minimal (single service)
 ```yaml
-server: myserver        # SSH host from ~/.ssh/config
-name: myapp             # Optional, defaults to directory name
-# stack defaults to /stacks/{name}
+server: myserver
+services:
+  app:
+    # Inherits server from root
+    # name defaults to service key ("app")
+    # stack defaults to /stacks/app
 ```
 
 ### Custom stack path
 ```yaml
 server: myserver
-name: myapp
-stack: /custom/stacks/myapp   # Full path to stack directory
-```
-
-### Monorepo (root-level defaults)
-```yaml
-server: myserver
-stack: /stacks/myproject      # Shared stack for all services
+stack: /custom/stacks/myapp   # Shared by all services
 
 services:
   web:
-    name: myproject-web       # Image will be ssd-myproject-web:{version}
-    context: ./apps/web
-  api:
-    name: myproject-api
-    context: ./apps/api
+    # stack inherited from root
 ```
+
+### Monorepo with shared stack
+```yaml
+server: myserver
+stack: /stacks/myproject      # All services share this stack
+
+services:
+  web:
+    context: ./apps/web
+    dockerfile: ./apps/web/Dockerfile
+  api:
+    context: ./apps/api
+    dockerfile: ./apps/api/Dockerfile
+```
+
+### Full-featured service
+```yaml
+server: myserver
+
+services:
+  web:
+    name: myapp-web
+    stack: /stacks/myapp
+    context: ./apps/web
+    dockerfile: ./apps/web/Dockerfile
+    domain: example.com         # Enable Traefik routing
+    https: true                 # Default true, set false to disable
+    port: 3000                  # Container port, default 80
+    depends_on:
+      - db
+      - redis
+    volumes:
+      postgres-data: /var/lib/postgresql/data
+      redis-data: /data
+    healthcheck:
+      cmd: "curl -f http://localhost:3000/health || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+### Pre-built image (skip build)
+```yaml
+server: myserver
+
+services:
+  nginx:
+    image: nginx:latest        # Use pre-built image, skip build step
+    domain: example.com
+```
+
+## Commands
+
+### Deployment
+```bash
+ssd deploy <service>          # Build and deploy service
+ssd restart <service>         # Restart without rebuilding
+ssd rollback <service>        # Rollback to previous version
+ssd status <service>          # Check container status
+ssd logs <service> [-f]       # View logs, -f to follow
+```
+
+### Configuration
+```bash
+ssd config                    # Show all services config
+ssd config <service>          # Show specific service config
+```
+
+### Environment variables
+```bash
+ssd env <service> set KEY=VALUE      # Set environment variable
+ssd env <service> list               # List all environment variables
+ssd env <service> rm KEY             # Remove environment variable
+```
+
+**Note**: `env` command is currently a stub (not yet implemented).
+
+### Provision (future)
+Server provisioning with Docker and Traefik is planned but not yet available. Tests exist in `provision/provision_test.go`.
