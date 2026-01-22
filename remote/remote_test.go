@@ -1245,3 +1245,33 @@ func TestClient_PullImage_SSHError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
 }
+
+func TestClient_StartService_Success(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cd /stacks/myapp") &&
+			strings.Contains(cmd, "docker compose up -d web")
+	})).Return(nil)
+
+	err := client.StartService(context.Background(), "web")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_StartService_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.Anything).Return(errors.New("connection refused"))
+
+	err := client.StartService(context.Background(), "web")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused")
+}

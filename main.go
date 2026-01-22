@@ -268,8 +268,22 @@ func runEnvList(service string, args []string) {
 }
 
 func runEnvRm(service string, args []string) {
-	// TODO: Implement env rm
-	fmt.Printf("runEnvRm called for service=%s with args=%v\n", service, args)
+	if len(args) == 0 {
+		fmt.Println("Usage: ssd env <service> rm KEY")
+		os.Exit(1)
+	}
+
+	key := args[0]
+
+	cfg := loadConfig(service)
+	client := remote.NewClient(cfg)
+
+	if err := client.RemoveEnvVar(context.Background(), service, key); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Removed %s from service %s\n", key, service)
 }
 
 func printConfig(cfg *config.Config, indent string) {

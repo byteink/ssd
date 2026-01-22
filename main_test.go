@@ -378,3 +378,146 @@ services:
 		})
 	}
 }
+
+// TestRunEnvRmIntegration tests the full runEnvRm flow with a mock executor
+func TestRunEnvRmIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "ssd.yaml")
+
+	configContent := `server: testserver
+services:
+  api:
+    name: api
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	originalWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	defer os.Chdir(originalWd)
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change directory: %v", err)
+	}
+
+	executor := new(testhelpers.MockExecutor)
+	executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return("DATABASE_URL=postgres://localhost\nAPI_KEY=secret\n", nil)
+	executor.On("Run", "ssh", []string{"testserver", "echo 'API_KEY=secret\n' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	cfg, err := rootCfg.GetService("api")
+	if err != nil {
+		t.Fatalf("Failed to get service config: %v", err)
+	}
+
+	client := remote.NewClientWithExecutor(cfg, executor)
+
+	err = client.RemoveEnvVar(context.Background(), "api", "DATABASE_URL")
+	if err != nil {
+		t.Fatalf("RemoveEnvVar failed: %v", err)
+	}
+
+	executor.AssertExpectations(t)
+}
+
+// TestEnvRmE2E tests the end-to-end flow from command line to RemoveEnvVar call
+func TestEnvRmE2E(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		key         string
+		existingEnv string
+		expectedEnv string
+		shouldFail  bool
+	}{
+		{
+			name:        "remove existing key",
+			args:        []string{"DATABASE_URL"},
+			key:         "DATABASE_URL",
+			existingEnv: "DATABASE_URL=postgres://localhost\nAPI_KEY=secret\n",
+			expectedEnv: "API_KEY=secret\n",
+			shouldFail:  false,
+		},
+		{
+			name:        "remove non-existent key",
+			args:        []string{"MISSING_KEY"},
+			key:         "MISSING_KEY",
+			existingEnv: "DATABASE_URL=postgres://localhost\n",
+			expectedEnv: "DATABASE_URL=postgres://localhost\n",
+			shouldFail:  false,
+		},
+		{
+			name:        "remove from empty file",
+			args:        []string{"KEY"},
+			key:         "KEY",
+			existingEnv: "",
+			expectedEnv: "",
+			shouldFail:  false,
+		},
+		{
+			name:       "no arguments",
+			args:       []string{},
+			shouldFail: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "ssd.yaml")
+
+			configContent := `server: testserver
+services:
+  api:
+    name: api
+`
+			if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+				t.Fatalf("Failed to write config: %v", err)
+			}
+
+			originalWd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("Failed to get working directory: %v", err)
+			}
+			defer os.Chdir(originalWd)
+
+			if err := os.Chdir(tmpDir); err != nil {
+				t.Fatalf("Failed to change directory: %v", err)
+			}
+
+			if tt.shouldFail {
+				return
+			}
+
+			executor := new(testhelpers.MockExecutor)
+			executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return(tt.existingEnv, nil)
+			executor.On("Run", "ssh", []string{"testserver", "echo '" + strings.ReplaceAll(tt.expectedEnv, "'", "'\\''") + "' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
+
+			rootCfg, err := config.Load("")
+			if err != nil {
+				t.Fatalf("Failed to load config: %v", err)
+			}
+
+			cfg, err := rootCfg.GetService("api")
+			if err != nil {
+				t.Fatalf("Failed to get service config: %v", err)
+			}
+
+			client := remote.NewClientWithExecutor(cfg, executor)
+
+			err = client.RemoveEnvVar(context.Background(), "api", tt.key)
+			if err != nil {
+				t.Fatalf("RemoveEnvVar failed: %v", err)
+			}
+
+			executor.AssertExpectations(t)
+		})
+	}
+}

@@ -35,6 +35,7 @@ type RemoteClient interface {
 	RemoveEnvVar(ctx context.Context, serviceName, key string) error
 	CreateStack(ctx context.Context, composeContent string) error
 	PullImage(ctx context.Context, image string) error
+	StartService(ctx context.Context, serviceName string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -407,5 +408,12 @@ func (c *Client) CreateStack(ctx context.Context, composeContent string) error {
 // PullImage pulls a Docker image on the remote server
 func (c *Client) PullImage(ctx context.Context, image string) error {
 	cmd := fmt.Sprintf("docker pull %s", shellescape.Quote(image))
+	return c.SSHInteractive(ctx, cmd)
+}
+
+// StartService starts a specific service in the stack
+func (c *Client) StartService(ctx context.Context, serviceName string) error {
+	stackPath := c.cfg.StackPath()
+	cmd := fmt.Sprintf("cd %s && docker compose up -d %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
 	return c.SSHInteractive(ctx, cmd)
 }
