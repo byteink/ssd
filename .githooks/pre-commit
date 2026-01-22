@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit hook to run linting
+
+echo "Running golangci-lint..."
+if ! golangci-lint run; then
+    echo ""
+    echo "❌ Lint errors found. Please fix them before committing."
+    exit 1
+fi
+
+echo "✅ Lint passed"

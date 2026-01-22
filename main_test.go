@@ -114,7 +114,11 @@ services:
 	if err != nil {
 		t.Fatalf("Failed to get working directory: %v", err)
 	}
-	defer os.Chdir(originalWd)
+	defer func() {
+		if err := os.Chdir(originalWd); err != nil {
+			t.Errorf("Failed to restore working directory: %v", err)
+		}
+	}()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("Failed to change directory: %v", err)
@@ -217,7 +221,11 @@ services:
 			if err != nil {
 				t.Fatalf("Failed to get working directory: %v", err)
 			}
-			defer os.Chdir(originalWd)
+			defer func() {
+				if err := os.Chdir(originalWd); err != nil {
+					t.Errorf("Failed to restore working directory: %v", err)
+				}
+			}()
 
 			if err := os.Chdir(tmpDir); err != nil {
 				t.Fatalf("Failed to change directory: %v", err)
@@ -338,7 +346,11 @@ services:
 			if err != nil {
 				t.Fatalf("Failed to get working directory: %v", err)
 			}
-			defer os.Chdir(originalWd)
+			defer func() {
+				if err := os.Chdir(originalWd); err != nil {
+					t.Errorf("Failed to restore working directory: %v", err)
+				}
+			}()
 
 			if err := os.Chdir(tmpDir); err != nil {
 				t.Fatalf("Failed to change directory: %v", err)
@@ -397,7 +409,11 @@ services:
 	if err != nil {
 		t.Fatalf("Failed to get working directory: %v", err)
 	}
-	defer os.Chdir(originalWd)
+	defer func() {
+		if err := os.Chdir(originalWd); err != nil {
+			t.Errorf("Failed to restore working directory: %v", err)
+		}
+	}()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("Failed to change directory: %v", err)
@@ -486,7 +502,11 @@ services:
 			if err != nil {
 				t.Fatalf("Failed to get working directory: %v", err)
 			}
-			defer os.Chdir(originalWd)
+			defer func() {
+				if err := os.Chdir(originalWd); err != nil {
+					t.Errorf("Failed to restore working directory: %v", err)
+				}
+			}()
 
 			if err := os.Chdir(tmpDir); err != nil {
 				t.Fatalf("Failed to change directory: %v", err)

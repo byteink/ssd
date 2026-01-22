@@ -247,6 +247,20 @@ ssd help                 # Show help
 - A `compose.yaml` already set up in the stack directory
 - rsync installed locally
 
+## Development
+
+```bash
+# Clone and setup
+git clone https://github.com/byteink/ssd.git
+cd ssd
+make setup    # Configures git hooks for linting
+
+# Build and test
+make build    # Build binary
+make test     # Run tests
+make lint     # Run linter
+```
+
 ## License
 
 MIT

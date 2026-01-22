@@ -9,10 +9,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Never relax linting**: Fix errors, don't disable rules or use `_ =`
 - **Keep docs updated**: When adding/changing features, update both `README.md` and `CLAUDE.md`
 
+## Setup
+
+```bash
+make setup             # Configure git hooks for linting (run once after clone)
+```
+
 ## Build & Run
 
 ```bash
-go build -o ssd .      # Build binary
+make build             # Build binary (also runs make setup if needed)
+make test              # Run tests
+make lint              # Run linter
 go run .               # Run directly
 ./ssd version          # Test the binary
 ```
