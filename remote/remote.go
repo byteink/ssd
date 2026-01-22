@@ -33,6 +33,7 @@ type RemoteClient interface {
 	GetEnvFile(ctx context.Context, serviceName string) (string, error)
 	SetEnvVar(ctx context.Context, serviceName, key, value string) error
 	RemoveEnvVar(ctx context.Context, serviceName, key string) error
+	CreateStack(ctx context.Context, composeContent string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -362,4 +363,42 @@ func (c *Client) RemoveEnvVar(ctx context.Context, serviceName, key string) erro
 	cmd := fmt.Sprintf("echo '%s' | install -m 600 /dev/stdin %s", escapedContent, shellescape.Quote(envPath))
 	_, err = c.SSH(ctx, cmd)
 	return err
+}
+
+// CreateStack creates a stack directory and compose.yaml file with atomic write
+func (c *Client) CreateStack(ctx context.Context, composeContent string) error {
+	if composeContent == "" {
+		return fmt.Errorf("compose content cannot be empty")
+	}
+
+	stackPath := c.cfg.StackPath()
+	tmpFile := filepath.Join(stackPath, "compose.yaml.tmp")
+	finalFile := filepath.Join(stackPath, "compose.yaml")
+
+	// Step 1: Create stack directory
+	mkdirCmd := fmt.Sprintf("mkdir -p %s", shellescape.Quote(stackPath))
+	if _, err := c.SSH(ctx, mkdirCmd); err != nil {
+		return fmt.Errorf("failed to create stack directory: %w", err)
+	}
+
+	// Step 2: Write content to temporary file
+	escapedContent := strings.ReplaceAll(composeContent, "'", "'\\''")
+	writeCmd := fmt.Sprintf("echo '%s' > %s", escapedContent, shellescape.Quote(tmpFile))
+	if _, err := c.SSH(ctx, writeCmd); err != nil {
+		return fmt.Errorf("failed to write compose.yaml.tmp: %w", err)
+	}
+
+	// Step 3: Validate compose file
+	validateCmd := fmt.Sprintf("cd %s && docker compose -f compose.yaml.tmp config > /dev/null 2>&1", shellescape.Quote(stackPath))
+	if _, err := c.SSH(ctx, validateCmd); err != nil {
+		return fmt.Errorf("compose.yaml validation failed: %w", err)
+	}
+
+	// Step 4: Move temp file to final location
+	moveCmd := fmt.Sprintf("mv %s %s", shellescape.Quote(tmpFile), shellescape.Quote(finalFile))
+	if _, err := c.SSH(ctx, moveCmd); err != nil {
+		return fmt.Errorf("failed to move compose.yaml.tmp to compose.yaml: %w", err)
+	}
+
+	return nil
 }

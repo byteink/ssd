@@ -93,3 +93,51 @@ func (m *MockRemoteClient) MakeTempDir(ctx context.Context) (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
 }
+
+// StackExists mocks stack existence check
+func (m *MockRemoteClient) StackExists(ctx context.Context) (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+// IsServiceRunning mocks service running check
+func (m *MockRemoteClient) IsServiceRunning(ctx context.Context, serviceName string) (bool, error) {
+	args := m.Called(serviceName)
+	return args.Bool(0), args.Error(1)
+}
+
+// EnsureNetwork mocks network creation
+func (m *MockRemoteClient) EnsureNetwork(ctx context.Context, name string) error {
+	args := m.Called(name)
+	return args.Error(0)
+}
+
+// CreateEnvFile mocks env file creation
+func (m *MockRemoteClient) CreateEnvFile(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
+// GetEnvFile mocks env file retrieval
+func (m *MockRemoteClient) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
+	args := m.Called(serviceName)
+	return args.String(0), args.Error(1)
+}
+
+// SetEnvVar mocks setting environment variable
+func (m *MockRemoteClient) SetEnvVar(ctx context.Context, serviceName, key, value string) error {
+	args := m.Called(serviceName, key, value)
+	return args.Error(0)
+}
+
+// RemoveEnvVar mocks removing environment variable
+func (m *MockRemoteClient) RemoveEnvVar(ctx context.Context, serviceName, key string) error {
+	args := m.Called(serviceName, key)
+	return args.Error(0)
+}
+
+// CreateStack mocks stack creation
+func (m *MockRemoteClient) CreateStack(ctx context.Context, composeContent string) error {
+	args := m.Called(composeContent)
+	return args.Error(0)
+}

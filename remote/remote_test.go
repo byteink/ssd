@@ -1044,3 +1044,155 @@ func TestClient_RemoveEnvVar_PreservesOtherVars(t *testing.T) {
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
 }
+
+func TestClient_CreateStack_Success(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	composeContent := `services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+`
+
+	// First call: mkdir -p
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mkdir -p /stacks/myapp")
+	})).Return("", nil).Once()
+
+	// Second call: write temp file
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "compose.yaml.tmp") &&
+			strings.Contains(cmd, "services:") &&
+			strings.Contains(cmd, "nginx:latest")
+	})).Return("", nil).Once()
+
+	// Third call: validate with docker compose config
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "cd /stacks/myapp") &&
+			strings.Contains(cmd, "docker compose -f compose.yaml.tmp config")
+	})).Return("", nil).Once()
+
+	// Fourth call: move tmp to final
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mv /stacks/myapp/compose.yaml.tmp /stacks/myapp/compose.yaml")
+	})).Return("", nil).Once()
+
+	err := client.CreateStack(context.Background(), composeContent)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_CreateStack_MkdirFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mkdir")
+	})).Return("", errors.New("permission denied"))
+
+	err := client.CreateStack(context.Background(), "services:\n  web:\n    image: nginx")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create stack directory")
+}
+
+func TestClient_CreateStack_WriteFileFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mkdir")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "compose.yaml.tmp")
+	})).Return("", errors.New("disk full"))
+
+	err := client.CreateStack(context.Background(), "services:\n  web:\n    image: nginx")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write compose.yaml.tmp")
+}
+
+func TestClient_CreateStack_ValidationFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	invalidCompose := `invalid yaml content: [}`
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mkdir")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "compose.yaml.tmp") && !strings.Contains(cmd, "docker compose")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "docker compose -f compose.yaml.tmp config")
+	})).Return("", errors.New("yaml: invalid syntax"))
+
+	err := client.CreateStack(context.Background(), invalidCompose)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compose.yaml validation failed")
+}
+
+func TestClient_CreateStack_MoveFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mkdir")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "compose.yaml.tmp") && !strings.Contains(cmd, "docker compose")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "docker compose -f compose.yaml.tmp config")
+	})).Return("", nil).Once()
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "mv") && strings.Contains(cmd, "compose.yaml.tmp")
+	})).Return("", errors.New("operation not permitted"))
+
+	err := client.CreateStack(context.Background(), "services:\n  web:\n    image: nginx")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to move compose.yaml.tmp to compose.yaml")
+}
+
+func TestClient_CreateStack_EmptyContent(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.CreateStack(context.Background(), "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compose content cannot be empty")
+}
