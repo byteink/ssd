@@ -119,14 +119,14 @@ func AtomicWrite(content, destPath string) error {
 	var parsed interface{}
 	if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
 		// Clean up temp file on validation failure
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
 
 	// Atomic rename (on same filesystem)
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		// Clean up temp file on rename failure
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
