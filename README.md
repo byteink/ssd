@@ -27,14 +27,18 @@ go install github.com/byteink/ssd@latest
 
 ## Quick Start
 
-1. Add `ssd.yaml` to your project:
-```yaml
-server: myserver
+1. Initialize your project:
+```bash
+# Interactive mode
+ssd init
+
+# Or with flags
+ssd init -s myserver -d myapp.example.com -p 3000
 ```
 
 2. Deploy:
 ```bash
-ssd deploy
+ssd deploy app
 ```
 
 That's it! `ssd` will:
@@ -181,6 +185,20 @@ services:
 - `stack`: Default stack path for all services
 
 ## Commands
+
+### Initialize
+```bash
+ssd init                      # Interactive mode
+ssd init -s myserver          # Non-interactive with flags
+```
+
+**Flags:**
+- `-s, --server` - SSH host name (required in non-interactive mode)
+- `--stack` - Stack path (e.g., `/dockge/stacks/myapp`)
+- `--service` - Service name (default: `app`)
+- `-d, --domain` - Domain for Traefik routing
+- `-p, --port` - Container port
+- `-f, --force` - Overwrite existing `ssd.yaml`
 
 ### Deployment
 ```bash

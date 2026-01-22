@@ -41,8 +41,10 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── config.go     # ssd.yaml parsing and defaults
 ├── remote/
 │   └── remote.go     # SSH, rsync, docker operations
-└── deploy/
-    └── deploy.go     # Deploy orchestration
+├── deploy/
+│   └── deploy.go     # Deploy orchestration
+└── scaffold/
+    └── scaffold.go   # ssd init command (generate ssd.yaml)
 ```
 
 ## Core Workflow
@@ -138,6 +140,13 @@ services:
 ```
 
 ## Commands
+
+### Initialize
+```bash
+ssd init                      # Interactive mode
+ssd init -s myserver          # Non-interactive with flags
+ssd init -s myserver --stack /dockge/stacks/myapp -d myapp.example.com -p 3000
+```
 
 ### Deployment
 ```bash

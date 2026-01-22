@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/deploy"
 	"github.com/byteink/ssd/provision"
 	"github.com/byteink/ssd/remote"
+	"github.com/byteink/ssd/scaffold"
 )
 
 var version = "dev"
@@ -41,6 +43,8 @@ func main() {
 		runConfig(args)
 	case "env":
 		runEnv(args)
+	case "init":
+		runInit(args)
 	case "provision":
 		runProvision(args)
 	case "help", "-h", "--help":
@@ -391,6 +395,137 @@ func runProvision(args []string) {
 	fmt.Println("\nProvisioning completed successfully!")
 }
 
+func runInit(args []string) {
+	opts := scaffold.Options{}
+
+	// Parse flags
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "-s", "--server":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --server requires a value")
+				os.Exit(1)
+			}
+			opts.Server = args[i+1]
+			i += 2
+		case "--stack":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --stack requires a value")
+				os.Exit(1)
+			}
+			opts.Stack = args[i+1]
+			i += 2
+		case "--service":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --service requires a value")
+				os.Exit(1)
+			}
+			opts.Service = args[i+1]
+			i += 2
+		case "-d", "--domain":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --domain requires a value")
+				os.Exit(1)
+			}
+			opts.Domain = args[i+1]
+			i += 2
+		case "-p", "--port":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --port requires a value")
+				os.Exit(1)
+			}
+			port, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				fmt.Printf("Error: invalid port: %s\n", args[i+1])
+				os.Exit(1)
+			}
+			opts.Port = port
+			i += 2
+		case "-f", "--force":
+			opts.Force = true
+			i++
+		default:
+			fmt.Printf("Error: Unknown flag: %s\n", args[i])
+			printInitUsage()
+			os.Exit(1)
+		}
+	}
+
+	// Interactive mode if no server specified
+	if opts.Server == "" {
+		reader := bufio.NewReader(os.Stdin)
+
+		fmt.Print("Server (SSH host): ")
+		server, _ := reader.ReadString('\n')
+		opts.Server = strings.TrimSpace(server)
+
+		fmt.Print("Stack path (e.g., /dockge/stacks/myapp) [optional]: ")
+		stack, _ := reader.ReadString('\n')
+		opts.Stack = strings.TrimSpace(stack)
+
+		fmt.Print("Service name [app]: ")
+		service, _ := reader.ReadString('\n')
+		opts.Service = strings.TrimSpace(service)
+
+		fmt.Print("Domain (e.g., myapp.example.com) [optional]: ")
+		domain, _ := reader.ReadString('\n')
+		opts.Domain = strings.TrimSpace(domain)
+
+		fmt.Print("Port [optional]: ")
+		portStr, _ := reader.ReadString('\n')
+		portStr = strings.TrimSpace(portStr)
+		if portStr != "" {
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				fmt.Printf("Error: invalid port: %s\n", portStr)
+				os.Exit(1)
+			}
+			opts.Port = port
+		}
+	}
+
+	// Validate
+	if err := scaffold.Validate(opts); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Get current directory
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write file
+	if err := scaffold.WriteFile(dir, opts); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Created ssd.yaml")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Edit ssd.yaml to configure your service")
+	fmt.Println("  2. Ensure you have a Dockerfile in your project")
+	fmt.Println("  3. Run: ssd deploy app")
+}
+
+func printInitUsage() {
+	fmt.Println("Usage: ssd init [flags]")
+	fmt.Println()
+	fmt.Println("Flags:")
+	fmt.Println("  -s, --server STRING   SSH host name (required)")
+	fmt.Println("      --stack STRING    Stack path (e.g., /dockge/stacks/myapp)")
+	fmt.Println("      --service STRING  Service name (default: app)")
+	fmt.Println("  -d, --domain STRING   Domain for Traefik routing")
+	fmt.Println("  -p, --port INT        Container port")
+	fmt.Println("  -f, --force           Overwrite existing ssd.yaml")
+	fmt.Println()
+	fmt.Println("If no flags are provided, runs in interactive mode.")
+}
+
 func printConfig(cfg *config.Config, indent string) {
 	fmt.Printf("%sname: %s\n", indent, cfg.Name)
 	fmt.Printf("%sserver: %s\n", indent, cfg.Server)
@@ -422,6 +557,7 @@ func printUsage() {
 	fmt.Println("Agentless remote deployment tool for Docker Compose stacks.")
 	fmt.Println()
 	fmt.Println("Usage:")
+	fmt.Println("  ssd init                        Create ssd.yaml (interactive or flags)")
 	fmt.Println("  ssd deploy <service>            Deploy application (build + restart)")
 	fmt.Println("  ssd restart [service]           Restart stack without rebuilding")
 	fmt.Println("  ssd rollback [service]          Rollback to previous version")
