@@ -832,7 +832,7 @@ func TestClient_GetEnvFile(t *testing.T) {
 	envContent := "DB_HOST=localhost\nDB_PORT=5432\n"
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "cat /stacks/myapp/.env")
+		return strings.Contains(cmd, "cat /stacks/myapp/myservice.env")
 	})).Return(envContent, nil)
 
 	content, err := client.GetEnvFile(context.Background(), "myservice")

@@ -68,10 +68,11 @@ func loadConfig(serviceName string) *config.Config {
 }
 
 func runDeploy(args []string) {
-	serviceName := ""
-	if len(args) > 0 {
-		serviceName = args[0]
+	if len(args) == 0 {
+		fmt.Println("Usage: ssd deploy <service>")
+		os.Exit(1)
 	}
+	serviceName := args[0]
 
 	cfg := loadConfig(serviceName)
 
@@ -262,7 +263,7 @@ func printUsage() {
 	fmt.Println("Agentless remote deployment tool for Docker Compose stacks.")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ssd deploy [service]     Deploy application (build + restart)")
+	fmt.Println("  ssd deploy <service>     Deploy application (build + restart)")
 	fmt.Println("  ssd restart [service]    Restart stack without rebuilding")
 	fmt.Println("  ssd rollback [service]   Rollback to previous version")
 	fmt.Println("  ssd status [service]     Check deployment status")

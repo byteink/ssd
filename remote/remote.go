@@ -294,9 +294,9 @@ func (c *Client) CreateEnvFile(ctx context.Context, serviceName string) error {
 	return err
 }
 
-// GetEnvFile reads the .env file from the stack directory
+// GetEnvFile reads the {serviceName}.env file from the stack directory
 func (c *Client) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
-	envPath := filepath.Join(c.cfg.StackPath(), ".env")
+	envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", serviceName))
 	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(envPath)))
 	if err != nil {
 		return "", err
