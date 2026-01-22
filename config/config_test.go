@@ -507,3 +507,63 @@ func TestApplyDefaults_PortPreserved(t *testing.T) {
 
 	assert.Equal(t, 3000, result.Port)
 }
+
+func TestLoadFromBytes_DependsOn(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []string
+	}{
+		{
+			name: "single dependency",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    depends_on: [db]`,
+			expected: []string{"db"},
+		},
+		{
+			name: "multiple dependencies",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    depends_on: [db, redis]`,
+			expected: []string{"db", "redis"},
+		},
+		{
+			name: "empty depends_on",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    depends_on: []`,
+			expected: []string{},
+		},
+		{
+			name: "no depends_on field",
+			yaml: `server: myserver
+services:
+  web:
+    name: web`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.yaml))
+			require.NoError(t, err)
+
+			svc, err := cfg.GetService("web")
+			require.NoError(t, err)
+
+			if tt.expected == nil {
+				assert.Nil(t, svc.DependsOn)
+			} else {
+				assert.Equal(t, tt.expected, svc.DependsOn)
+			}
+		})
+	}
+}

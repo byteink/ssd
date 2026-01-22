@@ -12,15 +12,16 @@ import (
 
 // Config represents a single service configuration
 type Config struct {
-	Name       string `yaml:"name"`
-	Server     string `yaml:"server"`
-	Stack      string `yaml:"stack"`
-	Dockerfile string `yaml:"dockerfile"`
-	Context    string `yaml:"context"`
-	Domain     string `yaml:"domain"`      // optional, enables Traefik
-	HTTPS      *bool  `yaml:"https"`       // default true, pointer for nil check
-	Port       int    `yaml:"port"`        // default 80
-	Image      string `yaml:"image"`       // if set, skip build (pre-built)
+	Name       string   `yaml:"name"`
+	Server     string   `yaml:"server"`
+	Stack      string   `yaml:"stack"`
+	Dockerfile string   `yaml:"dockerfile"`
+	Context    string   `yaml:"context"`
+	Domain     string   `yaml:"domain"`      // optional, enables Traefik
+	HTTPS      *bool    `yaml:"https"`       // default true, pointer for nil check
+	Port       int      `yaml:"port"`        // default 80
+	Image      string   `yaml:"image"`       // if set, skip build (pre-built)
+	DependsOn  []string `yaml:"depends_on"`
 }
 
 // RootConfig represents the ssd.yaml file structure
