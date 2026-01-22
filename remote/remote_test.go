@@ -1216,3 +1216,32 @@ func TestClient_CreateStack_EmptyContent(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "compose content cannot be empty")
 }
+
+func TestClient_PullImage_Success(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "docker pull nginx:latest")
+	})).Return(nil)
+
+	err := client.PullImage(context.Background(), "nginx:latest")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_PullImage_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.Anything).Return(errors.New("connection refused"))
+
+	err := client.PullImage(context.Background(), "nginx:latest")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection refused")
+}

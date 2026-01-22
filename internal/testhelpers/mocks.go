@@ -141,3 +141,9 @@ func (m *MockRemoteClient) CreateStack(ctx context.Context, composeContent strin
 	args := m.Called(composeContent)
 	return args.Error(0)
 }
+
+// PullImage mocks pulling a Docker image
+func (m *MockRemoteClient) PullImage(ctx context.Context, image string) error {
+	args := m.Called(image)
+	return args.Error(0)
+}
