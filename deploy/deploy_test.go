@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -639,4 +640,22 @@ func TestRollback_LockReleasedOnError(t *testing.T) {
 	unlock, err := acquireLock(cfg.StackPath())
 	require.NoError(t, err, "lock should be released after rollback error")
 	unlock()
+}
+
+func TestRollback_PrebuiltService(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/nginx",
+		Image:  "nginx:latest", // Pre-built image
+	}
+
+	// Mock should not be called for pre-built services
+	err := RollbackWithClient(cfg, mockClient, &Options{Output: io.Discard})
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "GetCurrentVersion")
+	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "RestartStack")
 }

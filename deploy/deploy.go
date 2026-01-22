@@ -174,6 +174,12 @@ func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) erro
 	}
 	defer unlock()
 
+	// Check if this is a pre-built service
+	if cfg.IsPrebuilt() {
+		logf(output, "Skipping %s: pre-built images don't have versions to rollback\n", cfg.Name)
+		return nil
+	}
+
 	// Get current version
 	logf(output, "Checking current version on %s...\n", cfg.Server)
 	currentVersion, err := client.GetCurrentVersion(ctx)
