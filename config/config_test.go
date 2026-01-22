@@ -668,3 +668,70 @@ func TestConfig_IsPrebuilt(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFromBytes_HealthCheck(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected *HealthCheck
+	}{
+		{
+			name: "full healthcheck",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    healthcheck:
+      cmd: "curl -f http://localhost:8080/health || exit 1"
+      interval: "30s"
+      timeout: "10s"
+      retries: 3`,
+			expected: &HealthCheck{
+				Cmd:      "curl -f http://localhost:8080/health || exit 1",
+				Interval: "30s",
+				Timeout:  "10s",
+				Retries:  3,
+			},
+		},
+		{
+			name: "minimal healthcheck",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    healthcheck:
+      cmd: "exit 0"`,
+			expected: &HealthCheck{
+				Cmd: "exit 0",
+			},
+		},
+		{
+			name: "no healthcheck field",
+			yaml: `server: myserver
+services:
+  web:
+    name: web`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.yaml))
+			require.NoError(t, err)
+
+			svc, err := cfg.GetService("web")
+			require.NoError(t, err)
+
+			if tt.expected == nil {
+				assert.Nil(t, svc.HealthCheck)
+			} else {
+				require.NotNil(t, svc.HealthCheck)
+				assert.Equal(t, tt.expected.Cmd, svc.HealthCheck.Cmd)
+				assert.Equal(t, tt.expected.Interval, svc.HealthCheck.Interval)
+				assert.Equal(t, tt.expected.Timeout, svc.HealthCheck.Timeout)
+				assert.Equal(t, tt.expected.Retries, svc.HealthCheck.Retries)
+			}
+		})
+	}
+}

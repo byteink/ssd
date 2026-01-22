@@ -10,19 +10,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// HealthCheck represents Docker healthcheck configuration
+type HealthCheck struct {
+	Cmd      string `yaml:"cmd"`
+	Interval string `yaml:"interval"`
+	Timeout  string `yaml:"timeout"`
+	Retries  int    `yaml:"retries"`
+}
+
 // Config represents a single service configuration
 type Config struct {
-	Name       string            `yaml:"name"`
-	Server     string            `yaml:"server"`
-	Stack      string            `yaml:"stack"`
-	Dockerfile string            `yaml:"dockerfile"`
-	Context    string            `yaml:"context"`
-	Domain     string            `yaml:"domain"`      // optional, enables Traefik
-	HTTPS      *bool             `yaml:"https"`       // default true, pointer for nil check
-	Port       int               `yaml:"port"`        // default 80
-	Image      string            `yaml:"image"`       // if set, skip build (pre-built)
-	DependsOn  []string          `yaml:"depends_on"`
-	Volumes    map[string]string `yaml:"volumes"`     // name: mount_path
+	Name        string            `yaml:"name"`
+	Server      string            `yaml:"server"`
+	Stack       string            `yaml:"stack"`
+	Dockerfile  string            `yaml:"dockerfile"`
+	Context     string            `yaml:"context"`
+	Domain      string            `yaml:"domain"`      // optional, enables Traefik
+	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
+	Port        int               `yaml:"port"`        // default 80
+	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
+	DependsOn   []string          `yaml:"depends_on"`
+	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
+	HealthCheck *HealthCheck      `yaml:"healthcheck"`
 }
 
 // RootConfig represents the ssd.yaml file structure
