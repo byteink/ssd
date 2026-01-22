@@ -212,12 +212,13 @@ func TestShellInjection_ImageNameWithSpecialChars(t *testing.T) {
 			client := NewClientWithExecutor(cfg, mockExec)
 
 			// Verify BuildImage properly escapes the image name
+			// Image format is now ssd-{project}-{name} where project is basename of stack
 			mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
 				cmd := args[1]
 				// The image tag should be quoted to prevent injection
 				return strings.Contains(cmd, "docker build") &&
-					(strings.Contains(cmd, fmt.Sprintf("'ssd-%s:1'", tt.appName)) ||
-						strings.Contains(cmd, fmt.Sprintf(`"ssd-%s:1"`, tt.appName)))
+					(strings.Contains(cmd, fmt.Sprintf("'ssd-myapp-%s:1'", tt.appName)) ||
+						strings.Contains(cmd, fmt.Sprintf(`"ssd-myapp-%s:1"`, tt.appName)))
 			})).Return(nil)
 
 			err := client.BuildImage(context.Background(), "/tmp/build", 1)

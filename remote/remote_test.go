@@ -718,3 +718,59 @@ func TestClient_IsServiceRunning_EmptyState(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, isRunning) // No state means not running
 }
+
+func TestClient_EnsureNetwork_CreateSuccess(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[1]
+		return strings.Contains(cmd, "docker network create mynetwork 2>/dev/null || true")
+	})).Return("", nil)
+
+	err := client.EnsureNetwork(context.Background(), "mynetwork")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_EnsureNetwork_AlreadyExists(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Even if network exists, the command should succeed (idempotent)
+	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
+
+	err := client.EnsureNetwork(context.Background(), "existing-network")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_EnsureNetwork_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("connection refused"))
+
+	err := client.EnsureNetwork(context.Background(), "mynetwork")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssh command failed")
+}
+
+func TestClient_EnsureNetwork_EmptyName(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Empty network name should still call docker (docker will handle validation)
+	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
+
+	err := client.EnsureNetwork(context.Background(), "")
+
+	require.NoError(t, err)
+}

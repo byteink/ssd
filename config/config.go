@@ -170,7 +170,11 @@ func (c *Config) StackPath() string {
 
 // ImageName returns the Docker image name (without tag)
 func (c *Config) ImageName() string {
-	return fmt.Sprintf("ssd-%s", c.Name)
+	if c.Image != "" {
+		return c.Image // pre-built image
+	}
+	project := filepath.Base(c.Stack)
+	return fmt.Sprintf("ssd-%s-%s", project, c.Name)
 }
 
 // ValidateServer validates a server hostname/identifier

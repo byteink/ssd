@@ -313,20 +313,34 @@ func TestConfig_StackPath_Empty(t *testing.T) {
 func TestConfig_ImageName(t *testing.T) {
 	tests := []struct {
 		name     string
-		cfgName  string
+		cfg      *Config
 		expected string
 	}{
-		{"simple", "myapp", "ssd-myapp"},
-		{"with hyphens", "my-app", "ssd-my-app"},
-		{"complex", "project-web-api", "ssd-project-web-api"},
-		{"underscore", "my_app", "ssd-my_app"},
-		{"numbers", "app123", "ssd-app123"},
+		{
+			name:     "pre-built image",
+			cfg:      &Config{Image: "postgres:16"},
+			expected: "postgres:16",
+		},
+		{
+			name:     "monorepo service",
+			cfg:      &Config{Stack: "/stacks/myproject", Name: "api"},
+			expected: "ssd-myproject-api",
+		},
+		{
+			name:     "simple service",
+			cfg:      &Config{Stack: "/stacks/webapp", Name: "webapp"},
+			expected: "ssd-webapp-webapp",
+		},
+		{
+			name:     "nested stack path",
+			cfg:      &Config{Stack: "/var/stacks/project-x", Name: "web"},
+			expected: "ssd-project-x-web",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{Name: tt.cfgName}
-			assert.Equal(t, tt.expected, cfg.ImageName())
+			assert.Equal(t, tt.expected, tt.cfg.ImageName())
 		})
 	}
 }

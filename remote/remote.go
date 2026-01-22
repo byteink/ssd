@@ -28,6 +28,7 @@ type RemoteClient interface {
 	MakeTempDir(ctx context.Context) (string, error)
 	StackExists(ctx context.Context) (bool, error)
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
+	EnsureNetwork(ctx context.Context, name string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -252,6 +253,13 @@ func (c *Client) IsServiceRunning(ctx context.Context, serviceName string) (bool
 	}
 
 	return strings.Contains(trimmed, `"State":"running"`), nil
+}
+
+// EnsureNetwork creates a Docker network if it doesn't exist (idempotent)
+func (c *Client) EnsureNetwork(ctx context.Context, name string) error {
+	cmd := fmt.Sprintf("docker network create %s 2>/dev/null || true", shellescape.Quote(name))
+	_, err := c.SSH(ctx, cmd)
+	return err
 }
 
 // ValidateTempPath validates that a path is safe for temporary operations
