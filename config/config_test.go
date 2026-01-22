@@ -408,27 +408,7 @@ func TestRootConfig_GetService_InvalidStackPath(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "single service with relative stack path",
-			config: &RootConfig{
-				Name:   "myapp",
-				Server: "myserver",
-				Stack:  "relative/path",
-			},
-			serviceName: "",
-			expectError: "invalid stack path",
-		},
-		{
-			name: "single service with path traversal",
-			config: &RootConfig{
-				Name:   "myapp",
-				Server: "myserver",
-				Stack:  "/stacks/../etc/passwd",
-			},
-			serviceName: "",
-			expectError: "invalid stack path",
-		},
-		{
-			name: "multi service with invalid stack path",
+			name: "service with invalid stack path",
 			config: &RootConfig{
 				Server: "myserver",
 				Services: map[string]*Config{

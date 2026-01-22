@@ -620,8 +620,6 @@ func TestClient_StackExists_UnexpectedOutput(t *testing.T) {
 	assert.False(t, exists)
 }
 
-// TEMPORARY: Commented out by task #61 - uncomment when task #68 completes
-/*
 func TestClient_IsServiceRunning_Running(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
@@ -720,4 +718,3 @@ func TestClient_IsServiceRunning_EmptyState(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, isRunning) // No state means not running
 }
-*/
