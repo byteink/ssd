@@ -1308,3 +1308,38 @@ func TestRootConfig_GetService_ValidatesHealthCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_UseHTTPS(t *testing.T) {
+	tests := []struct {
+		name     string
+		https    *bool
+		expected bool
+	}{
+		{
+			name:     "nil defaults to true",
+			https:    nil,
+			expected: true,
+		},
+		{
+			name:     "explicitly true",
+			https:    boolPtr(true),
+			expected: true,
+		},
+		{
+			name:     "explicitly false",
+			https:    boolPtr(false),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{HTTPS: tt.https}
+			assert.Equal(t, tt.expected, cfg.UseHTTPS())
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}

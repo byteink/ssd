@@ -212,6 +212,15 @@ func (c *Config) IsPrebuilt() bool {
 	return c.Image != ""
 }
 
+// UseHTTPS returns true if HTTPS should be used for this config
+// Returns true when HTTPS is nil (default) or explicitly set to true
+func (c *Config) UseHTTPS() bool {
+	if c.HTTPS == nil {
+		return true
+	}
+	return *c.HTTPS
+}
+
 // ValidateServer validates a server hostname/identifier
 // Returns an error if the server name contains shell metacharacters or is invalid
 func ValidateServer(server string) error {
