@@ -466,3 +466,170 @@ func TestAtomicWrite_FailedWritePreservesOriginal(t *testing.T) {
 		t.Errorf("Original file was modified\nGot:\n%s\nWant:\n%s", string(content), originalYAML)
 	}
 }
+
+func TestGenerateTraefikCompose(t *testing.T) {
+	email := "admin@example.com"
+	result := GenerateTraefikCompose(email)
+
+	// Verify valid YAML
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v\nYAML:\n%s", err, result)
+	}
+
+	// Verify services section
+	servicesMap, ok := parsed["services"].(map[string]interface{})
+	if !ok {
+		t.Fatal("services section missing or not a map")
+	}
+
+	// Verify traefik service exists
+	traefikService, ok := servicesMap["traefik"].(map[string]interface{})
+	if !ok {
+		t.Fatal("traefik service missing")
+	}
+
+	// Verify image
+	image, ok := traefikService["image"].(string)
+	if !ok {
+		t.Fatal("image missing or not a string")
+	}
+	if image != "traefik:3" {
+		t.Errorf("image = %q, want traefik:3", image)
+	}
+
+	// Verify restart policy
+	if restart := traefikService["restart"]; restart != "unless-stopped" {
+		t.Errorf("restart = %v, want unless-stopped", restart)
+	}
+
+	// Verify ports
+	ports, ok := traefikService["ports"].([]interface{})
+	if !ok {
+		t.Fatal("ports missing or not an array")
+	}
+	if len(ports) != 2 {
+		t.Fatalf("ports count = %d, want 2", len(ports))
+	}
+
+	hasPort80 := false
+	hasPort443 := false
+	for _, p := range ports {
+		portStr, ok := p.(string)
+		if !ok {
+			continue
+		}
+		if portStr == "80:80" {
+			hasPort80 = true
+		}
+		if portStr == "443:443" {
+			hasPort443 = true
+		}
+	}
+	if !hasPort80 {
+		t.Error("port 80:80 missing")
+	}
+	if !hasPort443 {
+		t.Error("port 443:443 missing")
+	}
+
+	// Verify command contains email
+	command, ok := traefikService["command"].([]interface{})
+	if !ok {
+		t.Fatal("command missing or not an array")
+	}
+
+	hasEmail := false
+	for _, cmd := range command {
+		cmdStr, ok := cmd.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(cmdStr, email) {
+			hasEmail = true
+			break
+		}
+	}
+	if !hasEmail {
+		t.Errorf("email %q not found in command", email)
+	}
+
+	// Verify certresolver is mentioned
+	hasCertResolver := false
+	for _, cmd := range command {
+		cmdStr, ok := cmd.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(cmdStr, "letsencrypt") {
+			hasCertResolver = true
+			break
+		}
+	}
+	if !hasCertResolver {
+		t.Error("certresolver 'letsencrypt' not found in command")
+	}
+
+	// Verify volumes
+	volumes, ok := traefikService["volumes"].([]interface{})
+	if !ok {
+		t.Fatal("volumes missing or not an array")
+	}
+
+	hasDockerSocket := false
+	hasAcmeJson := false
+	for _, v := range volumes {
+		volStr, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if volStr == "/var/run/docker.sock:/var/run/docker.sock:ro" {
+			hasDockerSocket = true
+		}
+		if strings.Contains(volStr, "acme.json") {
+			hasAcmeJson = true
+		}
+	}
+	if !hasDockerSocket {
+		t.Error("docker socket volume missing")
+	}
+	if !hasAcmeJson {
+		t.Error("acme.json volume missing")
+	}
+
+	// Verify networks
+	networks, ok := traefikService["networks"].([]interface{})
+	if !ok {
+		t.Fatal("networks missing or not an array")
+	}
+	if len(networks) != 1 {
+		t.Fatalf("networks count = %d, want 1", len(networks))
+	}
+	if networks[0] != "traefik_web" {
+		t.Errorf("network = %v, want traefik_web", networks[0])
+	}
+
+	// Verify top-level networks section
+	networksMap, ok := parsed["networks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("networks section missing or not a map")
+	}
+
+	traefikNet, ok := networksMap["traefik_web"].(map[string]interface{})
+	if !ok {
+		t.Fatal("traefik_web network definition missing")
+	}
+	if traefikNet["driver"] != "bridge" {
+		t.Error("traefik_web network should use bridge driver")
+	}
+
+	// Verify top-level volumes section for acme.json
+	volumesMap, ok := parsed["volumes"].(map[string]interface{})
+	if !ok {
+		t.Fatal("volumes section missing or not a map")
+	}
+
+	if _, ok := volumesMap["acme"]; !ok {
+		t.Error("acme volume missing in top-level volumes")
+	}
+}

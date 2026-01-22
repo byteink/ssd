@@ -20,7 +20,9 @@ type ComposeFile struct {
 type Service struct {
 	Image    string   `yaml:"image"`
 	Restart  string   `yaml:"restart"`
-	EnvFile  string   `yaml:"env_file"`
+	EnvFile  string   `yaml:"env_file,omitempty"`
+	Ports    []string `yaml:"ports,omitempty"`
+	Command  []string `yaml:"command,omitempty"`
 	Networks []string `yaml:"networks"`
 	Volumes  []string `yaml:"volumes,omitempty"`
 }
@@ -102,6 +104,56 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 	}
 
 	return string(data), nil
+}
+
+// GenerateTraefikCompose generates a docker-compose.yaml for Traefik reverse proxy.
+// email: email address for ACME/Let's Encrypt certificate registration
+//
+// Returns a compose file configured for:
+// - Traefik v3 with HTTP (80) and HTTPS (443) entrypoints
+// - Let's Encrypt ACME with provided email
+// - Certificate resolver named "letsencrypt"
+// - Volume for acme.json persistence
+// - traefik_web network for service discovery
+func GenerateTraefikCompose(email string) string {
+	compose := ComposeFile{
+		Services: map[string]Service{
+			"traefik": {
+				Image:   "traefik:3",
+				Restart: "unless-stopped",
+				Ports: []string{
+					"80:80",
+					"443:443",
+				},
+				Command: []string{
+					"--api.dashboard=true",
+					"--providers.docker=true",
+					"--providers.docker.exposedbydefault=false",
+					"--entrypoints.web.address=:80",
+					"--entrypoints.websecure.address=:443",
+					"--certificatesresolvers.letsencrypt.acme.email=" + email,
+					"--certificatesresolvers.letsencrypt.acme.storage=/acme.json",
+					"--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web",
+				},
+				Networks: []string{"traefik_web"},
+				Volumes: []string{
+					"/var/run/docker.sock:/var/run/docker.sock:ro",
+					"acme:/acme.json",
+				},
+			},
+		},
+		Networks: map[string]Network{
+			"traefik_web": {
+				Driver: "bridge",
+			},
+		},
+		Volumes: map[string]interface{}{
+			"acme": nil,
+		},
+	}
+
+	data, _ := yaml.Marshal(compose)
+	return string(data)
 }
 
 // AtomicWrite writes content to destPath atomically after validating it as YAML.
