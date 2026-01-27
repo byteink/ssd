@@ -295,8 +295,9 @@ func ValidateTempPath(path string) error {
 
 // CreateEnvFile creates an empty {serviceName}.env file with mode 600 in the stack directory
 func (c *Client) CreateEnvFile(ctx context.Context, serviceName string) error {
+	stackDir := shellescape.Quote(c.cfg.StackPath())
 	envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", serviceName))
-	cmd := fmt.Sprintf("install -m 600 /dev/null %s", shellescape.Quote(envPath))
+	cmd := fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s", stackDir, shellescape.Quote(envPath))
 	_, err := c.SSH(ctx, cmd)
 	return err
 }
@@ -340,9 +341,10 @@ func (c *Client) SetEnvVar(ctx context.Context, serviceName, key, value string) 
 	}
 
 	newContent := strings.Join(lines, "\n")
+	stackDir := shellescape.Quote(c.cfg.StackPath())
 	envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", serviceName))
 	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
-	cmd := fmt.Sprintf("echo '%s' | install -m 600 /dev/stdin %s", escapedContent, shellescape.Quote(envPath))
+	cmd := fmt.Sprintf("mkdir -p %s && echo '%s' | install -m 600 /dev/stdin %s", stackDir, escapedContent, shellescape.Quote(envPath))
 	_, err = c.SSH(ctx, cmd)
 	return err
 }
@@ -365,9 +367,10 @@ func (c *Client) RemoveEnvVar(ctx context.Context, serviceName, key string) erro
 	}
 
 	newContent := strings.Join(filtered, "\n")
+	stackDir := shellescape.Quote(c.cfg.StackPath())
 	envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", serviceName))
 	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
-	cmd := fmt.Sprintf("echo '%s' | install -m 600 /dev/stdin %s", escapedContent, shellescape.Quote(envPath))
+	cmd := fmt.Sprintf("mkdir -p %s && echo '%s' | install -m 600 /dev/stdin %s", stackDir, escapedContent, shellescape.Quote(envPath))
 	_, err = c.SSH(ctx, cmd)
 	return err
 }

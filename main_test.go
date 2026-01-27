@@ -127,7 +127,7 @@ services:
 	// Create mock executor
 	executor := new(testhelpers.MockExecutor)
 	executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return("", nil)
-	executor.On("Run", "ssh", []string{"testserver", "echo 'DATABASE_URL=postgres://user:pass@host?ssl=true\n' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
+	executor.On("Run", "ssh", []string{"testserver", "mkdir -p /stacks/api && echo 'DATABASE_URL=postgres://user:pass@host?ssl=true\n' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
 
 	// Load config
 	rootCfg, err := config.Load("")
@@ -250,8 +250,8 @@ services:
 			executor := new(testhelpers.MockExecutor)
 			executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return("", nil)
 
-			// Build expected command
-			expectedCmd := "echo '" + tt.expectedKey + "=" + tt.expectedValue + "\n' | install -m 600 /dev/stdin /stacks/api/api.env"
+			// Build expected command (mkdir -p ensures stack dir exists before writing)
+			expectedCmd := "mkdir -p /stacks/api && echo '" + tt.expectedKey + "=" + tt.expectedValue + "\n' | install -m 600 /dev/stdin /stacks/api/api.env"
 			executor.On("Run", "ssh", []string{"testserver", expectedCmd}).Return("", nil)
 
 			// Load config
@@ -421,7 +421,7 @@ services:
 
 	executor := new(testhelpers.MockExecutor)
 	executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return("DATABASE_URL=postgres://localhost\nAPI_KEY=secret\n", nil)
-	executor.On("Run", "ssh", []string{"testserver", "echo 'API_KEY=secret\n' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
+	executor.On("Run", "ssh", []string{"testserver", "mkdir -p /stacks/api && echo 'API_KEY=secret\n' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
 
 	rootCfg, err := config.Load("")
 	if err != nil {
@@ -518,7 +518,7 @@ services:
 
 			executor := new(testhelpers.MockExecutor)
 			executor.On("Run", "ssh", []string{"testserver", "cat /stacks/api/api.env 2>/dev/null || echo ''"}).Return(tt.existingEnv, nil)
-			executor.On("Run", "ssh", []string{"testserver", "echo '" + strings.ReplaceAll(tt.expectedEnv, "'", "'\\''") + "' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
+			executor.On("Run", "ssh", []string{"testserver", "mkdir -p /stacks/api && echo '" + strings.ReplaceAll(tt.expectedEnv, "'", "'\\''") + "' | install -m 600 /dev/stdin /stacks/api/api.env"}).Return("", nil)
 
 			rootCfg, err := config.Load("")
 			if err != nil {

@@ -782,7 +782,9 @@ func TestClient_CreateEnvFile(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "/stacks/myapp") &&
+			strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
 	})).Return("", nil)
 
 	err := client.CreateEnvFile(context.Background(), "myservice")
@@ -812,7 +814,8 @@ func TestClient_CreateEnvFile_Idempotent(t *testing.T) {
 	// Call twice to verify idempotency
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
 	})).Return("", nil).Twice()
 
 	err := client.CreateEnvFile(context.Background(), "myservice")
@@ -881,10 +884,11 @@ func TestClient_SetEnvVar(t *testing.T) {
 		return strings.Contains(cmd, "cat /stacks/myapp/myservice.env")
 	})).Return(existingContent, nil).Once()
 
-	// Second call writes updated env file
+	// Second call writes updated env file (with mkdir -p to ensure dir exists)
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
 			strings.Contains(cmd, "OLD_VAR=old_value") &&
 			strings.Contains(cmd, "NEW_VAR=new_value")
 	})).Return("", nil).Once()
@@ -909,7 +913,8 @@ func TestClient_SetEnvVar_UpdateExisting(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install") &&
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install") &&
 			strings.Contains(cmd, "DB_HOST=newhost") &&
 			!strings.Contains(cmd, "DB_HOST=localhost")
 	})).Return("", nil).Once()
@@ -932,7 +937,8 @@ func TestClient_SetEnvVar_EmptyFile(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install") &&
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install") &&
 			strings.Contains(cmd, "MY_VAR=value")
 	})).Return("", nil).Once()
 
@@ -966,10 +972,11 @@ func TestClient_RemoveEnvVar(t *testing.T) {
 		return strings.Contains(cmd, "cat /stacks/myapp/myservice.env")
 	})).Return(existingContent, nil).Once()
 
-	// Second call writes filtered env file
+	// Second call writes filtered env file (with mkdir -p to ensure dir exists)
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install -m 600 /dev/stdin /stacks/myapp/myservice.env") &&
 			strings.Contains(cmd, "DB_HOST=localhost") &&
 			!strings.Contains(cmd, "DB_PORT=5432") &&
 			strings.Contains(cmd, "DB_USER=admin")
@@ -995,7 +1002,8 @@ func TestClient_RemoveEnvVar_NotFound(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install") &&
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install") &&
 			strings.Contains(cmd, "DB_HOST=localhost")
 	})).Return("", nil).Once()
 
@@ -1017,7 +1025,8 @@ func TestClient_RemoveEnvVar_EmptyFile(t *testing.T) {
 
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "install")
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "install")
 	})).Return("", nil).Once()
 
 	err := client.RemoveEnvVar(context.Background(), "myservice", "ANY_KEY")
