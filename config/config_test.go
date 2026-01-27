@@ -1441,6 +1441,135 @@ func TestRootConfig_GetService_ValidatesPath(t *testing.T) {
 	}
 }
 
+func TestValidateTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  string
+		wantErr bool
+	}{
+		{name: "valid simple", target: "production", wantErr: false},
+		{name: "valid with hyphen", target: "build-stage", wantErr: false},
+		{name: "valid with underscore", target: "build_prod", wantErr: false},
+		{name: "valid with digits", target: "stage2", wantErr: false},
+		{name: "valid mixed", target: "my-build_stage-1", wantErr: false},
+		{name: "empty string", target: "", wantErr: true},
+		{name: "exceeds max length", target: string(make([]byte, 129)), wantErr: true},
+		{name: "starts with hyphen", target: "-stage", wantErr: true},
+		{name: "starts with dot", target: ".stage", wantErr: true},
+		{name: "contains semicolon", target: "stage;rm", wantErr: true},
+		{name: "contains pipe", target: "stage|ls", wantErr: true},
+		{name: "contains space", target: "my stage", wantErr: true},
+		{name: "contains dollar", target: "stage$HOME", wantErr: true},
+		{name: "contains backtick", target: "stage`id`", wantErr: true},
+		{name: "contains slash", target: "stage/prod", wantErr: true},
+		{name: "contains dot", target: "stage.prod", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTarget(tt.target)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadFromBytes_Target(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected string
+	}{
+		{
+			name: "target set",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    target: production`,
+			expected: "production",
+		},
+		{
+			name: "no target field",
+			yaml: `server: myserver
+services:
+  web:
+    name: web`,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.yaml))
+			require.NoError(t, err)
+
+			svc, err := cfg.GetService("web")
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected, svc.Target)
+		})
+	}
+}
+
+func TestRootConfig_GetService_ValidatesTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "invalid target with semicolon",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {Name: "web", Target: "prod;rm"},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid target",
+		},
+		{
+			name: "valid target",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {Name: "web", Target: "production"},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "no target",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {Name: "web"},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

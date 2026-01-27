@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,46 +100,23 @@ func TestClient_Rsync(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
+	client.findGitRoot = func(dir string) (string, error) {
+		return dir, nil // pretend dir is the git root
+	}
 
-	mockExec.On("RunInteractive", "rsync", mock.MatchedBy(func(args []string) bool {
-		// Verify essential args
-		hasAvz := false
-		hasDelete := false
-		hasGitExclude := false
-		hasNodeModulesExclude := false
-		endsWithSlash := false
-		hasRemoteDest := false
-
-		for i, arg := range args {
-			if arg == "-avz" {
-				hasAvz = true
-			}
-			if arg == "--delete" {
-				hasDelete = true
-			}
-			if arg == "--exclude" && i+1 < len(args) {
-				if args[i+1] == ".git" {
-					hasGitExclude = true
-				}
-				if args[i+1] == "node_modules" {
-					hasNodeModulesExclude = true
-				}
-			}
+	mockExec.On("RunInteractive", "bash", mock.MatchedBy(func(args []string) bool {
+		if len(args) != 2 || args[0] != "-c" {
+			return false
 		}
-
-		// Check source path ends with /
-		if len(args) >= 2 {
-			source := args[len(args)-2]
-			endsWithSlash = strings.HasSuffix(source, "/")
-		}
-
-		// Check destination format
-		if len(args) >= 1 {
-			dest := args[len(args)-1]
-			hasRemoteDest = strings.Contains(dest, "testserver:") && strings.Contains(dest, "/remote/path")
-		}
-
-		return hasAvz && hasDelete && hasGitExclude && hasNodeModulesExclude && endsWithSlash && hasRemoteDest
+		pipeline := args[1]
+		return strings.Contains(pipeline, "git") &&
+			strings.Contains(pipeline, "archive --format=tar HEAD") &&
+			strings.Contains(pipeline, "ssh testserver") &&
+			strings.Contains(pipeline, "tar xf - -C") &&
+			strings.Contains(pipeline, "/remote/path") &&
+			// Root context should NOT have --strip-components or -- path
+			!strings.Contains(pipeline, "--strip-components") &&
+			!strings.Contains(pipeline, " -- ")
 	})).Return(nil)
 
 	err := client.Rsync(context.Background(), "/local/path", "/remote/path")
@@ -147,20 +125,43 @@ func TestClient_Rsync(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-func TestClient_Rsync_AlreadyHasSlash(t *testing.T) {
+func TestClient_Rsync_Subdirectory(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
+	client.findGitRoot = func(dir string) (string, error) {
+		return "/project", nil // git root is the parent
+	}
 
-	mockExec.On("RunInteractive", "rsync", mock.MatchedBy(func(args []string) bool {
-		// Verify no double slash
-		source := args[len(args)-2]
-		return strings.HasSuffix(source, "/") && !strings.HasSuffix(source, "//")
+	mockExec.On("RunInteractive", "bash", mock.MatchedBy(func(args []string) bool {
+		if len(args) != 2 || args[0] != "-c" {
+			return false
+		}
+		pipeline := args[1]
+		// Should archive only the subdirectory
+		return strings.Contains(pipeline, "-- apps/api") &&
+			// Should strip 2 components (apps/api)
+			strings.Contains(pipeline, "--strip-components=2")
 	})).Return(nil)
 
-	err := client.Rsync(context.Background(), "/local/path/", "/remote/path")
+	err := client.Rsync(context.Background(), "/project/apps/api", "/remote/path")
 
 	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_Rsync_GitRootError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+	client.findGitRoot = func(dir string) (string, error) {
+		return "", fmt.Errorf("not a git repository")
+	}
+
+	err := client.Rsync(context.Background(), "/local/path", "/remote/path")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to find git root")
 }
 
 func TestClient_GetCurrentVersion_NewFormat(t *testing.T) {
@@ -237,7 +238,7 @@ func TestClient_BuildImage(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "cd /tmp/build123") &&
 			strings.Contains(cmd, "docker build") &&
 			strings.Contains(cmd, "-t ssd-myapp-myapp:5") &&
@@ -261,13 +262,54 @@ func TestClient_BuildImage_CustomDockerfile(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "-f docker/Dockerfile.prod")
 	})).Return(nil)
 
 	err := client.BuildImage(context.Background(), "/tmp/build", 1)
 
 	require.NoError(t, err)
+}
+
+func TestClient_BuildImage_WithTarget(t *testing.T) {
+	cfg := &config.Config{
+		Name:       "myapp",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Target:     "production",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker build") &&
+			strings.Contains(cmd, "-t ssd-myapp-myapp:3") &&
+			strings.Contains(cmd, "--target production")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 3)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_BuildImage_NoTarget(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker build") &&
+			!strings.Contains(cmd, "--target")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
 }
 
 func TestClient_UpdateCompose(t *testing.T) {
@@ -313,7 +355,7 @@ func TestClient_RestartStack(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "cd /stacks/myapp") &&
 			strings.Contains(cmd, "docker compose up -d")
 	})).Return(nil)
@@ -348,7 +390,7 @@ func TestClient_GetLogs_NoFollow(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "docker compose logs") &&
 			!strings.Contains(cmd, "-f") &&
 			strings.Contains(cmd, "--tail 100")
@@ -365,7 +407,7 @@ func TestClient_GetLogs_WithFollow(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "docker compose logs") &&
 			strings.Contains(cmd, "-f")
 	})).Return(nil)
@@ -784,6 +826,7 @@ func TestClient_CreateEnvFile(t *testing.T) {
 		cmd := args[1]
 		return strings.Contains(cmd, "mkdir -p") &&
 			strings.Contains(cmd, "/stacks/myapp") &&
+			strings.Contains(cmd, "test -f") &&
 			strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
 	})).Return("", nil)
 
@@ -806,22 +849,22 @@ func TestClient_CreateEnvFile_SSHError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ssh command failed")
 }
 
-func TestClient_CreateEnvFile_Idempotent(t *testing.T) {
+func TestClient_CreateEnvFile_SkipsExistingFile(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	// Call twice to verify idempotency
+	// The command uses "test -f" to skip existing files,
+	// so calling it on an existing file should not overwrite it.
+	// Verify the command structure includes the existence check.
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
 		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "test -f /stacks/myapp/myservice.env") &&
 			strings.Contains(cmd, "install -m 600 /dev/null /stacks/myapp/myservice.env")
-	})).Return("", nil).Twice()
+	})).Return("", nil)
 
 	err := client.CreateEnvFile(context.Background(), "myservice")
-	require.NoError(t, err)
-
-	err = client.CreateEnvFile(context.Background(), "myservice")
 	require.NoError(t, err)
 
 	mockExec.AssertExpectations(t)
@@ -1232,7 +1275,7 @@ func TestClient_PullImage_Success(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "docker pull nginx:latest")
 	})).Return(nil)
 
@@ -1261,7 +1304,7 @@ func TestClient_StartService_Success(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "cd /stacks/myapp") &&
 			strings.Contains(cmd, "docker compose up -d web")
 	})).Return(nil)

@@ -119,6 +119,7 @@ services:
     stack: /stacks/myapp
     context: ./apps/web
     dockerfile: ./apps/web/Dockerfile
+    target: production          # Docker build target stage (optional)
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
@@ -186,6 +187,7 @@ services:
 - `context`: Build context path (defaults to `.`)
 - `dockerfile`: Dockerfile path (defaults to `./Dockerfile`)
 - `image`: Pre-built image to use (skips build step if specified)
+- `target`: Docker build target stage for multi-stage builds (e.g., `production`)
 - `domain`: Domain name for Traefik routing
 - `path`: Path prefix for routing (e.g., `/api`). Requires `domain`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)

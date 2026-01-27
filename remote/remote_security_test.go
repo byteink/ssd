@@ -38,7 +38,7 @@ func TestShellInjection_StackPathWithSpaces(t *testing.T) {
 
 	// Verify RestartStack properly escapes the path
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		// Path should be quoted
 		return strings.Contains(cmd, "cd '/stacks/my app'") ||
 			strings.Contains(cmd, `cd "/stacks/my app"`)
@@ -79,7 +79,7 @@ func TestShellInjection_StackPathWithSemicolon(t *testing.T) {
 
 	// Verify RestartStack also properly escapes
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		hasQuotedPath := strings.Contains(cmd, "cd '/stacks/app;rm -rf /") ||
 			strings.Contains(cmd, `cd "/stacks/app;rm -rf /`)
 		isNotSeparateCommand := !strings.Contains(cmd, "cd '/stacks/app' ; rm -rf /")
@@ -214,7 +214,7 @@ func TestShellInjection_ImageNameWithSpecialChars(t *testing.T) {
 			// Verify BuildImage properly escapes the image name
 			// Image format is now ssd-{project}-{name} where project is basename of stack
 			mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-				cmd := args[1]
+				cmd := args[len(args)-1]
 				// The image tag should be quoted to prevent injection
 				return strings.Contains(cmd, "docker build") &&
 					(strings.Contains(cmd, fmt.Sprintf("'ssd-myapp-%s:1'", tt.appName)) ||
@@ -249,7 +249,7 @@ func TestShellInjection_BuildDirWithSpecialChars(t *testing.T) {
 	buildDir := "/tmp/build dir`whoami`"
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		// Build dir should be quoted
 		return (strings.Contains(cmd, "cd '/tmp/build dir`whoami`'") ||
 			strings.Contains(cmd, `cd "/tmp/build dir`+"`"+`whoami`+"`"+`"`)) &&
@@ -275,7 +275,7 @@ func TestShellInjection_DockerfilePathWithSpecialChars(t *testing.T) {
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
+		cmd := args[len(args)-1]
 		// Dockerfile path should be quoted
 		return strings.Contains(cmd, "docker build") &&
 			(strings.Contains(cmd, "-f 'docker/Dockerfile`whoami`'") ||
@@ -447,7 +447,7 @@ func TestCleanup_AcceptsValidTempPath(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-// TestShellInjection_RsyncPathsWithSpecialChars verifies rsync handles special chars safely
+// TestShellInjection_RsyncPathsWithSpecialChars verifies git archive pipeline handles special chars safely
 func TestShellInjection_RsyncPathsWithSpecialChars(t *testing.T) {
 	cfg := &config.Config{
 		Name:   "myapp",
@@ -456,23 +456,24 @@ func TestShellInjection_RsyncPathsWithSpecialChars(t *testing.T) {
 	}
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
+	client.findGitRoot = func(dir string) (string, error) {
+		return dir, nil
+	}
 
 	localPath := "./my app`whoami`"
 	remotePath := "/tmp/remote dir;rm -rf /"
 
-	mockExec.On("RunInteractive", "rsync", mock.MatchedBy(func(args []string) bool {
-		// Verify paths are passed as separate arguments (not concatenated in shell)
-		// rsync handles its own path safety when args are properly separated
-		source := args[len(args)-2]
-		dest := args[len(args)-1]
-
-		// Source should end with /
-		hasSourceSlash := strings.HasSuffix(source, "/")
-
-		// Destination should be in format server:path
-		hasServerPrefix := strings.HasPrefix(dest, "testserver:")
-
-		return hasSourceSlash && hasServerPrefix
+	mockExec.On("RunInteractive", "bash", mock.MatchedBy(func(args []string) bool {
+		if len(args) != 2 || args[0] != "-c" {
+			return false
+		}
+		pipeline := args[1]
+		// Verify the pipeline uses shell escaping for paths
+		// The git root and remote path should be properly quoted
+		return strings.Contains(pipeline, "git") &&
+			strings.Contains(pipeline, "archive") &&
+			strings.Contains(pipeline, "ssh testserver") &&
+			strings.Contains(pipeline, "tar xf")
 	})).Return(nil)
 
 	err := client.Rsync(context.Background(), localPath, remotePath)

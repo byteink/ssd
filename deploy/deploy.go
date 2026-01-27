@@ -52,6 +52,9 @@ type Options struct {
 	Dependencies map[string]*config.Config
 	// AllServices maps all service names to their configs (used for initial stack creation)
 	AllServices map[string]*config.Config
+	// BuildOnly builds/pulls the image and updates compose.yaml but does not start the service.
+	// Used by deploy-all: build everything first, then docker compose up -d once.
+	BuildOnly bool
 }
 
 // Deploy performs a full deployment using the default client
@@ -84,7 +87,7 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	}
 
 	if !stackExists {
-		logln(output, "Stack does not exist, creating...")
+		logln(output, "==> Creating stack (first deploy)...")
 
 		// Use all services for compose generation if available,
 		// so depends_on references are valid in the compose file
@@ -94,87 +97,88 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		if opts != nil && len(opts.AllServices) > 0 {
 			services = opts.AllServices
 		}
+
+		logln(output, "    Generating compose.yaml...")
 		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), 0)
 		if err != nil {
 			return fmt.Errorf("failed to generate compose file: %w", err)
 		}
 
-		// Create stack directory and compose.yaml
+		// Create env files BEFORE CreateStack, because docker compose config
+		// validates that referenced env_file paths exist on disk
+		for name := range services {
+			logf(output, "    Creating env file for %s...\n", name)
+			if err := client.CreateEnvFile(ctx, name); err != nil {
+				return fmt.Errorf("failed to create env file for %s: %w", name, err)
+			}
+		}
+
+		logln(output, "    Validating compose.yaml...")
 		if err := client.CreateStack(ctx, composeContent); err != nil {
 			return fmt.Errorf("failed to create stack: %w", err)
 		}
 
-		// Ensure traefik_web network exists
+		logln(output, "    Creating networks...")
 		if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
 			return fmt.Errorf("failed to ensure network traefik_web: %w", err)
 		}
 
-		// Ensure project internal network exists
 		project := filepath.Base(cfg.StackPath())
 		internalNetwork := project + "_internal"
 		if err := client.EnsureNetwork(ctx, internalNetwork); err != nil {
 			return fmt.Errorf("failed to ensure network %s: %w", internalNetwork, err)
 		}
 
-		// Create env files for all services in the stack
-		for name := range services {
-			if err := client.CreateEnvFile(ctx, name); err != nil {
-				return fmt.Errorf("failed to create env file for %s: %w", name, err)
-			}
-		}
-
-		logln(output, "Stack created successfully")
+		logln(output, "    Stack created successfully")
 	}
 
 	// Get current version
-	logf(output, "Checking current version on %s...\n", cfg.Server)
 	currentVersion, err := client.GetCurrentVersion(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current version: %w", err)
 	}
 
 	newVersion := currentVersion + 1
-	logf(output, "Current version: %d, deploying version: %d\n", currentVersion, newVersion)
+	logf(output, "==> Version: %d -> %d\n", currentVersion, newVersion)
 
-	// Check and start dependencies if needed
-	for _, dep := range cfg.DependsOn {
-		logf(output, "Checking dependency: %s...\n", dep)
+	// Check and start dependencies if needed (skip in BuildOnly mode)
+	buildOnly := opts != nil && opts.BuildOnly
+	if !buildOnly && len(cfg.DependsOn) > 0 {
+		logln(output, "==> Checking dependencies...")
+		for _, dep := range cfg.DependsOn {
+			running, err := client.IsServiceRunning(ctx, dep)
+			if err != nil {
+				return fmt.Errorf("failed to check if dependency %s is running: %w", dep, err)
+			}
 
-		running, err := client.IsServiceRunning(ctx, dep)
-		if err != nil {
-			return fmt.Errorf("failed to check if dependency %s is running: %w", dep, err)
-		}
+			if !running {
+				logf(output, "    Starting %s...\n", dep)
 
-		if !running {
-			logf(output, "Dependency %s not running, starting...\n", dep)
-
-			// Check if dependency is pre-built and needs image pull
-			if opts != nil && opts.Dependencies != nil {
-				if depCfg, exists := opts.Dependencies[dep]; exists && depCfg.IsPrebuilt() {
-					logf(output, "Pulling pre-built image %s...\n", depCfg.Image)
-					if err := client.PullImage(ctx, depCfg.Image); err != nil {
-						return fmt.Errorf("failed to pull image for dependency %s: %w", dep, err)
+				// Check if dependency is pre-built and needs image pull
+				if opts != nil && opts.Dependencies != nil {
+					if depCfg, exists := opts.Dependencies[dep]; exists && depCfg.IsPrebuilt() {
+						logf(output, "    Pulling image %s...\n", depCfg.Image)
+						if err := client.PullImage(ctx, depCfg.Image); err != nil {
+							return fmt.Errorf("failed to pull image for dependency %s: %w", dep, err)
+						}
 					}
 				}
-			}
 
-			if err := client.StartService(ctx, dep); err != nil {
-				return fmt.Errorf("failed to start dependency %s: %w", dep, err)
+				if err := client.StartService(ctx, dep); err != nil {
+					return fmt.Errorf("failed to start dependency %s: %w", dep, err)
+				}
+			} else {
+				logf(output, "    %s: running\n", dep)
 			}
-			logf(output, "Dependency %s started successfully\n", dep)
-		} else {
-			logf(output, "Dependency %s already running\n", dep)
 		}
 	}
 
 	// Create temp directory on server
-	logln(output, "Creating temp build directory...")
 	tempDir, err := client.MakeTempDir(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() {
-		logln(output, "Cleaning up temp directory...")
 		if cleanupErr := client.Cleanup(ctx, tempDir); cleanupErr != nil {
 			log.Printf("failed to cleanup temp directory: %v", cleanupErr)
 		}
@@ -182,14 +186,12 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 	// Check if this is a pre-built image
 	if cfg.IsPrebuilt() {
-		// Pull latest image
-		logf(output, "Pulling pre-built image %s...\n", cfg.Image)
+		logf(output, "==> Pulling image %s...\n", cfg.Image)
 		if err := client.PullImage(ctx, cfg.Image); err != nil {
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
 	} else {
-		// Rsync code to server
-		logf(output, "Syncing code to %s:%s...\n", cfg.Server, tempDir)
+		logf(output, "==> Syncing code to %s...\n", cfg.Server)
 		localContext, err := filepath.Abs(cfg.Context)
 		if err != nil {
 			return fmt.Errorf("failed to resolve context path: %w", err)
@@ -198,21 +200,24 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 			return fmt.Errorf("failed to sync code: %w", err)
 		}
 
-		// Build image on server
-		logf(output, "Building image %s:%d...\n", cfg.ImageName(), newVersion)
+		logf(output, "==> Building image %s:%d...\n", cfg.ImageName(), newVersion)
 		if err := client.BuildImage(ctx, tempDir, newVersion); err != nil {
 			return fmt.Errorf("failed to build image: %w", err)
 		}
 
-		// Update compose.yaml
-		logln(output, "Updating compose.yaml...")
+		logln(output, "==> Updating compose.yaml...")
 		if err := client.UpdateCompose(ctx, newVersion); err != nil {
 			return fmt.Errorf("failed to update compose.yaml: %w", err)
 		}
 	}
 
-	// Deploy only this service, not all
-	logf(output, "Starting service %s...\n", cfg.Name)
+	// In BuildOnly mode, skip starting — caller will docker compose up -d once
+	if buildOnly {
+		logf(output, "    Built %s version %d\n", cfg.Name, newVersion)
+		return nil
+	}
+
+	logf(output, "==> Starting service %s...\n", cfg.Name)
 	if err := client.StartService(ctx, cfg.Name); err != nil {
 		return fmt.Errorf("failed to start service: %w", err)
 	}

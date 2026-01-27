@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,33 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// initGitRepo initializes a git repository in the given directory
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "-C", dir, "init"},
+		{"git", "-C", dir, "config", "user.email", "test@test.com"},
+		{"git", "-C", dir, "config", "user.name", "Test"},
+	}
+	for _, cmd := range cmds {
+		out, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput()
+		require.NoError(t, err, "command %v failed: %s", cmd, string(out))
+	}
+}
+
+// gitAddCommit stages all files and commits in the given directory
+func gitAddCommit(t *testing.T, dir string) {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "-C", dir, "add", "-A"},
+		{"git", "-C", dir, "commit", "-m", "test"},
+	}
+	for _, cmd := range cmds {
+		out, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput()
+		require.NoError(t, err, "command %v failed: %s", cmd, string(out))
+	}
+}
 
 func TestRsync_BasicSync(t *testing.T) {
 	if testing.Short() {
@@ -36,10 +64,12 @@ func TestRsync_BasicSync(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(localDir)
 
+	initGitRepo(t, localDir)
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file1.txt"), []byte("content1"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file2.txt"), []byte("content2"), 0644))
 	require.NoError(t, os.Mkdir(filepath.Join(localDir, "subdir"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "subdir", "file3.txt"), []byte("content3"), 0644))
+	gitAddCommit(t, localDir)
 
 	cfg := &config.Config{
 		Name:    "testapp",
@@ -73,7 +103,7 @@ func TestRsync_BasicSync(t *testing.T) {
 	assert.Equal(t, "content3", strings.TrimSpace(subdirContent))
 }
 
-func TestRsync_ExcludesGit(t *testing.T) {
+func TestRsync_ExcludesGitignored(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -92,9 +122,23 @@ func TestRsync_ExcludesGit(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(localDir)
 
+	initGitRepo(t, localDir)
+
+	// Create .gitignore that excludes node_modules, .next, and *.log
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, ".gitignore"), []byte("node_modules/\n.next/\n*.log\n"), 0644))
+
+	// Create tracked file
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file.txt"), []byte("content"), 0644))
-	require.NoError(t, os.Mkdir(filepath.Join(localDir, ".git"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, ".git", "config"), []byte("git config"), 0644))
+
+	// Create gitignored directories and files
+	require.NoError(t, os.Mkdir(filepath.Join(localDir, "node_modules"), 0755))
+	require.NoError(t, os.Mkdir(filepath.Join(localDir, "node_modules", "lodash"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "node_modules", "lodash", "index.js"), []byte("module.exports = {}"), 0644))
+	require.NoError(t, os.Mkdir(filepath.Join(localDir, ".next"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, ".next", "cache.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "debug.log"), []byte("log data"), 0644))
+
+	gitAddCommit(t, localDir)
 
 	cfg := &config.Config{
 		Name:    "testapp",
@@ -116,269 +160,15 @@ func TestRsync_ExcludesGit(t *testing.T) {
 	output, err := client.SSH(ctx, "ls -1a "+remoteDir)
 	require.NoError(t, err)
 	assert.Contains(t, output, "file.txt")
-	assert.NotContains(t, output, ".git")
+	assert.Contains(t, output, ".gitignore")
+	assert.NotContains(t, output, "node_modules")
+	assert.NotContains(t, output, ".next")
+	assert.NotContains(t, output, "debug.log")
 
+	// .git directory is never included in git archive
 	checkGit, err := client.SSH(ctx, "test -d "+remoteDir+"/.git && echo 'EXISTS' || echo 'MISSING'")
 	require.NoError(t, err)
 	assert.Contains(t, checkGit, "MISSING")
-}
-
-func TestRsync_ExcludesNodeModules(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err)
-	defer sshContainer.Cleanup(ctx)
-
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	localDir, err := os.MkdirTemp("", "rsync-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
-
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "package.json"), []byte("{}"), 0644))
-	require.NoError(t, os.Mkdir(filepath.Join(localDir, "node_modules"), 0755))
-	require.NoError(t, os.Mkdir(filepath.Join(localDir, "node_modules", "lodash"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "node_modules", "lodash", "index.js"), []byte("module.exports = {}"), 0644))
-
-	cfg := &config.Config{
-		Name:    "testapp",
-		Server:  "testserver",
-		Stack:   "/stacks/testapp",
-		Context: ".",
-	}
-
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
-	client := NewClientWithExecutor(cfg, executor)
-
-	remoteDir, err := client.MakeTempDir(ctx)
-	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	output, err := client.SSH(ctx, "ls -1 "+remoteDir)
-	require.NoError(t, err)
-	assert.Contains(t, output, "package.json")
-	assert.NotContains(t, output, "node_modules")
-
-	checkNodeModules, err := client.SSH(ctx, "test -d "+remoteDir+"/node_modules && echo 'EXISTS' || echo 'MISSING'")
-	require.NoError(t, err)
-	assert.Contains(t, checkNodeModules, "MISSING")
-}
-
-func TestRsync_PreservesPermissions(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err)
-	defer sshContainer.Cleanup(ctx)
-
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	localDir, err := os.MkdirTemp("", "rsync-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
-
-	executableFile := filepath.Join(localDir, "script.sh")
-	require.NoError(t, os.WriteFile(executableFile, []byte("#!/bin/bash\necho hello"), 0755))
-
-	readonlyFile := filepath.Join(localDir, "readonly.txt")
-	require.NoError(t, os.WriteFile(readonlyFile, []byte("readonly"), 0444))
-
-	cfg := &config.Config{
-		Name:    "testapp",
-		Server:  "testserver",
-		Stack:   "/stacks/testapp",
-		Context: ".",
-	}
-
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
-	client := NewClientWithExecutor(cfg, executor)
-
-	remoteDir, err := client.MakeTempDir(ctx)
-	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	execPerms, err := client.SSH(ctx, "stat -c '%a' "+remoteDir+"/script.sh")
-	require.NoError(t, err)
-	assert.Equal(t, "755", strings.TrimSpace(execPerms))
-
-	readonlyPerms, err := client.SSH(ctx, "stat -c '%a' "+remoteDir+"/readonly.txt")
-	require.NoError(t, err)
-	assert.Equal(t, "444", strings.TrimSpace(readonlyPerms))
-}
-
-func TestRsync_DeletesRemoved(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err)
-	defer sshContainer.Cleanup(ctx)
-
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	localDir, err := os.MkdirTemp("", "rsync-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
-
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file1.txt"), []byte("content1"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file2.txt"), []byte("content2"), 0644))
-
-	cfg := &config.Config{
-		Name:    "testapp",
-		Server:  "testserver",
-		Stack:   "/stacks/testapp",
-		Context: ".",
-	}
-
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
-	client := NewClientWithExecutor(cfg, executor)
-
-	remoteDir, err := client.MakeTempDir(ctx)
-	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	output, err := client.SSH(ctx, "ls -1 "+remoteDir)
-	require.NoError(t, err)
-	assert.Contains(t, output, "file1.txt")
-	assert.Contains(t, output, "file2.txt")
-
-	require.NoError(t, os.Remove(filepath.Join(localDir, "file2.txt")))
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	output, err = client.SSH(ctx, "ls -1 "+remoteDir)
-	require.NoError(t, err)
-	assert.Contains(t, output, "file1.txt")
-	assert.NotContains(t, output, "file2.txt")
-
-	checkDeleted, err := client.SSH(ctx, "test -f "+remoteDir+"/file2.txt && echo 'EXISTS' || echo 'DELETED'")
-	require.NoError(t, err)
-	assert.Contains(t, checkDeleted, "DELETED")
-}
-
-func TestRsync_FilenameWithSpaces(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err)
-	defer sshContainer.Cleanup(ctx)
-
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	localDir, err := os.MkdirTemp("", "rsync-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
-
-	testContent := "content with spaces"
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "my file.txt"), []byte(testContent), 0644))
-
-	cfg := &config.Config{
-		Name:    "testapp",
-		Server:  "testserver",
-		Stack:   "/stacks/testapp",
-		Context: ".",
-	}
-
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
-	client := NewClientWithExecutor(cfg, executor)
-
-	remoteDir, err := client.MakeTempDir(ctx)
-	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	output, err := client.SSH(ctx, "ls -1 "+remoteDir)
-	require.NoError(t, err)
-	assert.Contains(t, output, "my file.txt")
-
-	content, err := client.SSH(ctx, "cat '"+remoteDir+"/my file.txt'")
-	require.NoError(t, err)
-	assert.Equal(t, testContent, strings.TrimSpace(content))
-}
-
-func TestRsync_FilenameWithUnicode(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err)
-	defer sshContainer.Cleanup(ctx)
-
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err)
-
-	localDir, err := os.MkdirTemp("", "rsync-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
-
-	testContent := "unicode content"
-	unicodeFilename := "file-❤.txt"
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeFilename), []byte(testContent), 0644))
-
-	cfg := &config.Config{
-		Name:    "testapp",
-		Server:  "testserver",
-		Stack:   "/stacks/testapp",
-		Context: ".",
-	}
-
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
-	client := NewClientWithExecutor(cfg, executor)
-
-	remoteDir, err := client.MakeTempDir(ctx)
-	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
-
-	err = client.Rsync(ctx, localDir, remoteDir)
-	require.NoError(t, err)
-
-	checkExists, err := client.SSH(ctx, "test -f '"+remoteDir+"/"+unicodeFilename+"' && echo 'EXISTS' || echo 'MISSING'")
-	require.NoError(t, err)
-	assert.Contains(t, checkExists, "EXISTS")
-
-	content, err := client.SSH(ctx, "cat '"+remoteDir+"/"+unicodeFilename+"'")
-	require.NoError(t, err)
-	assert.Equal(t, testContent, strings.TrimSpace(content))
 }
 
 func TestRsync_DeepNestedPath(t *testing.T) {
@@ -400,11 +190,14 @@ func TestRsync_DeepNestedPath(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(localDir)
 
+	initGitRepo(t, localDir)
+
 	deepPath := filepath.Join(localDir, "a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
 	require.NoError(t, os.MkdirAll(deepPath, 0755))
 
 	testContent := "deep content"
 	require.NoError(t, os.WriteFile(filepath.Join(deepPath, "deep.txt"), []byte(testContent), 0644))
+	gitAddCommit(t, localDir)
 
 	cfg := &config.Config{
 		Name:    "testapp",
@@ -452,6 +245,8 @@ func TestRsync_LargeFile(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(localDir)
 
+	initGitRepo(t, localDir)
+
 	largeFilePath := filepath.Join(localDir, "large.bin")
 	largeFile, err := os.Create(largeFilePath)
 	require.NoError(t, err)
@@ -469,6 +264,7 @@ func TestRsync_LargeFile(t *testing.T) {
 		written += n
 	}
 	require.NoError(t, largeFile.Close())
+	gitAddCommit(t, localDir)
 
 	cfg := &config.Config{
 		Name:    "testapp",
@@ -511,12 +307,15 @@ func TestRsync_ManySmallFiles(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(localDir)
 
+	initGitRepo(t, localDir)
+
 	const numFiles = 1000
 	for i := 0; i < numFiles; i++ {
 		filename := filepath.Join(localDir, fmt.Sprintf("file%04d.txt", i))
 		content := fmt.Sprintf("content%d", i)
 		require.NoError(t, os.WriteFile(filename, []byte(content), 0644))
 	}
+	gitAddCommit(t, localDir)
 
 	cfg := &config.Config{
 		Name:    "testapp",
@@ -542,4 +341,105 @@ func TestRsync_ManySmallFiles(t *testing.T) {
 	sampleContent, err := client.SSH(ctx, "cat "+remoteDir+"/file0000.txt")
 	require.NoError(t, err)
 	assert.Equal(t, "content0", strings.TrimSpace(sampleContent))
+}
+
+func TestRsync_FilenameWithSpaces(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	require.NoError(t, err)
+	defer sshContainer.Cleanup(ctx)
+
+	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
+	require.NoError(t, err)
+
+	localDir, err := os.MkdirTemp("", "rsync-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(localDir)
+
+	initGitRepo(t, localDir)
+	testContent := "content with spaces"
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "my file.txt"), []byte(testContent), 0644))
+	gitAddCommit(t, localDir)
+
+	cfg := &config.Config{
+		Name:    "testapp",
+		Server:  "testserver",
+		Stack:   "/stacks/testapp",
+		Context: ".",
+	}
+
+	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
+	client := NewClientWithExecutor(cfg, executor)
+
+	remoteDir, err := client.MakeTempDir(ctx)
+	require.NoError(t, err)
+	defer client.Cleanup(ctx, remoteDir)
+
+	err = client.Rsync(ctx, localDir, remoteDir)
+	require.NoError(t, err)
+
+	output, err := client.SSH(ctx, "ls -1 "+remoteDir)
+	require.NoError(t, err)
+	assert.Contains(t, output, "my file.txt")
+
+	content, err := client.SSH(ctx, "cat '"+remoteDir+"/my file.txt'")
+	require.NoError(t, err)
+	assert.Equal(t, testContent, strings.TrimSpace(content))
+}
+
+func TestRsync_FilenameWithUnicode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
+	require.NoError(t, err)
+	defer sshContainer.Cleanup(ctx)
+
+	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
+	require.NoError(t, err)
+
+	localDir, err := os.MkdirTemp("", "rsync-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(localDir)
+
+	initGitRepo(t, localDir)
+	testContent := "unicode content"
+	unicodeFilename := "file-❤.txt"
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeFilename), []byte(testContent), 0644))
+	gitAddCommit(t, localDir)
+
+	cfg := &config.Config{
+		Name:    "testapp",
+		Server:  "testserver",
+		Stack:   "/stacks/testapp",
+		Context: ".",
+	}
+
+	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
+	client := NewClientWithExecutor(cfg, executor)
+
+	remoteDir, err := client.MakeTempDir(ctx)
+	require.NoError(t, err)
+	defer client.Cleanup(ctx, remoteDir)
+
+	err = client.Rsync(ctx, localDir, remoteDir)
+	require.NoError(t, err)
+
+	checkExists, err := client.SSH(ctx, "test -f '"+remoteDir+"/"+unicodeFilename+"' && echo 'EXISTS' || echo 'MISSING'")
+	require.NoError(t, err)
+	assert.Contains(t, checkExists, "EXISTS")
+
+	content, err := client.SSH(ctx, "cat '"+remoteDir+"/"+unicodeFilename+"'")
+	require.NoError(t, err)
+	assert.Equal(t, testContent, strings.TrimSpace(content))
 }

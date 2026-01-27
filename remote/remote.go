@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -43,26 +44,39 @@ var _ RemoteClient = (*Client)(nil)
 
 // Client handles remote operations via SSH
 type Client struct {
-	server   string
-	cfg      *config.Config
-	executor CommandExecutor
+	server      string
+	cfg         *config.Config
+	executor    CommandExecutor
+	findGitRoot func(string) (string, error)
+}
+
+// defaultGitRoot finds the git repository root for the given directory
+func defaultGitRoot(dir string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a git repository (or any parent): %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // NewClient creates a new remote client with the default executor
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		server:   cfg.Server,
-		cfg:      cfg,
-		executor: NewRealExecutor(),
+		server:      cfg.Server,
+		cfg:         cfg,
+		executor:    NewRealExecutor(),
+		findGitRoot: defaultGitRoot,
 	}
 }
 
 // NewClientWithExecutor creates a client with a custom executor (for testing)
 func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client {
 	return &Client{
-		server:   cfg.Server,
-		cfg:      cfg,
-		executor: executor,
+		server:      cfg.Server,
+		cfg:         cfg,
+		executor:    executor,
+		findGitRoot: defaultGitRoot,
 	}
 }
 
@@ -75,40 +89,47 @@ func (c *Client) SSH(ctx context.Context, command string) (string, error) {
 	return output, nil
 }
 
-// SSHInteractive runs an SSH command with output streamed to terminal
+// SSHInteractive runs an SSH command with output streamed to terminal.
+// Output is streamed in real time via stdout/stderr passthrough.
 func (c *Client) SSHInteractive(ctx context.Context, command string) error {
 	return c.executor.RunInteractive(ctx, "ssh", c.server, command)
 }
 
-// Rsync syncs local directory to remote server
+// Rsync syncs local directory to remote server using git archive.
+// Only git-tracked files are transferred, automatically respecting .gitignore.
 func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error {
-	// Build rsync command with common excludes
-	excludes := []string{
-		".git",
-		"node_modules",
-		".next",
-		".DS_Store",
-		"*.log",
+	// Find git repository root
+	gitRoot, err := c.findGitRoot(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to find git root: %w", err)
 	}
 
-	args := []string{
-		"-avz",
-		"--delete",
-		"--progress",
+	// Compute relative path from git root to the context directory
+	relPath, err := filepath.Rel(gitRoot, localPath)
+	if err != nil {
+		return fmt.Errorf("failed to compute relative path: %w", err)
 	}
 
-	for _, ex := range excludes {
-		args = append(args, "--exclude", ex)
+	// Build git archive command (runs locally)
+	archiveCmd := fmt.Sprintf("git -C %s archive --format=tar HEAD", shellescape.Quote(gitRoot))
+
+	// Build tar extract command (runs on remote via SSH)
+	extractCmd := fmt.Sprintf("tar xf - -C %s", shellescape.Quote(remotePath))
+
+	// If context is a subdirectory, archive only that path and strip prefix
+	if relPath != "." {
+		archiveCmd += fmt.Sprintf(" -- %s", shellescape.Quote(relPath))
+		stripN := strings.Count(relPath, string(filepath.Separator)) + 1
+		extractCmd += fmt.Sprintf(" --strip-components=%d", stripN)
 	}
 
-	// Ensure local path ends with / to copy contents, not the directory itself
-	if !strings.HasSuffix(localPath, "/") {
-		localPath += "/"
-	}
+	// Pipeline: git archive | ssh server 'tar extract'
+	pipeline := fmt.Sprintf("%s | ssh %s %s",
+		archiveCmd,
+		c.server,
+		shellescape.Quote(extractCmd))
 
-	args = append(args, localPath, fmt.Sprintf("%s:%s", c.server, remotePath))
-
-	return c.executor.RunInteractive(ctx, "rsync", args...)
+	return c.executor.RunInteractive(ctx, "bash", "-c", pipeline)
 }
 
 // parseVersionFromContent extracts the version number from compose.yaml content
@@ -151,7 +172,12 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 	// Build command with dockerfile path relative to build context
 	dockerfile := strings.TrimPrefix(c.cfg.Dockerfile, "./")
 
-	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile))
+	targetFlag := ""
+	if c.cfg.Target != "" {
+		targetFlag = " --target " + shellescape.Quote(c.cfg.Target)
+	}
+
+	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s%s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile), targetFlag)
 	return c.SSHInteractive(ctx, cmd)
 }
 
@@ -293,11 +319,13 @@ func ValidateTempPath(path string) error {
 	return nil
 }
 
-// CreateEnvFile creates an empty {serviceName}.env file with mode 600 in the stack directory
+// CreateEnvFile creates an empty {serviceName}.env file with mode 600 in the stack directory.
+// Existing files are not overwritten, preserving any env vars already set.
 func (c *Client) CreateEnvFile(ctx context.Context, serviceName string) error {
 	stackDir := shellescape.Quote(c.cfg.StackPath())
 	envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", serviceName))
-	cmd := fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s", stackDir, shellescape.Quote(envPath))
+	quoted := shellescape.Quote(envPath)
+	cmd := fmt.Sprintf("mkdir -p %s && test -f %s || install -m 600 /dev/null %s", stackDir, quoted, quoted)
 	_, err := c.SSH(ctx, cmd)
 	return err
 }
@@ -399,8 +427,16 @@ func (c *Client) CreateStack(ctx context.Context, composeContent string) error {
 	}
 
 	// Step 3: Validate compose file
-	validateCmd := fmt.Sprintf("cd %s && docker compose -f compose.yaml.tmp config > /dev/null 2>&1", shellescape.Quote(stackPath))
-	if _, err := c.SSH(ctx, validateCmd); err != nil {
+	validateCmd := fmt.Sprintf("cd %s && docker compose -f compose.yaml.tmp config 2>&1", shellescape.Quote(stackPath))
+	if output, err := c.SSH(ctx, validateCmd); err != nil {
+		// Include first line of docker compose output for diagnostics
+		detail := strings.TrimSpace(output)
+		if i := strings.IndexByte(detail, '\n'); i > 0 {
+			detail = detail[:i]
+		}
+		if detail != "" {
+			return fmt.Errorf("compose.yaml validation failed: %s", detail)
+		}
 		return fmt.Errorf("compose.yaml validation failed: %w", err)
 	}
 

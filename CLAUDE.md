@@ -113,6 +113,7 @@ services:
     stack: /stacks/myapp
     context: ./apps/web
     dockerfile: ./apps/web/Dockerfile
+    target: production          # Docker build target stage (optional)
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable

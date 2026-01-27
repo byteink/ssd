@@ -30,6 +30,7 @@ type Config struct {
 	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
+	Target      string            `yaml:"target"`      // Docker build target stage
 	DependsOn   []string          `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
@@ -153,6 +154,12 @@ func validateConfig(cfg *Config) error {
 
 	if err := ValidateHealthCheck(cfg.HealthCheck); err != nil {
 		return fmt.Errorf("invalid healthcheck: %w", err)
+	}
+
+	if cfg.Target != "" {
+		if err := ValidateTarget(cfg.Target); err != nil {
+			return fmt.Errorf("invalid target: %w", err)
+		}
 	}
 
 	return nil
@@ -492,6 +499,33 @@ func ValidateHealthCheck(hc *HealthCheck) error {
 	// Validate retries range
 	if hc.Retries < 0 || hc.Retries > 100 {
 		return fmt.Errorf("healthcheck retries must be between 0 and 100")
+	}
+
+	return nil
+}
+
+// ValidateTarget validates a Docker build target stage name
+func ValidateTarget(target string) error {
+	if target == "" {
+		return fmt.Errorf("target cannot be empty")
+	}
+
+	if len(target) > 128 {
+		return fmt.Errorf("target exceeds maximum length of 128 characters")
+	}
+
+	if strings.HasPrefix(target, "-") || strings.HasPrefix(target, ".") {
+		return fmt.Errorf("target cannot start with '-' or '.'")
+	}
+
+	for _, r := range target {
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		isAllowed := isLower || isUpper || isDigit || r == '-' || r == '_'
+		if !isAllowed {
+			return fmt.Errorf("target contains invalid character: %c (only alphanumeric, hyphens, and underscores allowed)", r)
+		}
 	}
 
 	return nil

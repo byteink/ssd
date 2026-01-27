@@ -718,10 +718,10 @@ func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
 
 	// Stack doesn't exist yet
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
-	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 
 	// Normal deploy flow
 	mockClient.On("GetCurrentVersion").Return(0, nil)
@@ -737,10 +737,10 @@ func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.AssertExpectations(t)
 	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
 	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
 	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
 	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
-	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
 }
 
 func TestDeploy_AutoCreateStack_SecondDeploySkipsCreation(t *testing.T) {
@@ -789,14 +789,16 @@ func TestDeploy_AutoCreateStack_CreateStackError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
-	// Stack doesn't exist, but creation fails
+	// Stack doesn't exist, env files succeed, but creation fails
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(errors.New("permission denied"))
 
 	err := DeployWithClient(cfg, mockClient, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to create stack")
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
 	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
 	mockClient.AssertNotCalled(t, "EnsureNetwork")
 }
@@ -805,8 +807,9 @@ func TestDeploy_AutoCreateStack_EnsureNetworkError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
-	// Stack creation succeeds, but network creation fails
+	// Env files and stack creation succeed, but network creation fails
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(errors.New("network error"))
 
@@ -814,19 +817,16 @@ func TestDeploy_AutoCreateStack_EnsureNetworkError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to ensure network")
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
 	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
-	mockClient.AssertNotCalled(t, "CreateEnvFile")
 }
 
 func TestDeploy_AutoCreateStack_CreateEnvFileError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
-	// Networks succeed, but env file creation fails
+	// Env file creation fails before CreateStack is reached
 	mockClient.On("StackExists").Return(false, nil)
-	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
-	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
-	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
 	mockClient.On("CreateEnvFile", "myapp").Return(errors.New("permission denied"))
 
 	err := DeployWithClient(cfg, mockClient, nil)
@@ -834,6 +834,8 @@ func TestDeploy_AutoCreateStack_CreateEnvFileError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to create env file")
 	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
+	mockClient.AssertNotCalled(t, "CreateStack")
+	mockClient.AssertNotCalled(t, "EnsureNetwork")
 }
 
 func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
@@ -849,10 +851,10 @@ func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
 
 	// Stack creation with domain should still ensure traefik_web
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "web").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
-	mockClient.On("CreateEnvFile", "web").Return(nil)
 
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
@@ -1282,10 +1284,10 @@ func TestDeploy_IntegrationFirstDeployCreatesEverything(t *testing.T) {
 
 	// First deploy: stack doesn't exist
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "web").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
-	mockClient.On("CreateEnvFile", "web").Return(nil)
 
 	// Normal build and deploy
 	mockClient.On("GetCurrentVersion").Return(0, nil)
@@ -1301,10 +1303,10 @@ func TestDeploy_IntegrationFirstDeployCreatesEverything(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.AssertExpectations(t)
 	mockClient.AssertCalled(t, "StackExists")
+	mockClient.AssertCalled(t, "CreateEnvFile", "web")
 	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
 	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
 	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
-	mockClient.AssertCalled(t, "CreateEnvFile", "web")
 }
 
 func TestDeploy_IntegrationSecondDeploySkipsCreation(t *testing.T) {
@@ -1488,6 +1490,91 @@ func TestDeploy_IntegrationPrebuiltServicePullsInsteadOfBuilds(t *testing.T) {
 	mockClient.AssertNotCalled(t, "UpdateCompose")
 }
 
+func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
+	// Env files must be created BEFORE CreateStack, because docker compose config
+	// validates that referenced env_file paths exist on disk.
+	var callOrder []string
+
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+		DependsOn:  []string{"postgres"},
+	}
+
+	postgresCfg := &config.Config{
+		Name:   "postgres",
+		Server: "testserver",
+		Stack:  "/stacks/myproject",
+		Image:  "postgres:16",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"postgres": postgresCfg,
+		},
+		AllServices: map[string]*config.Config{
+			"api":      cfg,
+			"postgres": postgresCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "CreateEnvFile:"+args.String(0))
+	})
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "CreateStack")
+	})
+	mockClient.On("EnsureNetwork", mock.Anything).Return(nil)
+
+	// Normal deploy flow
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("PullImage", "postgres:16").Return(nil)
+	mockClient.On("StartService", "postgres").Return(nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "api").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+	require.NoError(t, err)
+
+	// Find CreateStack index in call order
+	createStackIdx := -1
+	for i, call := range callOrder {
+		if call == "CreateStack" {
+			createStackIdx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, createStackIdx, "CreateStack should have been called")
+
+	// All CreateEnvFile calls must come before CreateStack
+	for i, call := range callOrder {
+		if strings.HasPrefix(call, "CreateEnvFile:") {
+			assert.Less(t, i, createStackIdx,
+				"CreateEnvFile should be called before CreateStack, but %s was at index %d and CreateStack at %d",
+				call, i, createStackIdx)
+		}
+	}
+
+	// Verify env files were created for both services
+	envFileCalls := 0
+	for _, call := range callOrder {
+		if strings.HasPrefix(call, "CreateEnvFile:") {
+			envFileCalls++
+		}
+	}
+	assert.Equal(t, 2, envFileCalls, "should create env files for all services")
+}
+
 func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := &config.Config{
@@ -1518,14 +1605,14 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 
 	// Stack doesn't exist - should create with ALL services
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "api").Return(nil)
+	mockClient.On("CreateEnvFile", "postgres").Return(nil)
 	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
 		// Compose must contain both api AND postgres services
 		return strings.Contains(content, "api:") && strings.Contains(content, "postgres:")
 	})).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myproject_internal").Return(nil)
-	mockClient.On("CreateEnvFile", "api").Return(nil)
-	mockClient.On("CreateEnvFile", "postgres").Return(nil)
 
 	// Normal deploy flow for api
 	mockClient.On("GetCurrentVersion").Return(0, nil)
@@ -1554,10 +1641,10 @@ func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
 	cfg := newTestConfig()
 
 	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
-	mockClient.On("CreateEnvFile", "myapp").Return(nil)
 
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
@@ -1572,6 +1659,58 @@ func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.AssertExpectations(t)
 	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
+}
+
+func TestDeploy_BuildOnly_SkipsStartAndDeps(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		DependsOn:  []string{"postgres"},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(2, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
+	mockClient.On("UpdateCompose", 3).Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	opts := &Options{BuildOnly: true}
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	// BuildOnly must NOT start the service or check dependencies
+	mockClient.AssertNotCalled(t, "StartService")
+	mockClient.AssertNotCalled(t, "IsServiceRunning")
+}
+
+func TestDeploy_BuildOnly_PrebuiltPullsButDoesNotStart(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "redis",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "redis:7",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "redis:7").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	opts := &Options{BuildOnly: true}
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "PullImage", "redis:7")
+	mockClient.AssertNotCalled(t, "StartService")
 }
 
 func TestDeploy_IntegrationSingleServiceOnlyTargetRestarted(t *testing.T) {

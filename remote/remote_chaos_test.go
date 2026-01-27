@@ -276,6 +276,7 @@ func TestChaos_RsyncTimeout(t *testing.T) {
 	cfg := newTestConfig()
 	chaosExec := NewChaosExecutor().WithTimeoutOnInteractive()
 	client := NewClientWithExecutor(cfg, chaosExec)
+	client.findGitRoot = func(dir string) (string, error) { return dir, nil }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -358,6 +359,7 @@ func TestChaos_RsyncInterrupted(t *testing.T) {
 	// Simulate rsync failing mid-transfer after 50ms
 	chaosExec := NewChaosExecutor().WithMidCommandDisconnect(50 * time.Millisecond)
 	client := NewClientWithExecutor(cfg, chaosExec)
+	client.findGitRoot = func(dir string) (string, error) { return dir, nil }
 
 	ctx := context.Background()
 	start := time.Now()
@@ -377,6 +379,7 @@ func TestChaos_RsyncStalled(t *testing.T) {
 	// Simulate rsync stalling after 20ms of progress
 	chaosExec := NewChaosExecutor().WithStall(20 * time.Millisecond)
 	client := NewClientWithExecutor(cfg, chaosExec)
+	client.findGitRoot = func(dir string) (string, error) { return dir, nil }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

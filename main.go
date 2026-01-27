@@ -16,6 +16,36 @@ import (
 	"github.com/byteink/ssd/scaffold"
 )
 
+// deployServiceBuildOnly builds/pulls the image for a service without starting it.
+// Used by deploy-all: build everything first, then docker compose up -d once.
+func deployServiceBuildOnly(rootCfg *config.RootConfig, serviceName string) error {
+	cfg, err := rootCfg.GetService(serviceName)
+	if err != nil {
+		return err
+	}
+
+	// Load all service configs for initial stack creation
+	allServices := make(map[string]*config.Config)
+	for _, name := range rootCfg.ListServices() {
+		svcCfg, err := rootCfg.GetService(name)
+		if err != nil {
+			continue
+		}
+		allServices[name] = svcCfg
+	}
+
+	fmt.Printf("Building %s...\n", cfg.Name)
+
+	client := remote.NewClient(cfg)
+	opts := &deploy.Options{
+		Output:      os.Stdout,
+		AllServices: allServices,
+		BuildOnly:   true,
+	}
+
+	return deploy.DeployWithClient(cfg, client, opts)
+}
+
 var version = "dev"
 
 func main() {
@@ -94,12 +124,28 @@ func runDeploy(args []string) {
 
 		fmt.Printf("Deploying all services: %s\n\n", strings.Join(services, ", "))
 
+		// Build/pull all images first (BuildOnly mode)
 		for _, name := range services {
-			if err := deployService(rootCfg, name); err != nil {
-				fmt.Printf("\nError deploying %s: %v\n", name, err)
+			if err := deployServiceBuildOnly(rootCfg, name); err != nil {
+				fmt.Printf("\nError building %s: %v\n", name, err)
 				os.Exit(1)
 			}
 		}
+
+		// Start everything at once — compose handles dependency order via depends_on
+		fmt.Println("\n==> Starting all services...")
+		anyCfg, err := rootCfg.GetService(services[0])
+		if err != nil {
+			fmt.Printf("\nError: %v\n", err)
+			os.Exit(1)
+		}
+		client := remote.NewClient(anyCfg)
+		if err := client.RestartStack(context.Background()); err != nil {
+			fmt.Printf("\nError starting services: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("\nAll services deployed successfully!")
 		return
 	}
 
