@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -634,5 +635,62 @@ func TestProvisionParsing(t *testing.T) {
 				t.Error("Expected email to be empty (requiring prompt), but got value")
 			}
 		})
+	}
+}
+
+// TestDeployAllServices tests that deploy with no args resolves all services in sorted order
+func TestDeployAllServices(t *testing.T) {
+	rootCfg := &config.RootConfig{
+		Server: "testserver",
+		Services: map[string]*config.Config{
+			"web": {},
+			"api": {},
+			"db":  {Image: "postgres:16"},
+		},
+	}
+
+	services := rootCfg.ListServices()
+	sort.Strings(services)
+
+	if len(services) != 3 {
+		t.Fatalf("Expected 3 services, got %d", len(services))
+	}
+
+	// Verify sorted order: api, db, web
+	expected := []string{"api", "db", "web"}
+	for i, name := range services {
+		if name != expected[i] {
+			t.Errorf("Expected service[%d]=%q, got %q", i, expected[i], name)
+		}
+	}
+
+	// Verify each service can be resolved
+	for _, name := range services {
+		cfg, err := rootCfg.GetService(name)
+		if err != nil {
+			t.Errorf("Failed to get service %q: %v", name, err)
+			continue
+		}
+		if cfg.Server != "testserver" {
+			t.Errorf("Service %q: expected server=testserver, got %q", name, cfg.Server)
+		}
+	}
+}
+
+// TestDeployServiceReturnsError tests that deployService returns errors instead of exiting
+func TestDeployServiceReturnsError(t *testing.T) {
+	rootCfg := &config.RootConfig{
+		Server: "testserver",
+		Services: map[string]*config.Config{
+			"web": {},
+		},
+	}
+
+	err := deployService(rootCfg, "nonexistent")
+	if err == nil {
+		t.Fatal("Expected error for nonexistent service, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Expected 'not found' in error, got: %v", err)
 	}
 }

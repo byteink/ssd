@@ -151,7 +151,7 @@ ssd init -s myserver --stack /dockge/stacks/myapp -d myapp.example.com -p 3000
 
 ### Deployment
 ```bash
-ssd deploy <service>          # Build and deploy service
+ssd deploy [service]          # Deploy service (or all if omitted)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
 ssd status <service>          # Check container status

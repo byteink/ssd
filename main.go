@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -76,25 +77,46 @@ func loadConfig(serviceName string) *config.Config {
 }
 
 func runDeploy(args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: ssd deploy <service>")
-		os.Exit(1)
-	}
-	serviceName := args[0]
-
 	rootCfg, err := config.Load("")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
+	// No args: deploy all services
+	if len(args) == 0 {
+		services := rootCfg.ListServices()
+		if len(services) == 0 {
+			fmt.Println("Error: no services defined in ssd.yaml")
+			os.Exit(1)
+		}
+		sort.Strings(services)
+
+		fmt.Printf("Deploying all services: %s\n\n", strings.Join(services, ", "))
+
+		for _, name := range services {
+			if err := deployService(rootCfg, name); err != nil {
+				fmt.Printf("\nError deploying %s: %v\n", name, err)
+				os.Exit(1)
+			}
+		}
+		return
+	}
+
+	serviceName := args[0]
+	if err := deployService(rootCfg, serviceName); err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func deployService(rootCfg *config.RootConfig, serviceName string) error {
 	cfg, err := rootCfg.GetService(serviceName)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
 		if !rootCfg.IsSingleService() {
-			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
+			return fmt.Errorf("%w\nAvailable services: %s", err, strings.Join(rootCfg.ListServices(), ", "))
 		}
-		os.Exit(1)
+		return err
 	}
 
 	// Load dependency configs if any
@@ -119,10 +141,7 @@ func runDeploy(args []string) {
 		Dependencies: depConfigs,
 	}
 
-	if err := deploy.DeployWithClient(cfg, client, opts); err != nil {
-		fmt.Printf("\nError: %v\n", err)
-		os.Exit(1)
-	}
+	return deploy.DeployWithClient(cfg, client, opts)
 }
 
 func runRestart(args []string) {
@@ -573,7 +592,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  ssd init                        Create ssd.yaml (interactive or flags)")
-	fmt.Println("  ssd deploy <service>            Deploy application (build + restart)")
+	fmt.Println("  ssd deploy [service]            Deploy service (or all if omitted)")
 	fmt.Println("  ssd restart [service]           Restart stack without rebuilding")
 	fmt.Println("  ssd rollback [service]          Rollback to previous version")
 	fmt.Println("  ssd status [service]            Check deployment status")

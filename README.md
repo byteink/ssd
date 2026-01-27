@@ -221,7 +221,7 @@ ssd init -s myserver          # Non-interactive with flags
 
 ### Deployment
 ```bash
-ssd deploy <service>          # Build and deploy service
+ssd deploy [service]          # Deploy service (or all if omitted)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
 ssd status <service>          # Check container status
@@ -229,7 +229,8 @@ ssd logs <service> [-f]       # View logs, -f to follow
 ```
 
 **Deploy behavior:**
-- Deploys a single service and its dependencies
+- With no argument, deploys all services in alphabetical order
+- With a service name, deploys that single service
 - Dependencies are started first (respects `depends_on`)
 - Example: `ssd deploy api` will also start `db` if `api` depends on it
 
