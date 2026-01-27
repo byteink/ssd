@@ -29,6 +29,7 @@ func logln(w io.Writer, msg string) {
 // Deployer defines the interface for deployment operations
 type Deployer interface {
 	GetCurrentVersion(ctx context.Context) (int, error)
+	ReadCompose(ctx context.Context) (string, error)
 	MakeTempDir(ctx context.Context) (string, error)
 	Rsync(ctx context.Context, localPath, remotePath string) error
 	BuildImage(ctx context.Context, buildDir string, version int) error
@@ -42,6 +43,21 @@ type Deployer interface {
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
+}
+
+// parseServiceVersions extracts current version numbers from compose.yaml content
+func parseServiceVersions(content, stack string, services map[string]*config.Config) map[string]int {
+	versions := make(map[string]int, len(services))
+	project := filepath.Base(stack)
+	for name, svc := range services {
+		if svc.IsPrebuilt() {
+			continue
+		}
+		imageName := fmt.Sprintf("ssd-%s-%s", project, name)
+		v, _ := remote.ParseVersionFromContent(content, imageName)
+		versions[name] = v
+	}
+	return versions
 }
 
 // Options holds configuration for the deployment
@@ -99,7 +115,8 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 
 		logln(output, "    Generating compose.yaml...")
-		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), 0)
+		versions := make(map[string]int, len(services))
+		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), versions)
 		if err != nil {
 			return fmt.Errorf("failed to generate compose file: %w", err)
 		}
@@ -204,7 +221,31 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		if err := client.BuildImage(ctx, tempDir, newVersion); err != nil {
 			return fmt.Errorf("failed to build image: %w", err)
 		}
+	}
 
+	// Update compose.yaml: regenerate from config when all services are known,
+	// otherwise fall back to regex replacement for the deployed service only
+	if opts != nil && len(opts.AllServices) > 0 {
+		logln(output, "==> Updating compose.yaml...")
+		existingCompose, _ := client.ReadCompose(ctx)
+		currentVersions := parseServiceVersions(existingCompose, cfg.StackPath(), opts.AllServices)
+		currentVersions[cfg.Name] = newVersion
+
+		newCompose, err := compose.GenerateCompose(opts.AllServices, cfg.StackPath(), currentVersions)
+		if err != nil {
+			return fmt.Errorf("failed to generate compose.yaml: %w", err)
+		}
+
+		for name := range opts.AllServices {
+			if err := client.CreateEnvFile(ctx, name); err != nil {
+				return fmt.Errorf("failed to create env file for %s: %w", name, err)
+			}
+		}
+
+		if err := client.CreateStack(ctx, newCompose); err != nil {
+			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		}
+	} else if !cfg.IsPrebuilt() {
 		logln(output, "==> Updating compose.yaml...")
 		if err := client.UpdateCompose(ctx, newVersion); err != nil {
 			return fmt.Errorf("failed to update compose.yaml: %w", err)

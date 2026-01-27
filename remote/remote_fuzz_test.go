@@ -14,7 +14,7 @@ func FuzzVersionParsing(f *testing.F) {
 	f.Add("", "app")
 
 	f.Fuzz(func(t *testing.T, content, appName string) {
-		version, err := parseVersionFromContent(content, appName)
+		version, err := ParseVersionFromContent(content, appName)
 		if err == nil {
 			require.GreaterOrEqual(t, version, 0)
 		}

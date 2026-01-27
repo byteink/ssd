@@ -50,7 +50,7 @@ type Network struct {
 // version: version number to tag built images with
 //
 // Returns the generated YAML as a string, or an error
-func GenerateCompose(services map[string]*config.Config, stack string, version int) (string, error) {
+func GenerateCompose(services map[string]*config.Config, stack string, versions map[string]int) (string, error) {
 	if len(services) == 0 {
 		return "", fmt.Errorf("at least one service is required")
 	}
@@ -85,7 +85,7 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 		if cfg.IsPrebuilt() {
 			svc.Image = cfg.Image
 		} else {
-			svc.Image = fmt.Sprintf("ssd-%s-%s:%d", project, name, version)
+			svc.Image = fmt.Sprintf("ssd-%s-%s:%d", project, name, versions[name])
 		}
 
 		// Add volume mounts
@@ -150,8 +150,11 @@ func routerMiddlewaresLabel(router, middlewares string) string {
 func generateTraefikLabels(project, name string, cfg *config.Config) []string {
 	routerName := fmt.Sprintf("%s-%s", project, name)
 
+	// Root path "/" is equivalent to no path (matches everything)
+	hasSubPath := cfg.Path != "" && cfg.Path != "/"
+
 	rule := fmt.Sprintf("Host(`%s`)", cfg.Domain)
-	if cfg.Path != "" {
+	if hasSubPath {
 		rule = fmt.Sprintf("Host(`%s`) && PathPrefix(`%s`)", cfg.Domain, cfg.Path)
 	}
 
@@ -161,9 +164,9 @@ func generateTraefikLabels(project, name string, cfg *config.Config) []string {
 		fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port=%d", routerName, cfg.Port),
 	}
 
-	// StripPrefix middleware when path routing is used
+	// StripPrefix middleware when sub-path routing is used (not for root "/")
 	stripMiddleware := ""
-	if cfg.Path != "" {
+	if hasSubPath {
 		stripName := fmt.Sprintf("%s-strip", routerName)
 		stripMiddleware = stripName
 		labels = append(labels,

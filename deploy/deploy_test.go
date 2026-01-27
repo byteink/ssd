@@ -29,6 +29,11 @@ func (m *MockDeployer) GetCurrentVersion(ctx context.Context) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockDeployer) ReadCompose(ctx context.Context) (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
 func (m *MockDeployer) MakeTempDir(ctx context.Context) (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
@@ -1531,7 +1536,7 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 	})
 	mockClient.On("EnsureNetwork", mock.Anything).Return(nil)
 
-	// Normal deploy flow
+	// Normal deploy flow (AllServices triggers regeneration instead of UpdateCompose)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
 	mockClient.On("PullImage", "postgres:16").Return(nil)
@@ -1539,40 +1544,50 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("ReadCompose").Return("", nil).Run(func(args mock.Arguments) {
+		callOrder = append(callOrder, "ReadCompose")
+	})
 	mockClient.On("StartService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	err := DeployWithClient(cfg, mockClient, opts)
 	require.NoError(t, err)
 
-	// Find CreateStack index in call order
-	createStackIdx := -1
+	// Find the first CreateStack in the initial deploy phase (before ReadCompose)
+	readComposeIdx := len(callOrder)
 	for i, call := range callOrder {
-		if call == "CreateStack" {
-			createStackIdx = i
+		if call == "ReadCompose" {
+			readComposeIdx = i
 			break
 		}
 	}
-	require.NotEqual(t, -1, createStackIdx, "CreateStack should have been called")
 
-	// All CreateEnvFile calls must come before CreateStack
-	for i, call := range callOrder {
+	firstCreateStackIdx := -1
+	for i, call := range callOrder[:readComposeIdx] {
+		if call == "CreateStack" {
+			firstCreateStackIdx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, firstCreateStackIdx, "CreateStack should have been called in initial phase")
+
+	// All CreateEnvFile calls in the initial phase must come before the first CreateStack
+	for i, call := range callOrder[:readComposeIdx] {
 		if strings.HasPrefix(call, "CreateEnvFile:") {
-			assert.Less(t, i, createStackIdx,
+			assert.Less(t, i, firstCreateStackIdx,
 				"CreateEnvFile should be called before CreateStack, but %s was at index %d and CreateStack at %d",
-				call, i, createStackIdx)
+				call, i, firstCreateStackIdx)
 		}
 	}
 
-	// Verify env files were created for both services
+	// Verify env files were created for both services (at least once in initial phase)
 	envFileCalls := 0
-	for _, call := range callOrder {
+	for _, call := range callOrder[:readComposeIdx] {
 		if strings.HasPrefix(call, "CreateEnvFile:") {
 			envFileCalls++
 		}
 	}
-	assert.Equal(t, 2, envFileCalls, "should create env files for all services")
+	assert.Equal(t, 2, envFileCalls, "should create env files for all services in initial phase")
 }
 
 func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
@@ -1622,17 +1637,18 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	// AllServices triggers compose regeneration instead of UpdateCompose
+	mockClient.On("ReadCompose").Return("", nil)
 	mockClient.On("StartService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	err := DeployWithClient(cfg, mockClient, opts)
 
 	require.NoError(t, err)
-	mockClient.AssertExpectations(t)
 	// Verify env files created for ALL services, not just the deployed one
 	mockClient.AssertCalled(t, "CreateEnvFile", "api")
 	mockClient.AssertCalled(t, "CreateEnvFile", "postgres")
+	mockClient.AssertNotCalled(t, "UpdateCompose")
 }
 
 func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
@@ -1738,4 +1754,112 @@ func TestDeploy_IntegrationSingleServiceOnlyTargetRestarted(t *testing.T) {
 	mockClient.AssertExpectations(t)
 	mockClient.AssertCalled(t, "StartService", "api")
 	mockClient.AssertNotCalled(t, "RestartStack")
+}
+
+func TestDeploy_RegeneratesComposeWithAllServices(t *testing.T) {
+	// When AllServices is provided, deploy should regenerate compose.yaml
+	// from config instead of regex-replacing the image tag. This ensures
+	// config changes (ports, labels, etc.) are always reflected.
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Domain:     "example.com",
+		Port:       3000,
+	}
+
+	dbCfg := &config.Config{
+		Name:   "db",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+			"db":  dbCfg,
+		},
+	}
+
+	// Existing stack with version 2 for web
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(2, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
+
+	// Regeneration: reads existing compose, generates new, writes
+	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myapp-web:2\n  db:\n    image: postgres:16\n", nil)
+	mockClient.On("CreateEnvFile", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		return strings.Contains(content, "web:") &&
+			strings.Contains(content, "db:") &&
+			strings.Contains(content, "ssd-myapp-web:3") &&
+			strings.Contains(content, "3000")
+	})).Return(nil)
+
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "ReadCompose")
+	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
+	mockClient.AssertNotCalled(t, "UpdateCompose")
+}
+
+func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
+	// When regenerating compose, versions of other services must be
+	// preserved from the existing compose.yaml, not reset to 0.
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+	}
+
+	webCfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./web",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"api": cfg,
+			"web": webCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+
+	// Existing compose has web at version 10
+	mockClient.On("ReadCompose").Return("services:\n  api:\n    image: ssd-myproject-api:5\n  web:\n    image: ssd-myproject-web:10\n", nil)
+	mockClient.On("CreateEnvFile", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		// api bumped to 6, web stays at 10
+		return strings.Contains(content, "ssd-myproject-api:6") &&
+			strings.Contains(content, "ssd-myproject-web:10")
+	})).Return(nil)
+
+	mockClient.On("StartService", "api").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
 }

@@ -28,6 +28,7 @@ type RemoteClient interface {
 	Cleanup(ctx context.Context, path string) error
 	MakeTempDir(ctx context.Context) (string, error)
 	StackExists(ctx context.Context) (bool, error)
+	ReadCompose(ctx context.Context) (string, error)
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFile(ctx context.Context, serviceName string) error
@@ -132,10 +133,21 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 	return c.executor.RunInteractive(ctx, "bash", "-c", pipeline)
 }
 
-// parseVersionFromContent extracts the version number from compose.yaml content
+// ReadCompose reads the current compose.yaml content from the remote server.
+// Returns empty string (no error) if the file does not exist.
+func (c *Client) ReadCompose(ctx context.Context) (string, error) {
+	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
+	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
+	if err != nil {
+		return "", nil
+	}
+	return output, nil
+}
+
+// ParseVersionFromContent extracts the version number from compose.yaml content
 // imageName should be the full image name prefix (e.g., "ssd-myapp-api" without the :version tag)
 // Returns 0, nil if no version found; error on parse failure
-func parseVersionFromContent(content, imageName string) (int, error) {
+func ParseVersionFromContent(content, imageName string) (int, error) {
 	// Validate inputs are valid UTF-8 to prevent regexp compilation panics
 	if !utf8.ValidString(imageName) || !utf8.ValidString(content) {
 		return 0, nil
@@ -162,7 +174,7 @@ func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 	// Image name format: ssd-{project}-{service} where project = basename(stack)
 	project := filepath.Base(c.cfg.Stack)
 	imageName := fmt.Sprintf("ssd-%s-%s", project, c.cfg.Name)
-	return parseVersionFromContent(output, imageName)
+	return ParseVersionFromContent(output, imageName)
 }
 
 // BuildImage builds a Docker image on the remote server

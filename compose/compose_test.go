@@ -19,7 +19,7 @@ func TestGenerateCompose_SingleService(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestGenerateCompose_MultipleServices(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myproject", 5)
+	result, err := GenerateCompose(services, "/stacks/myproject", map[string]int{"web": 5, "api": 5})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestGenerateCompose_PrebuiltImage(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 3)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"postgres": 3, "web": 3})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestGenerateCompose_WithVolumes(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"postgres": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestGenerateCompose_WithVolumes(t *testing.T) {
 func TestGenerateCompose_EmptyServices(t *testing.T) {
 	services := map[string]*config.Config{}
 
-	_, err := GenerateCompose(services, "/stacks/myapp", 1)
+	_, err := GenerateCompose(services, "/stacks/myapp", map[string]int{})
 	if err == nil {
 		t.Fatal("expected error for empty services, got nil")
 	}
@@ -308,7 +308,7 @@ func TestGenerateCompose_ProjectNameFromStack(t *testing.T) {
 			},
 		}
 
-		result, err := GenerateCompose(services, tt.stack, 1)
+		result, err := GenerateCompose(services, tt.stack, map[string]int{"web": 1})
 		if err != nil {
 			t.Fatalf("GenerateCompose failed for stack %s: %v", tt.stack, err)
 		}
@@ -483,7 +483,7 @@ func TestGenerateCompose_WithHealthCheck(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestGenerateCompose_WithoutHealthCheck(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestGenerateCompose_WithDomainAndHTTPS(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestGenerateCompose_WithDomainNoHTTPS(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -718,7 +718,7 @@ func TestGenerateCompose_WithDomainAndPath_HTTPS(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"api": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestGenerateCompose_WithDomainAndPath_NoHTTPS(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"api": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -837,6 +837,78 @@ func TestGenerateCompose_WithDomainAndPath_NoHTTPS(t *testing.T) {
 	}
 }
 
+func TestGenerateCompose_WithDomainAndRootPath_HTTPS(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			Path:   "/",
+			HTTPS:  &trueVal,
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Root path should use Host-only rule (PathPrefix('/') is redundant)
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=80",
+		"traefik.http.routers.myapp-web.entrypoints=websecure",
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.routers.myapp-web-http.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-http.middlewares=redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+
+	// StripPrefix must NOT be present for root path
+	for _, actual := range labelStrings {
+		if strings.Contains(actual, "stripprefix") {
+			t.Errorf("StripPrefix label should not exist for root path, found: %q", actual)
+		}
+	}
+}
+
 func TestGenerateCompose_NoDomain(t *testing.T) {
 	services := map[string]*config.Config{
 		"web": {
@@ -847,7 +919,7 @@ func TestGenerateCompose_NoDomain(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -889,7 +961,7 @@ func TestGenerateCompose_WithDependsOn(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1, "db": 1, "redis": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
@@ -951,7 +1023,7 @@ func TestGenerateCompose_WithoutDependsOn(t *testing.T) {
 		},
 	}
 
-	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
 	if err != nil {
 		t.Fatalf("GenerateCompose failed: %v", err)
 	}
