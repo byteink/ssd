@@ -1340,6 +1340,107 @@ func TestConfig_UseHTTPS(t *testing.T) {
 	}
 }
 
+func TestValidatePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "empty string", path: "", wantErr: true},
+		{name: "no leading slash", path: "api", wantErr: true},
+		{name: "traversal", path: "/api/../etc", wantErr: true},
+		{name: "shell semicolon", path: "/api;rm", wantErr: true},
+		{name: "shell pipe", path: "/api|ls", wantErr: true},
+		{name: "shell dollar", path: "/api$(cmd)", wantErr: true},
+		{name: "shell backtick", path: "/api`id`", wantErr: true},
+		{name: "space", path: "/api path", wantErr: true},
+		{name: "exceeds max length", path: "/" + string(make([]byte, 256)), wantErr: true},
+		{name: "valid /api", path: "/api", wantErr: false},
+		{name: "valid /dashboard", path: "/dashboard", wantErr: false},
+		{name: "valid nested", path: "/v1/api", wantErr: false},
+		{name: "valid with hyphen", path: "/my-app", wantErr: false},
+		{name: "valid with underscore", path: "/my_app", wantErr: false},
+		{name: "valid root slash", path: "/", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePath(tt.path)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestRootConfig_GetService_ValidatesPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "path without domain",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"api": {Name: "api", Path: "/api"},
+				},
+			},
+			serviceName: "api",
+			expectError: "path requires domain",
+		},
+		{
+			name: "invalid path no leading slash",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"api": {Name: "api", Domain: "example.com", Path: "api"},
+				},
+			},
+			serviceName: "api",
+			expectError: "invalid path",
+		},
+		{
+			name: "valid domain with path",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"api": {Name: "api", Domain: "example.com", Path: "/api"},
+				},
+			},
+			serviceName: "api",
+			expectError: "",
+		},
+		{
+			name: "domain without path is fine",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {Name: "web", Domain: "example.com"},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

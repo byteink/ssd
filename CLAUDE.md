@@ -114,6 +114,7 @@ services:
     context: ./apps/web
     dockerfile: ./apps/web/Dockerfile
     domain: example.com         # Enable Traefik routing
+    path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
     depends_on:

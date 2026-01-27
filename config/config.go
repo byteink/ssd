@@ -26,6 +26,7 @@ type Config struct {
 	Dockerfile  string            `yaml:"dockerfile"`
 	Context     string            `yaml:"context"`
 	Domain      string            `yaml:"domain"`      // optional, enables Traefik
+	Path        string            `yaml:"path"`        // optional, path prefix for Traefik routing
 	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
@@ -99,28 +100,8 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		return nil, err
 	}
 
-	// Validate server
-	if err := ValidateServer(result.Server); err != nil {
-		return nil, fmt.Errorf("invalid server: %w", err)
-	}
-
-	// Validate domain if set
-	if result.Domain != "" {
-		if err := ValidateDomain(result.Domain); err != nil {
-			return nil, fmt.Errorf("invalid domain: %w", err)
-		}
-	}
-
-	// Validate volume names
-	for volumeName := range result.Volumes {
-		if err := ValidateVolumeName(volumeName); err != nil {
-			return nil, fmt.Errorf("invalid volume name %q: %w", volumeName, err)
-		}
-	}
-
-	// Validate healthcheck if set
-	if err := ValidateHealthCheck(result.HealthCheck); err != nil {
-		return nil, fmt.Errorf("invalid healthcheck: %w", err)
+	if err := validateConfig(result); err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -141,6 +122,40 @@ func (r *RootConfig) ListServices() []string {
 // IsSingleService returns true if this is a single-service config
 func (r *RootConfig) IsSingleService() bool {
 	return len(r.Services) == 0
+}
+
+// validateConfig validates all fields of a resolved config
+func validateConfig(cfg *Config) error {
+	if err := ValidateServer(cfg.Server); err != nil {
+		return fmt.Errorf("invalid server: %w", err)
+	}
+
+	if cfg.Domain != "" {
+		if err := ValidateDomain(cfg.Domain); err != nil {
+			return fmt.Errorf("invalid domain: %w", err)
+		}
+	}
+
+	if cfg.Path != "" {
+		if cfg.Domain == "" {
+			return fmt.Errorf("path requires domain to be set")
+		}
+		if err := ValidatePath(cfg.Path); err != nil {
+			return fmt.Errorf("invalid path: %w", err)
+		}
+	}
+
+	for volumeName := range cfg.Volumes {
+		if err := ValidateVolumeName(volumeName); err != nil {
+			return fmt.Errorf("invalid volume name %q: %w", volumeName, err)
+		}
+	}
+
+	if err := ValidateHealthCheck(cfg.HealthCheck); err != nil {
+		return fmt.Errorf("invalid healthcheck: %w", err)
+	}
+
+	return nil
 }
 
 // applyDefaults fills in default values for a config and validates the stack path
@@ -369,6 +384,44 @@ func ValidateDomain(domain string) error {
 		isAllowed := isLetter || isDigit || r == '-' || r == '.'
 		if !isAllowed {
 			return fmt.Errorf("domain contains invalid character: %c (only letters, digits, hyphens, and dots allowed)", r)
+		}
+	}
+
+	return nil
+}
+
+// ValidatePath validates a URL path prefix for Traefik routing
+func ValidatePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	if len(path) > 256 {
+		return fmt.Errorf("path exceeds maximum length of 256 characters")
+	}
+
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("path must start with /")
+	}
+
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path cannot contain traversal sequence (..)")
+	}
+
+	dangerousChars := ";|&$`(){}[]<>\\\"' *?"
+	for _, r := range path {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("path contains invalid character: %c", r)
+		}
+	}
+
+	// Only allow alphanumeric, hyphens, underscores, dots, slashes
+	for _, r := range path {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		isAllowed := isLetter || isDigit || r == '-' || r == '_' || r == '.' || r == '/'
+		if !isAllowed {
+			return fmt.Errorf("path contains invalid character: %c", r)
 		}
 	}
 

@@ -704,6 +704,139 @@ func TestGenerateCompose_WithDomainNoHTTPS(t *testing.T) {
 	}
 }
 
+func TestGenerateCompose_WithDomainAndPath_HTTPS(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"api": {
+			Name:   "api",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			Path:   "/api",
+			HTTPS:  &trueVal,
+			Port:   8080,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	apiService := servicesMap["api"].(map[string]interface{})
+
+	labels, ok := apiService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-api.rule=Host(`example.com`) && PathPrefix(`/api`)",
+		"traefik.http.services.myapp-api.loadbalancer.server.port=8080",
+		"traefik.http.middlewares.myapp-api-strip.stripprefix.prefixes=/api",
+		"traefik.http.routers.myapp-api.middlewares=myapp-api-strip",
+		"traefik.http.routers.myapp-api.entrypoints=websecure",
+		"traefik.http.routers.myapp-api.tls=true",
+		"traefik.http.routers.myapp-api.tls.certresolver=letsencrypt",
+		"traefik.http.routers.myapp-api-http.rule=Host(`example.com`) && PathPrefix(`/api`)",
+		"traefik.http.routers.myapp-api-http.entrypoints=web",
+		"traefik.http.routers.myapp-api-http.middlewares=myapp-api-strip,redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+}
+
+func TestGenerateCompose_WithDomainAndPath_NoHTTPS(t *testing.T) {
+	falseVal := false
+	services := map[string]*config.Config{
+		"api": {
+			Name:   "api",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			Path:   "/api",
+			HTTPS:  &falseVal,
+			Port:   8080,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", 1)
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	apiService := servicesMap["api"].(map[string]interface{})
+
+	labels, ok := apiService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-api.rule=Host(`example.com`) && PathPrefix(`/api`)",
+		"traefik.http.services.myapp-api.loadbalancer.server.port=8080",
+		"traefik.http.middlewares.myapp-api-strip.stripprefix.prefixes=/api",
+		"traefik.http.routers.myapp-api.middlewares=myapp-api-strip",
+		"traefik.http.routers.myapp-api.entrypoints=web",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+
+	// No TLS labels should be present
+	for _, actual := range labelStrings {
+		if strings.Contains(actual, "tls") || strings.Contains(actual, "certresolver") {
+			t.Errorf("Unexpected TLS label in HTTP-only path config: %q", actual)
+		}
+	}
+}
+
 func TestGenerateCompose_NoDomain(t *testing.T) {
 	services := map[string]*config.Config{
 		"web": {

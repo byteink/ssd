@@ -120,6 +120,7 @@ services:
     context: ./apps/web
     dockerfile: ./apps/web/Dockerfile
     domain: example.com         # Enable Traefik routing
+    path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
     depends_on:
@@ -186,6 +187,7 @@ services:
 - `dockerfile`: Dockerfile path (defaults to `./Dockerfile`)
 - `image`: Pre-built image to use (skips build step if specified)
 - `domain`: Domain name for Traefik routing
+- `path`: Path prefix for routing (e.g., `/api`). Requires `domain`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)
 - `port`: Container port (default: `80`)
 - `depends_on`: List of service dependencies
@@ -213,6 +215,7 @@ ssd init -s myserver          # Non-interactive with flags
 - `--stack` - Stack path (e.g., `/dockge/stacks/myapp`)
 - `--service` - Service name (default: `app`)
 - `-d, --domain` - Domain for Traefik routing
+- `--path` - Path prefix for routing (e.g., `/api`)
 - `-p, --port` - Container port
 - `-f, --force` - Overwrite existing `ssd.yaml`
 

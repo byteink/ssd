@@ -14,6 +14,7 @@ type Options struct {
 	Stack   string // Optional: stack path (e.g., /dockge/stacks/myapp)
 	Service string // Optional: service name (default: "app")
 	Domain  string // Optional: domain for Traefik routing
+	Path    string // Optional: path prefix for Traefik routing (e.g., /api)
 	Port    int    // Optional: container port
 	Force   bool   // Optional: overwrite existing ssd.yaml
 }
@@ -50,22 +51,29 @@ func Generate(opts Options) string {
 	}
 	sb.WriteString(fmt.Sprintf("  %s:\n", serviceName))
 
-	// Domain and port - show configured values, comment out unconfigured
+	// Domain, path, port - show configured values, comment out unconfigured
 	hasDomain := opts.Domain != ""
+	hasPath := opts.Path != ""
 	hasPort := opts.Port > 0
 
 	if hasDomain {
 		sb.WriteString(fmt.Sprintf("    domain: %s\n", opts.Domain))
+	}
+	if hasPath {
+		sb.WriteString(fmt.Sprintf("    path: %s\n", opts.Path))
 	}
 	if hasPort {
 		sb.WriteString(fmt.Sprintf("    port: %d\n", opts.Port))
 	}
 
 	// Add commented hints for unconfigured options
-	if !hasDomain || !hasPort {
+	if !hasDomain || !hasPath || !hasPort {
 		sb.WriteString("    # Uncomment and configure as needed:\n")
 		if !hasDomain {
 			sb.WriteString("    # domain: example.com\n")
+		}
+		if !hasPath {
+			sb.WriteString("    # path: /api\n")
 		}
 		if !hasPort {
 			sb.WriteString("    # port: 3000\n")

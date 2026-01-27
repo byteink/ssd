@@ -430,6 +430,13 @@ func runInit(args []string) {
 			}
 			opts.Domain = args[i+1]
 			i += 2
+		case "--path":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --path requires a value")
+				os.Exit(1)
+			}
+			opts.Path = args[i+1]
+			i += 2
 		case "-p", "--port":
 			if i+1 >= len(args) {
 				fmt.Println("Error: --port requires a value")
@@ -471,6 +478,10 @@ func runInit(args []string) {
 		fmt.Print("Domain (e.g., myapp.example.com) [optional]: ")
 		domain, _ := reader.ReadString('\n')
 		opts.Domain = strings.TrimSpace(domain)
+
+		fmt.Print("Path prefix (e.g., /api) [optional]: ")
+		path, _ := reader.ReadString('\n')
+		opts.Path = strings.TrimSpace(path)
 
 		fmt.Print("Port [optional]: ")
 		portStr, _ := reader.ReadString('\n')
@@ -520,6 +531,7 @@ func printInitUsage() {
 	fmt.Println("      --stack STRING    Stack path (e.g., /dockge/stacks/myapp)")
 	fmt.Println("      --service STRING  Service name (default: app)")
 	fmt.Println("  -d, --domain STRING   Domain for Traefik routing")
+	fmt.Println("      --path STRING     Path prefix for routing (e.g., /api)")
 	fmt.Println("  -p, --port INT        Container port")
 	fmt.Println("  -f, --force           Overwrite existing ssd.yaml")
 	fmt.Println()
@@ -533,6 +545,9 @@ func printConfig(cfg *config.Config, indent string) {
 	fmt.Printf("%sstack_path: %s\n", indent, cfg.StackPath())
 	if cfg.Domain != "" {
 		fmt.Printf("%sdomain: %s\n", indent, cfg.Domain)
+	}
+	if cfg.Path != "" {
+		fmt.Printf("%spath: %s\n", indent, cfg.Path)
 	}
 	// HTTPS defaults to true if not explicitly set
 	https := true

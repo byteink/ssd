@@ -23,6 +23,7 @@ services:
   app:
     # Uncomment and configure as needed:
     # domain: example.com
+    # path: /api
     # port: 3000
 `,
 		},
@@ -39,6 +40,7 @@ services:
   app:
     # Uncomment and configure as needed:
     # domain: example.com
+    # path: /api
     # port: 3000
 `,
 		},
@@ -54,6 +56,7 @@ services:
   app:
     domain: myapp.example.com
     # Uncomment and configure as needed:
+    # path: /api
     # port: 3000
 `,
 		},
@@ -70,6 +73,7 @@ services:
     port: 8080
     # Uncomment and configure as needed:
     # domain: example.com
+    # path: /api
 `,
 		},
 		{
@@ -84,6 +88,24 @@ services:
   web:
     # Uncomment and configure as needed:
     # domain: example.com
+    # path: /api
+    # port: 3000
+`,
+		},
+		{
+			name: "with domain and path",
+			opts: Options{
+				Server: "myserver",
+				Domain: "example.com",
+				Path:   "/api",
+			},
+			expected: `server: myserver
+
+services:
+  app:
+    domain: example.com
+    path: /api
+    # Uncomment and configure as needed:
     # port: 3000
 `,
 		},
@@ -94,6 +116,7 @@ services:
 				Stack:   "/dockge/stacks/myapp-prod",
 				Service: "api",
 				Domain:  "api.example.com",
+				Path:    "/api",
 				Port:    3000,
 			},
 			expected: `server: prod-server
@@ -102,6 +125,7 @@ stack: /dockge/stacks/myapp-prod
 services:
   api:
     domain: api.example.com
+    path: /api
     port: 3000
 `,
 		},

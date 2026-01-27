@@ -143,15 +143,38 @@ func GenerateCompose(services map[string]*config.Config, stack string, version i
 // cfg: service configuration
 //
 // Returns a slice of label strings in Docker Compose format
+func routerMiddlewaresLabel(router, middlewares string) string {
+	return fmt.Sprintf("traefik.http.routers.%s.middlewares=%s", router, middlewares)
+}
+
 func generateTraefikLabels(project, name string, cfg *config.Config) []string {
 	routerName := fmt.Sprintf("%s-%s", project, name)
+
+	rule := fmt.Sprintf("Host(`%s`)", cfg.Domain)
+	if cfg.Path != "" {
+		rule = fmt.Sprintf("Host(`%s`) && PathPrefix(`%s`)", cfg.Domain, cfg.Path)
+	}
+
 	labels := []string{
 		"traefik.enable=true",
-		fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", routerName, cfg.Domain),
+		fmt.Sprintf("traefik.http.routers.%s.rule=%s", routerName, rule),
 		fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port=%d", routerName, cfg.Port),
 	}
 
+	// StripPrefix middleware when path routing is used
+	stripMiddleware := ""
+	if cfg.Path != "" {
+		stripName := fmt.Sprintf("%s-strip", routerName)
+		stripMiddleware = stripName
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.middlewares.%s.stripprefix.prefixes=%s", stripName, cfg.Path),
+		)
+	}
+
 	if cfg.UseHTTPS() {
+		if stripMiddleware != "" {
+			labels = append(labels, routerMiddlewaresLabel(routerName, stripMiddleware))
+		}
 		labels = append(labels,
 			fmt.Sprintf("traefik.http.routers.%s.entrypoints=websecure", routerName),
 			fmt.Sprintf("traefik.http.routers.%s.tls=true", routerName),
@@ -159,13 +182,20 @@ func generateTraefikLabels(project, name string, cfg *config.Config) []string {
 		)
 
 		httpRouterName := fmt.Sprintf("%s-http", routerName)
+		httpMiddlewares := "redirect-to-https"
+		if stripMiddleware != "" {
+			httpMiddlewares = stripMiddleware + ",redirect-to-https"
+		}
 		labels = append(labels,
-			fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", httpRouterName, cfg.Domain),
+			fmt.Sprintf("traefik.http.routers.%s.rule=%s", httpRouterName, rule),
 			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", httpRouterName),
-			fmt.Sprintf("traefik.http.routers.%s.middlewares=redirect-to-https", httpRouterName),
+			routerMiddlewaresLabel(httpRouterName, httpMiddlewares),
 			"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
 		)
 	} else {
+		if stripMiddleware != "" {
+			labels = append(labels, routerMiddlewaresLabel(routerName, stripMiddleware))
+		}
 		labels = append(labels,
 			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", routerName),
 		)
