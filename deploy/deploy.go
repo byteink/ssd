@@ -50,6 +50,8 @@ type Options struct {
 	Output io.Writer
 	// Dependencies maps dependency service names to their configs
 	Dependencies map[string]*config.Config
+	// AllServices maps all service names to their configs (used for initial stack creation)
+	AllServices map[string]*config.Config
 }
 
 // Deploy performs a full deployment using the default client
@@ -84,9 +86,13 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	if !stackExists {
 		logln(output, "Stack does not exist, creating...")
 
-		// Generate compose file
+		// Use all services for compose generation if available,
+		// so depends_on references are valid in the compose file
 		services := map[string]*config.Config{
 			cfg.Name: cfg,
+		}
+		if opts != nil && len(opts.AllServices) > 0 {
+			services = opts.AllServices
 		}
 		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), 0)
 		if err != nil {
@@ -110,9 +116,11 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 			return fmt.Errorf("failed to ensure network %s: %w", internalNetwork, err)
 		}
 
-		// Create env file for the service
-		if err := client.CreateEnvFile(ctx, cfg.Name); err != nil {
-			return fmt.Errorf("failed to create env file for %s: %w", cfg.Name, err)
+		// Create env files for all services in the stack
+		for name := range services {
+			if err := client.CreateEnvFile(ctx, name); err != nil {
+				return fmt.Errorf("failed to create env file for %s: %w", name, err)
+			}
 		}
 
 		logln(output, "Stack created successfully")

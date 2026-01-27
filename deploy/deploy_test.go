@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1485,6 +1486,92 @@ func TestDeploy_IntegrationPrebuiltServicePullsInsteadOfBuilds(t *testing.T) {
 	mockClient.AssertNotCalled(t, "Rsync")
 	mockClient.AssertNotCalled(t, "BuildImage")
 	mockClient.AssertNotCalled(t, "UpdateCompose")
+}
+
+func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+		DependsOn:  []string{"postgres"},
+	}
+
+	postgresCfg := &config.Config{
+		Name:   "postgres",
+		Server: "testserver",
+		Stack:  "/stacks/myproject",
+		Image:  "postgres:16",
+	}
+
+	opts := &Options{
+		Dependencies: map[string]*config.Config{
+			"postgres": postgresCfg,
+		},
+		AllServices: map[string]*config.Config{
+			"api":      cfg,
+			"postgres": postgresCfg,
+		},
+	}
+
+	// Stack doesn't exist - should create with ALL services
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		// Compose must contain both api AND postgres services
+		return strings.Contains(content, "api:") && strings.Contains(content, "postgres:")
+	})).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myproject_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "api").Return(nil)
+	mockClient.On("CreateEnvFile", "postgres").Return(nil)
+
+	// Normal deploy flow for api
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("PullImage", "postgres:16").Return(nil)
+	mockClient.On("StartService", "postgres").Return(nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "api").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	// Verify env files created for ALL services, not just the deployed one
+	mockClient.AssertCalled(t, "CreateEnvFile", "api")
+	mockClient.AssertCalled(t, "CreateEnvFile", "postgres")
+}
+
+func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
+	// When AllServices is not provided, should still work with just the current service
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
+	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
+	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
+	mockClient.On("CreateEnvFile", "myapp").Return(nil)
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("StartService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	mockClient.AssertCalled(t, "CreateEnvFile", "myapp")
 }
 
 func TestDeploy_IntegrationSingleServiceOnlyTargetRestarted(t *testing.T) {

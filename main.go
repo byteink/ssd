@@ -133,12 +133,23 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 		}
 	}
 
+	// Load all service configs for initial stack creation
+	allServices := make(map[string]*config.Config)
+	for _, name := range rootCfg.ListServices() {
+		svcCfg, err := rootCfg.GetService(name)
+		if err != nil {
+			continue
+		}
+		allServices[name] = svcCfg
+	}
+
 	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
 
 	client := remote.NewClient(cfg)
 	opts := &deploy.Options{
 		Output:       os.Stdout,
 		Dependencies: depConfigs,
+		AllServices:  allServices,
 	}
 
 	return deploy.DeployWithClient(cfg, client, opts)
