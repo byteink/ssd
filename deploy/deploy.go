@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"sort"
 
 	"github.com/byteink/ssd/compose"
 	"github.com/byteink/ssd/config"
@@ -26,6 +27,16 @@ func logln(w io.Writer, msg string) {
 	}
 }
 
+// sortedKeys returns the keys of a config map in sorted order for deterministic behavior.
+func sortedKeys(m map[string]*config.Config) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // Deployer defines the interface for deployment operations
 type Deployer interface {
 	GetCurrentVersion(ctx context.Context) (int, error)
@@ -39,7 +50,7 @@ type Deployer interface {
 	StackExists(ctx context.Context) (bool, error)
 	CreateStack(ctx context.Context, composeContent string) error
 	EnsureNetwork(ctx context.Context, name string) error
-	CreateEnvFile(ctx context.Context, serviceName string) error
+	CreateEnvFiles(ctx context.Context, serviceNames []string) error
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
@@ -123,11 +134,10 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 		// Create env files BEFORE CreateStack, because docker compose config
 		// validates that referenced env_file paths exist on disk
-		for name := range services {
-			logf(output, "    Creating env file for %s...\n", name)
-			if err := client.CreateEnvFile(ctx, name); err != nil {
-				return fmt.Errorf("failed to create env file for %s: %w", name, err)
-			}
+		envNames := sortedKeys(services)
+		logln(output, "    Creating env files...")
+		if err := client.CreateEnvFiles(ctx, envNames); err != nil {
+			return fmt.Errorf("failed to create env files: %w", err)
 		}
 
 		logln(output, "    Validating compose.yaml...")
@@ -236,10 +246,9 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 			return fmt.Errorf("failed to generate compose.yaml: %w", err)
 		}
 
-		for name := range opts.AllServices {
-			if err := client.CreateEnvFile(ctx, name); err != nil {
-				return fmt.Errorf("failed to create env file for %s: %w", name, err)
-			}
+		envNames := sortedKeys(opts.AllServices)
+		if err := client.CreateEnvFiles(ctx, envNames); err != nil {
+			return fmt.Errorf("failed to create env files: %w", err)
 		}
 
 		if err := client.CreateStack(ctx, newCompose); err != nil {

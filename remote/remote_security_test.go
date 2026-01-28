@@ -145,18 +145,12 @@ func TestShellInjection_StackPathWithDollarSign(t *testing.T) {
 	_, err := client.GetCurrentVersion(context.Background())
 	require.NoError(t, err)
 
-	// Verify UpdateCompose also properly escapes
+	// Verify UpdateCompose also properly escapes (single sed call)
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		// First call reads compose.yaml
-		return strings.Contains(args[1], "cat")
-	})).Return("image: ssd-myapp:1", nil)
-
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		// Second call writes compose.yaml
 		cmd := args[1]
-		return strings.Contains(cmd, "echo") &&
-			(strings.Contains(cmd, "> '/stacks/$HOME/compose.yaml'") ||
-				strings.Contains(cmd, `> "/stacks/\$HOME/compose.yaml"`))
+		return strings.Contains(cmd, "sed -i") &&
+			(strings.Contains(cmd, "'/stacks/$HOME/compose.yaml'") ||
+				strings.Contains(cmd, `"/stacks/$HOME/compose.yaml"`))
 	})).Return("", nil)
 
 	err = client.UpdateCompose(context.Background(), 2)
@@ -288,7 +282,7 @@ func TestShellInjection_DockerfilePathWithSpecialChars(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-// TestShellInjection_ComposeContentWithSpecialChars verifies compose content is properly escaped
+// TestShellInjection_ComposeContentWithSpecialChars verifies UpdateCompose sed pattern is safe
 func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 	cfg := &config.Config{
 		Name:       "myapp",
@@ -300,21 +294,13 @@ func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	// Compose content with single quotes that could break escaping
-	// Image name format: ssd-{project}-{service} where project = basename(stack)
-	composeContent := "services:\n  app:\n    image: ssd-myapp-myapp:1\n    environment:\n      - KEY='value with 'quotes'"
-
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		return strings.Contains(args[1], "cat")
-	})).Return(composeContent, nil)
-
-	// The echo command should properly escape single quotes in the content
+	// sed-based UpdateCompose uses a single call with pipe delimiter
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		// Single quotes in content should be escaped as '\''
-		return strings.Contains(cmd, "echo") &&
-			strings.Contains(cmd, "ssd-myapp-myapp:2") &&
-			!strings.Contains(cmd, "echo 'image: ssd-myapp-myapp:2' > /stacks/myapp/compose.yaml")
+		return strings.Contains(cmd, "sed -i") &&
+			strings.Contains(cmd, "ssd-myapp-myapp") &&
+			strings.Contains(cmd, ":2") &&
+			strings.Contains(cmd, "/stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
 	err := client.UpdateCompose(context.Background(), 2)

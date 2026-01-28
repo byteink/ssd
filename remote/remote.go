@@ -32,6 +32,7 @@ type RemoteClient interface {
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFile(ctx context.Context, serviceName string) error
+	CreateEnvFiles(ctx context.Context, serviceNames []string) error
 	GetEnvFile(ctx context.Context, serviceName string) (string, error)
 	SetEnvVar(ctx context.Context, serviceName, key, value string) error
 	RemoveEnvVar(ctx context.Context, serviceName, key string) error
@@ -45,10 +46,13 @@ var _ RemoteClient = (*Client)(nil)
 
 // Client handles remote operations via SSH
 type Client struct {
-	server      string
-	cfg         *config.Config
-	executor    CommandExecutor
-	findGitRoot func(string) (string, error)
+	server        string
+	cfg           *config.Config
+	executor      CommandExecutor
+	findGitRoot   func(string) (string, error)
+	sshArgs       []string // Extra SSH args (e.g., ControlMaster options)
+	composeCache  string
+	composeCached bool
 }
 
 // defaultGitRoot finds the git repository root for the given directory
@@ -68,6 +72,11 @@ func NewClient(cfg *config.Config) *Client {
 		cfg:         cfg,
 		executor:    NewRealExecutor(),
 		findGitRoot: defaultGitRoot,
+		sshArgs: []string{
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath=/tmp/ssd-%C",
+			"-o", "ControlPersist=60s",
+		},
 	}
 }
 
@@ -83,7 +92,8 @@ func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client
 
 // SSH executes a command on the remote server
 func (c *Client) SSH(ctx context.Context, command string) (string, error) {
-	output, err := c.executor.Run(ctx, "ssh", c.server, command)
+	args := append(c.sshArgs, c.server, command)
+	output, err := c.executor.Run(ctx, "ssh", args...)
 	if err != nil {
 		return "", fmt.Errorf("ssh command failed: %w", err)
 	}
@@ -93,7 +103,8 @@ func (c *Client) SSH(ctx context.Context, command string) (string, error) {
 // SSHInteractive runs an SSH command with output streamed to terminal.
 // Output is streamed in real time via stdout/stderr passthrough.
 func (c *Client) SSHInteractive(ctx context.Context, command string) error {
-	return c.executor.RunInteractive(ctx, "ssh", c.server, command)
+	args := append(c.sshArgs, c.server, command)
+	return c.executor.RunInteractive(ctx, "ssh", args...)
 }
 
 // Rsync syncs local directory to remote server using git archive.
@@ -124,9 +135,14 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 		extractCmd += fmt.Sprintf(" --strip-components=%d", stripN)
 	}
 
-	// Pipeline: git archive | ssh server 'tar extract'
-	pipeline := fmt.Sprintf("%s | ssh %s %s",
+	// Pipeline: git archive | ssh [opts] server 'tar extract'
+	sshCmd := "ssh"
+	if len(c.sshArgs) > 0 {
+		sshCmd += " " + strings.Join(c.sshArgs, " ")
+	}
+	pipeline := fmt.Sprintf("%s | %s %s %s",
 		archiveCmd,
+		sshCmd,
 		c.server,
 		shellescape.Quote(extractCmd))
 
@@ -135,12 +151,18 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 
 // ReadCompose reads the current compose.yaml content from the remote server.
 // Returns empty string (no error) if the file does not exist.
+// Results are cached per Client instance; writes via CreateStack/UpdateCompose invalidate the cache.
 func (c *Client) ReadCompose(ctx context.Context) (string, error) {
+	if c.composeCached {
+		return c.composeCache, nil
+	}
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
 	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
 	if err != nil {
 		return "", nil
 	}
+	c.composeCache = output
+	c.composeCached = true
 	return output, nil
 }
 
@@ -163,18 +185,16 @@ func ParseVersionFromContent(content, imageName string) (int, error) {
 	return 0, nil
 }
 
-// GetCurrentVersion reads the current image version from compose.yaml on the server
+// GetCurrentVersion reads the current image version from compose.yaml on the server.
+// Reuses cached compose content from ReadCompose when available.
 func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
-	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
-	output, err := c.SSH(ctx, fmt.Sprintf("cat %s 2>/dev/null || echo ''", shellescape.Quote(composePath)))
+	content, err := c.ReadCompose(ctx)
 	if err != nil {
-		return 0, nil // No compose.yaml means version 0
+		return 0, nil
 	}
-
-	// Image name format: ssd-{project}-{service} where project = basename(stack)
 	project := filepath.Base(c.cfg.Stack)
 	imageName := fmt.Sprintf("ssd-%s-%s", project, c.cfg.Name)
-	return ParseVersionFromContent(output, imageName)
+	return ParseVersionFromContent(content, imageName)
 }
 
 // BuildImage builds a Docker image on the remote server
@@ -193,28 +213,24 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 	return c.SSHInteractive(ctx, cmd)
 }
 
-// UpdateCompose updates the image tag in compose.yaml
+// UpdateCompose updates the image tag in compose.yaml via server-side sed.
+// Single SSH call instead of read-modify-write.
 func (c *Client) UpdateCompose(ctx context.Context, version int) error {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
 	newImage := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
+	project := filepath.Base(c.cfg.Stack)
 
-	// Read current compose.yaml
-	output, err := c.SSH(ctx, fmt.Sprintf("cat %s", shellescape.Quote(composePath)))
-	if err != nil {
-		return fmt.Errorf("failed to read compose.yaml: %w", err)
+	// sed pattern: replace ssd-project-service:NNN with new image tag
+	// Uses | as delimiter to avoid conflicts with path separators
+	oldPattern := fmt.Sprintf("ssd-%s-%s:[0-9][0-9]*", project, c.cfg.Name)
+	cmd := fmt.Sprintf("sed -i 's|%s|%s|g' %s", oldPattern, newImage, shellescape.Quote(composePath))
+
+	if _, err := c.SSH(ctx, cmd); err != nil {
+		return fmt.Errorf("failed to update compose.yaml: %w", err)
 	}
 
-	// Replace image tag
-	// Image name format: ssd-{project}-{service} where project = basename(stack)
-	project := filepath.Base(c.cfg.Stack)
-	oldImagePattern := regexp.MustCompile(`(image:\s*)(ssd-` + regexp.QuoteMeta(project) + `-` + regexp.QuoteMeta(c.cfg.Name) + `):(\d+)`)
-	newContent := oldImagePattern.ReplaceAllString(output, fmt.Sprintf("${1}%s", newImage))
-
-	// Write back
-	escapedContent := strings.ReplaceAll(newContent, "'", "'\\''")
-	cmd := fmt.Sprintf("echo '%s' > %s", escapedContent, shellescape.Quote(composePath))
-	_, err = c.SSH(ctx, cmd)
-	return err
+	c.composeCached = false
+	return nil
 }
 
 // RestartStack runs docker compose up -d in the stack directory
@@ -329,6 +345,23 @@ func ValidateTempPath(path string) error {
 	}
 
 	return nil
+}
+
+// CreateEnvFiles creates empty {serviceName}.env files for all given services in a single SSH call.
+// Existing files are not overwritten.
+func (c *Client) CreateEnvFiles(ctx context.Context, serviceNames []string) error {
+	if len(serviceNames) == 0 {
+		return nil
+	}
+	stackDir := shellescape.Quote(c.cfg.StackPath())
+	parts := []string{fmt.Sprintf("mkdir -p %s", stackDir)}
+	for _, name := range serviceNames {
+		envPath := filepath.Join(c.cfg.StackPath(), fmt.Sprintf("%s.env", name))
+		quoted := shellescape.Quote(envPath)
+		parts = append(parts, fmt.Sprintf("(test -f %s || install -m 600 /dev/null %s)", quoted, quoted))
+	}
+	_, err := c.SSH(ctx, strings.Join(parts, " && "))
+	return err
 }
 
 // CreateEnvFile creates an empty {serviceName}.env file with mode 600 in the stack directory.
@@ -458,6 +491,7 @@ func (c *Client) CreateStack(ctx context.Context, composeContent string) error {
 		return fmt.Errorf("failed to move compose.yaml.tmp to compose.yaml: %w", err)
 	}
 
+	c.composeCached = false
 	return nil
 }
 

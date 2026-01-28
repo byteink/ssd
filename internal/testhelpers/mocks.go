@@ -118,6 +118,12 @@ func (m *MockRemoteClient) CreateEnvFile(ctx context.Context, serviceName string
 	return args.Error(0)
 }
 
+// CreateEnvFiles mocks batch env file creation
+func (m *MockRemoteClient) CreateEnvFiles(ctx context.Context, serviceNames []string) error {
+	args := m.Called(serviceNames)
+	return args.Error(0)
+}
+
 // GetEnvFile mocks env file retrieval
 func (m *MockRemoteClient) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
 	args := m.Called(serviceName)

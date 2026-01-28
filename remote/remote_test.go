@@ -317,17 +317,13 @@ func TestClient_UpdateCompose(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	// First call reads the compose file
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		return strings.Contains(args[1], "cat /stacks/myapp/compose.yaml")
-	})).Return("services:\n  app:\n    image: ssd-myapp-myapp:4", nil)
-
-	// Second call writes the updated compose file
+	// Single sed call to update image tag in-place
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
-		return strings.Contains(cmd, "echo") &&
-			strings.Contains(cmd, "ssd-myapp-myapp:5") &&
-			strings.Contains(cmd, "> /stacks/myapp/compose.yaml")
+		return strings.Contains(cmd, "sed -i") &&
+			strings.Contains(cmd, "ssd-myapp-myapp") &&
+			strings.Contains(cmd, ":5") &&
+			strings.Contains(cmd, "/stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
 	err := client.UpdateCompose(context.Background(), 5)
@@ -336,17 +332,17 @@ func TestClient_UpdateCompose(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-func TestClient_UpdateCompose_ReadError(t *testing.T) {
+func TestClient_UpdateCompose_SedError(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("file not found"))
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("sed failed"))
 
 	err := client.UpdateCompose(context.Background(), 5)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read compose.yaml")
+	assert.Contains(t, err.Error(), "failed to update compose.yaml")
 }
 
 func TestClient_RestartStack(t *testing.T) {
