@@ -141,6 +141,50 @@ services:
     domain: example.com
 ```
 
+### Multi-domain configuration
+```yaml
+server: myserver
+
+services:
+  web:
+    # Multiple working domains (no redirects)
+    domains:
+      - example.com
+      - www.example.com
+      - api.example.com
+    port: 3000
+```
+
+### Multi-domain with redirects
+```yaml
+server: myserver
+
+services:
+  web:
+    # All domains except redirect_to will redirect to it
+    domains:
+      - example.com
+      - www.example.com
+      - old.example.com
+    redirect_to: example.com    # Optional: enables redirects to this domain
+    port: 3000
+```
+
+Common redirect use cases:
+- **www redirect**: `redirect_to: example.com` with domains `[example.com, www.example.com]`
+- **Reverse www redirect**: `redirect_to: www.example.com` with domains `[www.example.com, example.com]`
+- **Domain migration**: `redirect_to: new.com` with domains `[new.com, old.com, legacy.com]`
+- **Multi-TLD consolidation**: `redirect_to: example.com` with domains `[example.com, example.net, example.org]`
+
+Notes:
+- `redirect_to` is optional - omit it to serve all domains without redirects
+- When `redirect_to` is set, all other domains redirect to it with 302 temporary redirect (flexible, not cached)
+- `redirect_to` must be one of the domains in the `domains` array
+- Redirects preserve path and query parameters
+- Works with both HTTPS and HTTP
+- HTTPS redirects happen after TLS termination (certificates issued for all domains)
+- Cannot use both `domain` and `domains` fields (mutually exclusive)
+
 ## Commands
 
 ### Initialize

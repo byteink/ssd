@@ -25,8 +25,10 @@ type Config struct {
 	Stack       string            `yaml:"stack"`
 	Dockerfile  string            `yaml:"dockerfile"`
 	Context     string            `yaml:"context"`
-	Domain      string            `yaml:"domain"`      // optional, enables Traefik
-	Path        string            `yaml:"path"`        // optional, path prefix for Traefik routing
+	Domain      string            `yaml:"domain"`       // optional, enables Traefik (single domain)
+	Domains     []string          `yaml:"domains"`      // optional, multi-domain support
+	RedirectTo  string            `yaml:"redirect_to"`  // optional, domain to redirect all others to (must be in Domains)
+	Path        string            `yaml:"path"`         // optional, path prefix for Traefik routing
 	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
@@ -125,20 +127,81 @@ func (r *RootConfig) IsSingleService() bool {
 	return len(r.Services) == 0
 }
 
+// validateDomainConfig validates domain and domains fields
+func validateDomainConfig(cfg *Config) error {
+	hasDomain := cfg.Domain != ""
+	hasDomains := cfg.Domains != nil
+
+	if hasDomain && hasDomains {
+		return fmt.Errorf("cannot set both domain and domains")
+	}
+
+	if hasDomain {
+		if err := ValidateDomain(cfg.Domain); err != nil {
+			return fmt.Errorf("invalid domain: %w", err)
+		}
+	}
+
+	if hasDomains {
+		if err := validateDomainsArray(cfg.Domains); err != nil {
+			return err
+		}
+	}
+
+	if cfg.RedirectTo != "" {
+		if err := validateRedirectTo(cfg.RedirectTo, cfg.Domains); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateDomainsArray validates all domains in the domains array
+func validateDomainsArray(domains []string) error {
+	if len(domains) == 0 {
+		return fmt.Errorf("domains cannot be empty")
+	}
+	for i, domain := range domains {
+		if err := ValidateDomain(domain); err != nil {
+			return fmt.Errorf("invalid domain at index %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateRedirectTo validates redirect_to field
+func validateRedirectTo(redirectTo string, domains []string) error {
+	if domains == nil {
+		return fmt.Errorf("redirect_to requires domains to be set")
+	}
+
+	if err := ValidateDomain(redirectTo); err != nil {
+		return fmt.Errorf("invalid redirect_to: %w", err)
+	}
+
+	for _, domain := range domains {
+		if domain == redirectTo {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("redirect_to must be one of the domains in the domains array")
+}
+
 // validateConfig validates all fields of a resolved config
 func validateConfig(cfg *Config) error {
 	if err := ValidateServer(cfg.Server); err != nil {
 		return fmt.Errorf("invalid server: %w", err)
 	}
 
-	if cfg.Domain != "" {
-		if err := ValidateDomain(cfg.Domain); err != nil {
-			return fmt.Errorf("invalid domain: %w", err)
-		}
+	// Validate domain configuration
+	if err := validateDomainConfig(cfg); err != nil {
+		return err
 	}
 
 	if cfg.Path != "" {
-		if cfg.Domain == "" {
+		if cfg.Domain == "" && len(cfg.Domains) == 0 {
 			return fmt.Errorf("path requires domain to be set")
 		}
 		if err := ValidatePath(cfg.Path); err != nil {
@@ -241,6 +304,39 @@ func (c *Config) UseHTTPS() bool {
 		return true
 	}
 	return *c.HTTPS
+}
+
+// PrimaryDomain returns the primary domain for this config
+// Returns redirect_to if set, otherwise Domain field, otherwise first domain from Domains array
+// Returns empty string if none are set
+func (c *Config) PrimaryDomain() string {
+	if c.RedirectTo != "" {
+		return c.RedirectTo
+	}
+	if c.Domain != "" {
+		return c.Domain
+	}
+	if len(c.Domains) > 0 {
+		return c.Domains[0]
+	}
+	return ""
+}
+
+// AliasDomains returns domains that should redirect to the primary domain
+// Returns nil if using single Domain field or if redirect_to is not set
+// When redirect_to is set, returns all domains except redirect_to
+func (c *Config) AliasDomains() []string {
+	if c.RedirectTo == "" {
+		return nil
+	}
+
+	var aliases []string
+	for _, domain := range c.Domains {
+		if domain != c.RedirectTo {
+			aliases = append(aliases, domain)
+		}
+	}
+	return aliases
 }
 
 // ValidateServer validates a server hostname/identifier

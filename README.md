@@ -148,6 +148,42 @@ services:
     domain: example.com
 ```
 
+### Multi-domain configuration (no redirects):
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  web:
+    domains:
+      - example.com
+      - www.example.com
+      - api.example.com
+    port: 3000
+```
+
+All domains work independently, no redirects. Useful for multi-brand apps, different locales, or A/B testing.
+
+### Multi-domain with automatic redirects:
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  web:
+    domains:
+      - example.com
+      - www.example.com
+      - old-domain.com
+    redirect_to: example.com    # All other domains redirect to this
+    port: 3000
+```
+
+When `redirect_to` is set, all other domains automatically redirect to it with a 302 temporary redirect. Common use cases:
+- **www redirect**: Redirect www to non-www (or vice versa)
+- **Domain migration**: Redirect old domains to new primary domain
+- **Multi-TLD consolidation**: Redirect .net, .org to primary .com
+
 ### Full stack example (API + Database):
 ```yaml
 # ssd.yaml
@@ -188,8 +224,10 @@ services:
 - `dockerfile`: Dockerfile path (defaults to `./Dockerfile`)
 - `image`: Pre-built image to use (skips build step if specified)
 - `target`: Docker build target stage for multi-stage builds (e.g., `production`)
-- `domain`: Domain name for Traefik routing
-- `path`: Path prefix for routing (e.g., `/api`). Requires `domain`. Generates `PathPrefix` rule with `StripPrefix` middleware
+- `domain`: Single domain for Traefik routing
+- `domains`: Multiple domains for Traefik routing. Cannot use both `domain` and `domains`
+- `redirect_to`: When set, all domains except this one redirect to it (302 temporary). Must be one of the domains in `domains` array
+- `path`: Path prefix for routing (e.g., `/api`). Requires `domain` or `domains`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)
 - `port`: Container port (default: `80`)
 - `depends_on`: List of service dependencies

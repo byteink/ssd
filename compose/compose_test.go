@@ -1208,3 +1208,306 @@ func TestGenerateTraefikCompose(t *testing.T) {
 		t.Error("acme volume missing in top-level volumes")
 	}
 }
+
+func TestGenerateCompose_WithMultipleDomainsHTTPS(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:       "web",
+			Server:     "myserver",
+			Stack:      "/stacks/myapp",
+			Domains:    []string{"example.com", "www.example.com", "old.example.com"},
+			RedirectTo: "example.com",
+			HTTPS:      &trueVal,
+			Port:       3000,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Primary domain router labels (example.com)
+	expectedPrimaryLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=websecure",
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=3000",
+		"traefik.http.routers.myapp-web-http.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-http.middlewares=redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	// Alias domain redirect labels (www.example.com -> example.com)
+	expectedAliasLabels := []string{
+		"traefik.http.routers.myapp-web-alias-www-example-com.rule=Host(`www.example.com`)",
+		"traefik.http.routers.myapp-web-alias-www-example-com.entrypoints=websecure",
+		"traefik.http.routers.myapp-web-alias-www-example-com.tls=true",
+		"traefik.http.routers.myapp-web-alias-www-example-com.tls.certresolver=letsencrypt",
+		"traefik.http.routers.myapp-web-alias-www-example-com.middlewares=myapp-web-redirect-www-example-com",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.regex=^https://www\\.example\\.com/(.*)",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.replacement=https://example.com/$${1}",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.permanent=false",
+		"traefik.http.routers.myapp-web-alias-www-example-com-http.rule=Host(`www.example.com`)",
+		"traefik.http.routers.myapp-web-alias-www-example-com-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-alias-www-example-com-http.middlewares=redirect-to-https",
+		// old.example.com
+		"traefik.http.routers.myapp-web-alias-old-example-com.rule=Host(`old.example.com`)",
+		"traefik.http.routers.myapp-web-alias-old-example-com.entrypoints=websecure",
+		"traefik.http.routers.myapp-web-alias-old-example-com.tls=true",
+		"traefik.http.routers.myapp-web-alias-old-example-com.tls.certresolver=letsencrypt",
+		"traefik.http.routers.myapp-web-alias-old-example-com.middlewares=myapp-web-redirect-old-example-com",
+		"traefik.http.middlewares.myapp-web-redirect-old-example-com.redirectregex.regex=^https://old\\.example\\.com/(.*)",
+		"traefik.http.middlewares.myapp-web-redirect-old-example-com.redirectregex.replacement=https://example.com/$${1}",
+		"traefik.http.middlewares.myapp-web-redirect-old-example-com.redirectregex.permanent=false",
+		"traefik.http.routers.myapp-web-alias-old-example-com-http.rule=Host(`old.example.com`)",
+		"traefik.http.routers.myapp-web-alias-old-example-com-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-alias-old-example-com-http.middlewares=redirect-to-https",
+	}
+
+	allExpected := append(expectedPrimaryLabels, expectedAliasLabels...)
+
+	for _, expected := range allExpected {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+}
+
+func TestGenerateCompose_WithMultipleDomainsNoHTTPS(t *testing.T) {
+	falseVal := false
+	services := map[string]*config.Config{
+		"web": {
+			Name:       "web",
+			Server:     "myserver",
+			Stack:      "/stacks/myapp",
+			Domains:    []string{"example.com", "www.example.com"},
+			RedirectTo: "example.com",
+			HTTPS:      &falseVal,
+			Port:       8080,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Primary domain router (HTTP only)
+	expectedPrimaryLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=web",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=8080",
+	}
+
+	// Alias redirect (HTTP only)
+	expectedAliasLabels := []string{
+		"traefik.http.routers.myapp-web-alias-www-example-com.rule=Host(`www.example.com`)",
+		"traefik.http.routers.myapp-web-alias-www-example-com.entrypoints=web",
+		"traefik.http.routers.myapp-web-alias-www-example-com.middlewares=myapp-web-redirect-www-example-com",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.regex=^http://www\\.example\\.com/(.*)",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.replacement=http://example.com/$${1}",
+		"traefik.http.middlewares.myapp-web-redirect-www-example-com.redirectregex.permanent=false",
+	}
+
+	allExpected := append(expectedPrimaryLabels, expectedAliasLabels...)
+
+	for _, expected := range allExpected {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+}
+
+func TestGenerateCompose_WithSingleDomainInDomainsArray(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:    "web",
+			Server:  "myserver",
+			Stack:   "/stacks/myapp",
+			Domains: []string{"example.com"},
+			HTTPS:   &trueVal,
+			Port:    3000,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Should behave exactly like single domain field (no redirect labels)
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=websecure",
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=3000",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+
+	// Verify no redirect labels exist
+	for _, label := range labelStrings {
+		if strings.Contains(label, "alias") || strings.Contains(label, "redirectregex") {
+			t.Errorf("Unexpected redirect label found: %s", label)
+		}
+	}
+}
+
+func TestGenerateCompose_WithMultipleDomainsNoRedirect(t *testing.T) {
+	trueVal := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:    "web",
+			Server:  "myserver",
+			Stack:   "/stacks/myapp",
+			Domains: []string{"example.com", "www.example.com", "api.example.com"},
+			HTTPS:   &trueVal,
+			Port:    3000,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	labels, ok := webService["labels"].([]interface{})
+	if !ok {
+		t.Fatal("labels missing or not an array")
+	}
+
+	labelStrings := make([]string, len(labels))
+	for i, label := range labels {
+		labelStrings[i] = label.(string)
+	}
+
+	// Should only have primary domain labels, no redirects
+	expectedLabels := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.myapp-web.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web.entrypoints=websecure",
+		"traefik.http.routers.myapp-web.tls=true",
+		"traefik.http.routers.myapp-web.tls.certresolver=letsencrypt",
+		"traefik.http.services.myapp-web.loadbalancer.server.port=3000",
+		"traefik.http.routers.myapp-web-http.rule=Host(`example.com`)",
+		"traefik.http.routers.myapp-web-http.entrypoints=web",
+		"traefik.http.routers.myapp-web-http.middlewares=redirect-to-https",
+		"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https",
+	}
+
+	for _, expected := range expectedLabels {
+		found := false
+		for _, actual := range labelStrings {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected label %q not found", expected)
+		}
+	}
+
+	// Verify no redirect labels for alias domains exist
+	for _, label := range labelStrings {
+		if strings.Contains(label, "alias") || strings.Contains(label, "redirectregex") {
+			t.Errorf("Unexpected redirect label found: %s", label)
+		}
+	}
+}

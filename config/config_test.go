@@ -1121,6 +1121,258 @@ func TestRootConfig_GetService_ValidatesDomain(t *testing.T) {
 	}
 }
 
+func TestRootConfig_GetService_ValidatesDomains(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *RootConfig
+		serviceName string
+		expectError string
+	}{
+		{
+			name: "both domain and domains set",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domain:  "example.com",
+						Domains: []string{"example.com", "www.example.com"},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "cannot set both domain and domains",
+		},
+		{
+			name: "domains empty array",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domains: []string{},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "domains cannot be empty",
+		},
+		{
+			name: "invalid domain in domains array",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domains: []string{"example.com", "http://bad.com"},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid domain",
+		},
+		{
+			name: "valid single domain in domains array",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domains: []string{"example.com"},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "valid multiple domains",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domains: []string{"example.com", "www.example.com", "old.example.com"},
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "path with domains array",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:    "web",
+						Domains: []string{"example.com", "www.example.com"},
+						Path:    "/api",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+		{
+			name: "redirect_to without domains",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:       "web",
+						RedirectTo: "example.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "redirect_to requires domains",
+		},
+		{
+			name: "redirect_to not in domains array",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:       "web",
+						Domains:    []string{"example.com", "www.example.com"},
+						RedirectTo: "other.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "redirect_to must be one of the domains",
+		},
+		{
+			name: "invalid redirect_to domain format",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:       "web",
+						Domains:    []string{"example.com", "www.example.com"},
+						RedirectTo: "http://example.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "invalid redirect_to",
+		},
+		{
+			name: "valid redirect_to",
+			config: &RootConfig{
+				Server: "myserver",
+				Services: map[string]*Config{
+					"web": {
+						Name:       "web",
+						Domains:    []string{"example.com", "www.example.com", "old.example.com"},
+						RedirectTo: "example.com",
+					},
+				},
+			},
+			serviceName: "web",
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.config.GetService(tt.serviceName)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_PrimaryDomain(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected string
+	}{
+		{
+			name:     "single domain field",
+			cfg:      &Config{Domain: "example.com"},
+			expected: "example.com",
+		},
+		{
+			name:     "domains array with one",
+			cfg:      &Config{Domains: []string{"example.com"}},
+			expected: "example.com",
+		},
+		{
+			name:     "domains array with multiple",
+			cfg:      &Config{Domains: []string{"example.com", "www.example.com", "old.example.com"}},
+			expected: "example.com",
+		},
+		{
+			name:     "redirect_to overrides first domain",
+			cfg:      &Config{Domains: []string{"example.com", "www.example.com", "old.example.com"}, RedirectTo: "www.example.com"},
+			expected: "www.example.com",
+		},
+		{
+			name:     "no domain set",
+			cfg:      &Config{},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.PrimaryDomain())
+		})
+	}
+}
+
+func TestConfig_AliasDomains(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *Config
+		expected []string
+	}{
+		{
+			name:     "single domain field",
+			cfg:      &Config{Domain: "example.com"},
+			expected: nil,
+		},
+		{
+			name:     "domains array with one",
+			cfg:      &Config{Domains: []string{"example.com"}},
+			expected: nil,
+		},
+		{
+			name:     "domains without redirect_to returns nil",
+			cfg:      &Config{Domains: []string{"example.com", "www.example.com", "old.example.com"}},
+			expected: nil,
+		},
+		{
+			name:     "redirect_to set returns all except redirect_to",
+			cfg:      &Config{Domains: []string{"example.com", "www.example.com", "old.example.com"}, RedirectTo: "example.com"},
+			expected: []string{"www.example.com", "old.example.com"},
+		},
+		{
+			name:     "redirect_to in middle of array",
+			cfg:      &Config{Domains: []string{"example.com", "www.example.com", "old.example.com"}, RedirectTo: "www.example.com"},
+			expected: []string{"example.com", "old.example.com"},
+		},
+		{
+			name:     "no domain set",
+			cfg:      &Config{},
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.cfg.AliasDomains())
+		})
+	}
+}
+
 func TestRootConfig_GetService_ValidatesVolumes(t *testing.T) {
 	tests := []struct {
 		name        string

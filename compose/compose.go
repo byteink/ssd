@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/byteink/ssd/config"
 	"gopkg.in/yaml.v3"
@@ -113,7 +114,7 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 		}
 
 		// Add Traefik labels if domain is configured
-		if cfg.Domain != "" {
+		if cfg.PrimaryDomain() != "" {
 			svc.Labels = generateTraefikLabels(project, name, cfg)
 		}
 
@@ -148,14 +149,29 @@ func routerMiddlewaresLabel(router, middlewares string) string {
 }
 
 func generateTraefikLabels(project, name string, cfg *config.Config) []string {
+	primaryDomain := cfg.PrimaryDomain()
+	aliasDomains := cfg.AliasDomains()
+
+	labels := generatePrimaryDomainLabels(project, name, cfg, primaryDomain)
+
+	// Add redirect labels for alias domains
+	for _, aliasDomain := range aliasDomains {
+		labels = append(labels, generateAliasRedirectLabels(project, name, cfg, aliasDomain, primaryDomain)...)
+	}
+
+	return labels
+}
+
+// generatePrimaryDomainLabels creates Traefik labels for the primary domain
+func generatePrimaryDomainLabels(project, name string, cfg *config.Config, domain string) []string {
 	routerName := fmt.Sprintf("%s-%s", project, name)
 
 	// Root path "/" is equivalent to no path (matches everything)
 	hasSubPath := cfg.Path != "" && cfg.Path != "/"
 
-	rule := fmt.Sprintf("Host(`%s`)", cfg.Domain)
+	rule := fmt.Sprintf("Host(`%s`)", domain)
 	if hasSubPath {
-		rule = fmt.Sprintf("Host(`%s`) && PathPrefix(`%s`)", cfg.Domain, cfg.Path)
+		rule = fmt.Sprintf("Host(`%s`) && PathPrefix(`%s`)", domain, cfg.Path)
 	}
 
 	labels := []string{
@@ -199,6 +215,53 @@ func generateTraefikLabels(project, name string, cfg *config.Config) []string {
 		if stripMiddleware != "" {
 			labels = append(labels, routerMiddlewaresLabel(routerName, stripMiddleware))
 		}
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", routerName),
+		)
+	}
+
+	return labels
+}
+
+// generateAliasRedirectLabels creates Traefik labels to redirect an alias domain to the primary domain
+func generateAliasRedirectLabels(project, name string, cfg *config.Config, aliasDomain, primaryDomain string) []string {
+	// Sanitize domain for use in label names (replace dots with hyphens)
+	sanitizedAlias := strings.ReplaceAll(aliasDomain, ".", "-")
+	routerName := fmt.Sprintf("%s-%s-alias-%s", project, name, sanitizedAlias)
+	middlewareName := fmt.Sprintf("%s-%s-redirect-%s", project, name, sanitizedAlias)
+
+	scheme := "http"
+	if cfg.UseHTTPS() {
+		scheme = "https"
+	}
+
+	// Escape dots in regex pattern
+	escapedAlias := strings.ReplaceAll(aliasDomain, ".", "\\.")
+	escapedPrimary := primaryDomain
+
+	labels := []string{
+		fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", routerName, aliasDomain),
+		fmt.Sprintf("traefik.http.routers.%s.middlewares=%s", routerName, middlewareName),
+		fmt.Sprintf("traefik.http.middlewares.%s.redirectregex.regex=^%s://%s/(.*)", middlewareName, scheme, escapedAlias),
+		fmt.Sprintf("traefik.http.middlewares.%s.redirectregex.replacement=%s://%s/$${1}", middlewareName, scheme, escapedPrimary),
+		fmt.Sprintf("traefik.http.middlewares.%s.redirectregex.permanent=false", middlewareName),
+	}
+
+	if cfg.UseHTTPS() {
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=websecure", routerName),
+			fmt.Sprintf("traefik.http.routers.%s.tls=true", routerName),
+			fmt.Sprintf("traefik.http.routers.%s.tls.certresolver=letsencrypt", routerName),
+		)
+
+		// HTTP router for alias (redirects to HTTPS first, then HTTPS redirects to primary domain)
+		httpRouterName := fmt.Sprintf("%s-http", routerName)
+		labels = append(labels,
+			fmt.Sprintf("traefik.http.routers.%s.rule=Host(`%s`)", httpRouterName, aliasDomain),
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", httpRouterName),
+			fmt.Sprintf("traefik.http.routers.%s.middlewares=redirect-to-https", httpRouterName),
+		)
+	} else {
 		labels = append(labels,
 			fmt.Sprintf("traefik.http.routers.%s.entrypoints=web", routerName),
 		)
