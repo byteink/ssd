@@ -1511,3 +1511,239 @@ func TestGenerateCompose_WithMultipleDomainsNoRedirect(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateComposeWithCanary_Basic(t *testing.T) {
+	httpsTrue := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			HTTPS:  &httpsTrue,
+			Port:   3000,
+		},
+	}
+
+	versions := map[string]int{"web": 5}
+	result, err := GenerateComposeWithCanary(services, "/stacks/myapp", versions, "web", 6)
+	if err != nil {
+		t.Fatalf("GenerateComposeWithCanary failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+
+	// Main service has old version
+	webSvc := servicesMap["web"].(map[string]interface{})
+	if webSvc["image"] != "ssd-myapp-web:5" {
+		t.Errorf("main image = %v, want ssd-myapp-web:5", webSvc["image"])
+	}
+
+	// Canary service has new version
+	canarySvc, ok := servicesMap["web-canary"].(map[string]interface{})
+	if !ok {
+		t.Fatal("web-canary service missing")
+	}
+	if canarySvc["image"] != "ssd-myapp-web:6" {
+		t.Errorf("canary image = %v, want ssd-myapp-web:6", canarySvc["image"])
+	}
+
+	// Canary uses main service's env_file
+	if canarySvc["env_file"] != "./web.env" {
+		t.Errorf("canary env_file = %v, want ./web.env", canarySvc["env_file"])
+	}
+}
+
+func TestGenerateComposeWithCanary_TraefikLabelsMatch(t *testing.T) {
+	httpsTrue := true
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			HTTPS:  &httpsTrue,
+			Port:   3000,
+		},
+	}
+
+	versions := map[string]int{"web": 5}
+	result, err := GenerateComposeWithCanary(services, "/stacks/myapp", versions, "web", 6)
+	if err != nil {
+		t.Fatalf("GenerateComposeWithCanary failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webSvc := servicesMap["web"].(map[string]interface{})
+	canarySvc := servicesMap["web-canary"].(map[string]interface{})
+
+	// Both should have labels
+	webLabels := webSvc["labels"].([]interface{})
+	canaryLabels := canarySvc["labels"].([]interface{})
+
+	// Canary must use same Traefik router/service names as main
+	// Both should reference "myapp-web" (project-name), not "myapp-web-canary"
+	for _, label := range canaryLabels {
+		s := label.(string)
+		if strings.Contains(s, "web-canary") {
+			t.Errorf("canary label references 'web-canary' instead of 'web': %s", s)
+		}
+	}
+
+	// Both should have same number of labels (same routing config)
+	if len(webLabels) != len(canaryLabels) {
+		t.Errorf("label count mismatch: main=%d canary=%d", len(webLabels), len(canaryLabels))
+	}
+}
+
+func TestGenerateComposeWithCanary_NoDependsOnOrVolumes(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:      "web",
+			Server:    "myserver",
+			Stack:     "/stacks/myapp",
+			Port:      80,
+			DependsOn: []string{"db"},
+			Volumes:   map[string]string{"data": "/data"},
+		},
+		"db": {
+			Name:   "db",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "postgres:16",
+		},
+	}
+
+	versions := map[string]int{"web": 3, "db": 0}
+	result, err := GenerateComposeWithCanary(services, "/stacks/myapp", versions, "web", 4)
+	if err != nil {
+		t.Fatalf("GenerateComposeWithCanary failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	canarySvc := servicesMap["web-canary"].(map[string]interface{})
+
+	// Canary must not have depends_on
+	if _, ok := canarySvc["depends_on"]; ok {
+		t.Error("canary should not have depends_on")
+	}
+
+	// Canary must not have volumes
+	if _, ok := canarySvc["volumes"]; ok {
+		t.Error("canary should not have volumes")
+	}
+
+	// Main service SHOULD still have depends_on and volumes
+	webSvc := servicesMap["web"].(map[string]interface{})
+	if _, ok := webSvc["depends_on"]; !ok {
+		t.Error("main service should retain depends_on")
+	}
+	if _, ok := webSvc["volumes"]; !ok {
+		t.Error("main service should retain volumes")
+	}
+}
+
+func TestGenerateComposeWithCanary_InheritsHealthCheck(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   3000,
+			HealthCheck: &config.HealthCheck{
+				Cmd:      "curl -f http://localhost:3000/health || exit 1",
+				Interval: "30s",
+				Timeout:  "10s",
+				Retries:  3,
+			},
+		},
+	}
+
+	versions := map[string]int{"web": 1}
+	result, err := GenerateComposeWithCanary(services, "/stacks/myapp", versions, "web", 2)
+	if err != nil {
+		t.Fatalf("GenerateComposeWithCanary failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	canarySvc := servicesMap["web-canary"].(map[string]interface{})
+
+	hc, ok := canarySvc["healthcheck"].(map[string]interface{})
+	if !ok {
+		t.Fatal("canary should have healthcheck")
+	}
+
+	if hc["interval"] != "30s" {
+		t.Errorf("canary healthcheck interval = %v, want 30s", hc["interval"])
+	}
+}
+
+func TestGenerateComposeWithCanary_ServiceNotFound(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	_, err := GenerateComposeWithCanary(services, "/stacks/myapp", map[string]int{"web": 1}, "nonexistent", 2)
+	if err == nil {
+		t.Fatal("expected error for nonexistent canary service")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %v, want 'not found'", err)
+	}
+}
+
+func TestGenerateComposeWithCanary_PrebuiltImage(t *testing.T) {
+	services := map[string]*config.Config{
+		"nginx": {
+			Name:   "nginx",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "nginx:latest",
+			Port:   80,
+		},
+	}
+
+	versions := map[string]int{"nginx": 0}
+	result, err := GenerateComposeWithCanary(services, "/stacks/myapp", versions, "nginx", 1)
+	if err != nil {
+		t.Fatalf("GenerateComposeWithCanary failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	canarySvc := servicesMap["nginx-canary"].(map[string]interface{})
+
+	// Pre-built canary should use same pre-built image
+	if canarySvc["image"] != "nginx:latest" {
+		t.Errorf("canary image = %v, want nginx:latest", canarySvc["image"])
+	}
+}

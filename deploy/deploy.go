@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/byteink/ssd/compose"
 	"github.com/byteink/ssd/config"
@@ -54,6 +55,8 @@ type Deployer interface {
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
+	StopService(ctx context.Context, serviceName string) error
+	WaitForHealthy(ctx context.Context, serviceName string, timeout time.Duration) error
 }
 
 // parseServiceVersions extracts current version numbers from compose.yaml content
@@ -82,6 +85,154 @@ type Options struct {
 	// BuildOnly builds/pulls the image and updates compose.yaml but does not start the service.
 	// Used by deploy-all: build everything first, then docker compose up -d once.
 	BuildOnly bool
+}
+
+const (
+	defaultHealthTimeout = 30 * time.Second
+	maxHealthTimeout     = 5 * time.Minute
+)
+
+// healthTimeout computes how long to wait for a service health check.
+func healthTimeout(cfg *config.Config) time.Duration {
+	if cfg.HealthCheck == nil {
+		return defaultHealthTimeout
+	}
+	interval, _ := time.ParseDuration(cfg.HealthCheck.Interval)
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	retries := cfg.HealthCheck.Retries
+	if retries <= 0 {
+		retries = 3
+	}
+	timeout := time.Duration(retries)*interval + 30*time.Second
+	if timeout > maxHealthTimeout {
+		return maxHealthTimeout
+	}
+	return timeout
+}
+
+// canaryDeploy performs a zero-downtime canary deployment for a single service.
+// It starts a canary container with the new image alongside the old one,
+// waits for it to become healthy, then recreates the main service.
+func canaryDeploy(
+	ctx context.Context,
+	cfg *config.Config,
+	client Deployer,
+	opts *Options,
+	newVersion int,
+	output io.Writer,
+) error {
+	stack := cfg.StackPath()
+	canaryName := cfg.Name + "-canary"
+
+	// Read existing compose to get current versions for all services
+	existingCompose, _ := client.ReadCompose(ctx)
+	currentVersions := parseServiceVersions(existingCompose, stack, opts.AllServices)
+
+	// Step 1: Generate compose with canary (main keeps old version, canary gets new)
+	logln(output, "==> Starting canary deployment...")
+	canaryCompose, err := compose.GenerateComposeWithCanary(
+		opts.AllServices, stack, currentVersions, cfg.Name, newVersion)
+	if err != nil {
+		return fmt.Errorf("failed to generate canary compose: %w", err)
+	}
+
+	envNames := sortedKeys(opts.AllServices)
+	if err := client.CreateEnvFiles(ctx, envNames); err != nil {
+		return fmt.Errorf("failed to create env files: %w", err)
+	}
+
+	if err := client.CreateStack(ctx, canaryCompose); err != nil {
+		return fmt.Errorf("failed to write canary compose: %w", err)
+	}
+
+	// Step 2: Start canary alongside old main
+	logf(output, "    Starting canary %s...\n", canaryName)
+	if err := client.StartService(ctx, canaryName); err != nil {
+		canaryCleanup(ctx, cfg, client, opts, currentVersions)
+		return fmt.Errorf("failed to start canary: %w", err)
+	}
+
+	// Step 3: Wait for canary to be healthy
+	timeout := healthTimeout(cfg)
+	logf(output, "    Waiting for canary health (%v timeout)...\n", timeout)
+	if err := client.WaitForHealthy(ctx, canaryName, timeout); err != nil {
+		logf(output, "    Canary failed health check, rolling back...\n")
+		_ = client.StopService(ctx, canaryName)
+		canaryCleanup(ctx, cfg, client, opts, currentVersions)
+		return fmt.Errorf("canary health check failed: %w", err)
+	}
+
+	// Step 4: Canary healthy — regenerate compose with new version, no canary
+	logln(output, "    Canary healthy, promoting...")
+	currentVersions[cfg.Name] = newVersion
+	finalCompose, err := compose.GenerateCompose(opts.AllServices, stack, currentVersions)
+	if err != nil {
+		return fmt.Errorf("failed to generate final compose: %w", err)
+	}
+
+	if err := client.CreateStack(ctx, finalCompose); err != nil {
+		return fmt.Errorf("failed to write final compose: %w", err)
+	}
+
+	// Step 5: Recreate main service (canary covers traffic during the gap)
+	logf(output, "==> Recreating service %s...\n", cfg.Name)
+	if err := client.StartService(ctx, cfg.Name); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
+	}
+
+	// Step 6: Stop canary
+	logf(output, "    Stopping canary...\n")
+	_ = client.StopService(ctx, canaryName)
+
+	logf(output, "\nDeployed %s version %d successfully! (zero-downtime)\n", cfg.Name, newVersion)
+	return nil
+}
+
+// canaryCleanup restores compose.yaml to the pre-canary state.
+func canaryCleanup(ctx context.Context, cfg *config.Config, client Deployer, opts *Options, versions map[string]int) {
+	cleanCompose, err := compose.GenerateCompose(opts.AllServices, cfg.StackPath(), versions)
+	if err != nil {
+		log.Printf("canary cleanup: failed to generate compose: %v", err)
+		return
+	}
+	if err := client.CreateStack(ctx, cleanCompose); err != nil {
+		log.Printf("canary cleanup: failed to write compose: %v", err)
+	}
+}
+
+// updateComposeVersion updates compose.yaml to reference the new image version.
+// Uses full regeneration when AllServices is available, otherwise falls back to sed replacement.
+func updateComposeVersion(ctx context.Context, cfg *config.Config, client Deployer, opts *Options, newVersion int) error {
+	if opts != nil && len(opts.AllServices) > 0 {
+		existingCompose, _ := client.ReadCompose(ctx)
+		currentVersions := parseServiceVersions(existingCompose, cfg.StackPath(), opts.AllServices)
+		currentVersions[cfg.Name] = newVersion
+
+		newCompose, err := compose.GenerateCompose(opts.AllServices, cfg.StackPath(), currentVersions)
+		if err != nil {
+			return fmt.Errorf("failed to generate compose.yaml: %w", err)
+		}
+
+		envNames := sortedKeys(opts.AllServices)
+		if err := client.CreateEnvFiles(ctx, envNames); err != nil {
+			return fmt.Errorf("failed to create env files: %w", err)
+		}
+
+		if err := client.CreateStack(ctx, newCompose); err != nil {
+			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		}
+		return nil
+	}
+
+	if !cfg.IsPrebuilt() {
+		if err := client.UpdateCompose(ctx, newVersion); err != nil {
+			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Deploy performs a full deployment using the default client
@@ -233,38 +384,26 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 	}
 
-	// Update compose.yaml: regenerate from config when all services are known,
-	// otherwise fall back to regex replacement for the deployed service only
+	// In BuildOnly mode, update compose and return — caller will docker compose up -d once
+	if buildOnly {
+		if err := updateComposeVersion(ctx, cfg, client, opts, newVersion); err != nil {
+			return err
+		}
+		logf(output, "    Built %s version %d\n", cfg.Name, newVersion)
+		return nil
+	}
+
+	// Canary deploy: zero-downtime when service is already running and AllServices available
 	if opts != nil && len(opts.AllServices) > 0 {
-		logln(output, "==> Updating compose.yaml...")
-		existingCompose, _ := client.ReadCompose(ctx)
-		currentVersions := parseServiceVersions(existingCompose, cfg.StackPath(), opts.AllServices)
-		currentVersions[cfg.Name] = newVersion
-
-		newCompose, err := compose.GenerateCompose(opts.AllServices, cfg.StackPath(), currentVersions)
-		if err != nil {
-			return fmt.Errorf("failed to generate compose.yaml: %w", err)
-		}
-
-		envNames := sortedKeys(opts.AllServices)
-		if err := client.CreateEnvFiles(ctx, envNames); err != nil {
-			return fmt.Errorf("failed to create env files: %w", err)
-		}
-
-		if err := client.CreateStack(ctx, newCompose); err != nil {
-			return fmt.Errorf("failed to update compose.yaml: %w", err)
-		}
-	} else if !cfg.IsPrebuilt() {
-		logln(output, "==> Updating compose.yaml...")
-		if err := client.UpdateCompose(ctx, newVersion); err != nil {
-			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		running, _ := client.IsServiceRunning(ctx, cfg.Name)
+		if running {
+			return canaryDeploy(ctx, cfg, client, opts, newVersion, output)
 		}
 	}
 
-	// In BuildOnly mode, skip starting — caller will docker compose up -d once
-	if buildOnly {
-		logf(output, "    Built %s version %d\n", cfg.Name, newVersion)
-		return nil
+	// Non-canary path: first deploy or no AllServices available
+	if err := updateComposeVersion(ctx, cfg, client, opts, newVersion); err != nil {
+		return err
 	}
 
 	logf(output, "==> Starting service %s...\n", cfg.Name)

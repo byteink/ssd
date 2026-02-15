@@ -55,9 +55,30 @@ goreleaser release --snapshot --clean   # Test release locally
 4. Rsync code to temp dir (excludes .git, node_modules, .next)
 5. Build Docker image on server: `ssd-{name}:{version}`
 6. Parse current version from compose.yaml, increment it
-7. Update compose.yaml with new image tag
-8. Run `docker compose up -d` to restart
-9. Clean up temp directory
+7. Canary deploy (if service already running) or direct start (first deploy)
+8. Clean up temp directory
+
+## Canary Zero-Downtime Deployment
+
+Single-service deploys (`ssd deploy <service>`) use a canary strategy to avoid downtime.
+Deploy-all (`ssd deploy` with no args) builds all images first, then does a single `docker compose up -d`.
+
+**How it works:**
+1. Start a temporary canary container (`{name}-canary`) with the new image alongside the old one
+2. Both containers share the same Traefik labels, so Traefik load-balances between them
+3. Wait for canary to pass health check (or reach `running` state if no healthcheck configured)
+4. Regenerate compose.yaml with the new version (no canary entry)
+5. Recreate the main service — canary covers traffic during the brief restart gap
+6. Stop and remove canary
+
+**Canary eligibility** (all must be true):
+- Service is already running (first deploy uses direct start)
+- Not in `BuildOnly` mode (deploy-all builds first, starts later)
+- `AllServices` map is available (needed for compose regeneration)
+
+**Health timeout**: Computed from healthcheck config (`retries * interval + 30s buffer`, max 5 min). Falls back to 30s if no healthcheck configured.
+
+**Rollback on failure**: If canary fails health check, it is stopped and compose.yaml is restored to the pre-canary state. The old service is never touched.
 
 ## Conventions
 

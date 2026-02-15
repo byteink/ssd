@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"al.essio.dev/pkg/shellescape"
@@ -39,6 +40,8 @@ type RemoteClient interface {
 	CreateStack(ctx context.Context, composeContent string) error
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
+	StopService(ctx context.Context, serviceName string) error
+	WaitForHealthy(ctx context.Context, serviceName string, timeout time.Duration) error
 }
 
 // Ensure Client implements RemoteClient
@@ -506,4 +509,57 @@ func (c *Client) StartService(ctx context.Context, serviceName string) error {
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker compose up -d %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
 	return c.SSHInteractive(ctx, cmd)
+}
+
+// StopService stops a specific service in the stack
+func (c *Client) StopService(ctx context.Context, serviceName string) error {
+	stackPath := c.cfg.StackPath()
+	cmd := fmt.Sprintf("cd %s && docker compose stop %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
+	return c.SSHInteractive(ctx, cmd)
+}
+
+// isServiceReady checks docker compose ps JSON output to determine if a service is ready.
+// Returns true if healthy (with healthcheck) or running (without healthcheck).
+func isServiceReady(output string) bool {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return false
+	}
+	// Service with healthcheck: wait for "healthy"
+	if strings.Contains(trimmed, `"Health":"healthy"`) {
+		return true
+	}
+	// Service without healthcheck: "running" is the best signal
+	return strings.Contains(trimmed, `"State":"running"`) &&
+		!strings.Contains(trimmed, `"Health":`)
+}
+
+// WaitForHealthy polls until a service is healthy (or running if no healthcheck).
+// Returns error on timeout or context cancellation.
+func (c *Client) WaitForHealthy(ctx context.Context, serviceName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	stackPath := c.cfg.StackPath()
+	cmd := fmt.Sprintf("cd %s && docker compose ps --format json %s",
+		shellescape.Quote(stackPath), shellescape.Quote(serviceName))
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		output, err := c.SSH(ctx, cmd)
+		if err == nil && isServiceReady(output) {
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for %s to become healthy after %v", serviceName, timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }

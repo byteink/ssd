@@ -13,6 +13,7 @@ Agentless remote deployment tool for Docker Compose stacks.
 - **Agentless**: Only requires SSH access and Docker on the server
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
+- **Zero-downtime**: Canary deployment strategy for seamless updates
 
 ## Installation
 
@@ -314,9 +315,20 @@ ssd help                 # Show help
 3. Rsyncs code to a temp directory (excludes .git, node_modules, .next)
 4. Builds Docker image on the server (or skips if using pre-built `image`)
 5. Parses current version from compose.yaml, increments it
-6. Updates compose.yaml with new image tag
-7. Runs `docker compose up -d` to restart the service and its dependencies
-8. Cleans up temp directory
+6. Canary deploy (zero-downtime) if service is already running, otherwise direct start
+7. Cleans up temp directory
+
+### Zero-Downtime Canary Deployment
+
+When deploying a service that is already running, ssd uses a canary strategy:
+
+1. Start a temporary canary container with the new image alongside the old one
+2. Both containers share Traefik labels, so traffic is load-balanced between them
+3. Wait for canary to pass its health check
+4. Promote: update compose.yaml to the new version and recreate the main service (canary covers the gap)
+5. Remove canary
+
+If the canary fails its health check, it is stopped and compose.yaml is restored. The old service is never touched.
 
 ## Requirements
 

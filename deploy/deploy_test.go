@@ -99,6 +99,16 @@ func (m *MockDeployer) StartService(ctx context.Context, serviceName string) err
 	return args.Error(0)
 }
 
+func (m *MockDeployer) StopService(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
+func (m *MockDeployer) WaitForHealthy(ctx context.Context, serviceName string, timeout time.Duration) error {
+	args := m.Called(serviceName, timeout)
+	return args.Error(0)
+}
+
 func newTestConfig() *config.Config {
 	return &config.Config{
 		Name:       "myapp",
@@ -1539,6 +1549,7 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 	// Normal deploy flow (AllServices triggers regeneration instead of UpdateCompose)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("IsServiceRunning", "api").Return(false, nil)
 	mockClient.On("PullImage", "postgres:16").Return(nil)
 	mockClient.On("StartService", "postgres").Return(nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
@@ -1609,6 +1620,7 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 	// Normal deploy flow for api
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
+	mockClient.On("IsServiceRunning", "api").Return(false, nil)
 	mockClient.On("PullImage", "postgres:16").Return(nil)
 	mockClient.On("StartService", "postgres").Return(nil)
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
@@ -1770,6 +1782,7 @@ func TestDeploy_RegeneratesComposeWithAllServices(t *testing.T) {
 
 	// Regeneration: reads existing compose, generates new, writes
 	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myapp-web:2\n  db:\n    image: postgres:16\n", nil)
+	mockClient.On("IsServiceRunning", "web").Return(false, nil)
 	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
 	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
 		return strings.Contains(content, "web:") &&
@@ -1831,6 +1844,7 @@ func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
 			strings.Contains(content, "ssd-myproject-web:10")
 	})).Return(nil)
 
+	mockClient.On("IsServiceRunning", "api").Return(false, nil)
 	mockClient.On("StartService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1838,4 +1852,231 @@ func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
+}
+
+// --- Canary deployment tests ---
+
+func TestCanaryDeploy_HappyPath(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+	mockClient.On("IsServiceRunning", "web").Return(true, nil)
+	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myproject-web:5\n", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+
+	// Track CreateStack calls to verify canary then final compose
+	var createStackCalls []string
+	mockClient.On("CreateStack", mock.Anything).Run(func(args mock.Arguments) {
+		createStackCalls = append(createStackCalls, args.String(0))
+	}).Return(nil)
+
+	mockClient.On("StartService", "web-canary").Return(nil)
+	mockClient.On("WaitForHealthy", "web-canary", defaultHealthTimeout).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("StopService", "web-canary").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+
+	// First CreateStack: canary compose (web:5 + web-canary:6)
+	require.Len(t, createStackCalls, 2)
+	assert.Contains(t, createStackCalls[0], "web-canary")
+	assert.Contains(t, createStackCalls[0], "ssd-myproject-web:5")
+	assert.Contains(t, createStackCalls[0], "ssd-myproject-web:6")
+
+	// Second CreateStack: final compose (web:6, no canary)
+	assert.NotContains(t, createStackCalls[1], "web-canary")
+	assert.Contains(t, createStackCalls[1], "ssd-myproject-web:6")
+
+	mockClient.AssertCalled(t, "StartService", "web-canary")
+	mockClient.AssertCalled(t, "WaitForHealthy", "web-canary", defaultHealthTimeout)
+	mockClient.AssertCalled(t, "StopService", "web-canary")
+	mockClient.AssertCalled(t, "StartService", "web")
+}
+
+func TestCanaryDeploy_HealthFailure_Rollback(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+	mockClient.On("IsServiceRunning", "web").Return(true, nil)
+	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myproject-web:5\n", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.Anything).Return(nil)
+	mockClient.On("StartService", "web-canary").Return(nil)
+
+	// Health check fails
+	mockClient.On("WaitForHealthy", "web-canary", defaultHealthTimeout).Return(fmt.Errorf("timeout"))
+
+	// Rollback: stop canary, restore clean compose
+	mockClient.On("StopService", "web-canary").Return(nil)
+
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "canary health check failed")
+	mockClient.AssertCalled(t, "StopService", "web-canary")
+	// Main service should never have been restarted
+	mockClient.AssertNotCalled(t, "StartService", "web")
+}
+
+func TestCanaryDeploy_SkipWhenServiceNotRunning(t *testing.T) {
+	// First deploy: service not running, should use non-canary path
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+
+	// Service NOT running — skip canary
+	mockClient.On("IsServiceRunning", "web").Return(false, nil)
+
+	mockClient.On("ReadCompose").Return("", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.Anything).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	// Should use direct path, no canary interaction
+	mockClient.AssertNotCalled(t, "StartService", "web-canary")
+	mockClient.AssertNotCalled(t, "WaitForHealthy", mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "StartService", "web")
+}
+
+func TestCanaryDeploy_SkipForBuildOnly(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+		BuildOnly: true,
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myproject-web:5\n", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.Anything).Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	// BuildOnly skips canary entirely — no service start, no health check
+	mockClient.AssertNotCalled(t, "IsServiceRunning", mock.Anything)
+	mockClient.AssertNotCalled(t, "StartService", mock.Anything)
+	mockClient.AssertNotCalled(t, "WaitForHealthy", mock.Anything, mock.Anything)
+}
+
+func TestCanaryDeploy_CustomHealthTimeout(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		HealthCheck: &config.HealthCheck{
+			Cmd:      "curl -f http://localhost:3000/health || exit 1",
+			Interval: "10s",
+			Timeout:  "5s",
+			Retries:  5,
+		},
+	}
+
+	opts := &Options{
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+	mockClient.On("IsServiceRunning", "web").Return(true, nil)
+	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myproject-web:5\n", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.Anything).Return(nil)
+	mockClient.On("StartService", "web-canary").Return(nil)
+
+	// Expected: 5 retries * 10s + 30s buffer = 80s
+	expectedTimeout := 80 * time.Second
+	mockClient.On("WaitForHealthy", "web-canary", expectedTimeout).Return(nil)
+
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("StopService", "web-canary").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "WaitForHealthy", "web-canary", expectedTimeout)
 }
