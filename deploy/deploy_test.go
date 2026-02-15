@@ -1890,6 +1890,7 @@ func TestCanaryDeploy_HappyPath(t *testing.T) {
 	mockClient.On("StartService", "web-canary").Return(nil)
 	mockClient.On("WaitForHealthy", "web-canary", defaultHealthTimeout).Return(nil)
 	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("WaitForHealthy", "web", defaultHealthTimeout).Return(nil)
 	mockClient.On("StopService", "web-canary").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1909,8 +1910,9 @@ func TestCanaryDeploy_HappyPath(t *testing.T) {
 
 	mockClient.AssertCalled(t, "StartService", "web-canary")
 	mockClient.AssertCalled(t, "WaitForHealthy", "web-canary", defaultHealthTimeout)
-	mockClient.AssertCalled(t, "StopService", "web-canary")
 	mockClient.AssertCalled(t, "StartService", "web")
+	mockClient.AssertCalled(t, "WaitForHealthy", "web", defaultHealthTimeout)
+	mockClient.AssertCalled(t, "StopService", "web-canary")
 }
 
 func TestCanaryDeploy_HealthFailure_Rollback(t *testing.T) {
@@ -2072,6 +2074,7 @@ func TestCanaryDeploy_CustomHealthTimeout(t *testing.T) {
 	mockClient.On("WaitForHealthy", "web-canary", expectedTimeout).Return(nil)
 
 	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("WaitForHealthy", "web", expectedTimeout).Return(nil)
 	mockClient.On("StopService", "web-canary").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -2079,4 +2082,5 @@ func TestCanaryDeploy_CustomHealthTimeout(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertCalled(t, "WaitForHealthy", "web-canary", expectedTimeout)
+	mockClient.AssertCalled(t, "WaitForHealthy", "web", expectedTimeout)
 }

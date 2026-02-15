@@ -182,7 +182,13 @@ func canaryDeploy(
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
-	// Step 6: Stop canary
+	// Step 6: Wait for new main to be healthy before removing canary
+	logf(output, "    Waiting for %s to be ready...\n", cfg.Name)
+	if err := client.WaitForHealthy(ctx, cfg.Name, timeout); err != nil {
+		return fmt.Errorf("new service failed health check after promotion: %w", err)
+	}
+
+	// Step 7: Stop canary
 	logf(output, "    Stopping canary...\n")
 	_ = client.StopService(ctx, canaryName)
 
