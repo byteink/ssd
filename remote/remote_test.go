@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/internal/testhelpers"
@@ -1303,7 +1302,7 @@ func TestClient_StartService_Success(t *testing.T) {
 	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[len(args)-1]
 		return strings.Contains(cmd, "cd /stacks/myapp") &&
-			strings.Contains(cmd, "docker compose up -d web")
+			strings.Contains(cmd, "docker compose up -d --force-recreate web")
 	})).Return(nil)
 
 	err := client.StartService(context.Background(), "web")
@@ -1323,115 +1322,4 @@ func TestClient_StartService_SSHError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
-}
-
-func TestClient_StopService_Success(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[len(args)-1]
-		return strings.Contains(cmd, "cd /stacks/myapp") &&
-			strings.Contains(cmd, "docker compose stop web")
-	})).Return(nil)
-
-	err := client.StopService(context.Background(), "web")
-
-	require.NoError(t, err)
-	mockExec.AssertExpectations(t)
-}
-
-func TestClient_StopService_SSHError(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	mockExec.On("RunInteractive", "ssh", mock.Anything).Return(errors.New("connection refused"))
-
-	err := client.StopService(context.Background(), "web")
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "connection refused")
-}
-
-func TestIsServiceReady(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   bool
-	}{
-		{"healthy service", `{"Name":"app-1","State":"running","Health":"healthy"}`, true},
-		{"running without healthcheck", `{"Name":"app-1","State":"running"}`, true},
-		{"unhealthy service", `{"Name":"app-1","State":"running","Health":"starting"}`, false},
-		{"exited service", `{"Name":"app-1","State":"exited"}`, false},
-		{"empty output", "", false},
-		{"whitespace only", "  \n  ", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isServiceReady(tt.output))
-		})
-	}
-}
-
-func TestClient_WaitForHealthy_AlreadyHealthy(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
-		return strings.Contains(cmd, "docker compose ps --format json web")
-	})).Return(`{"Name":"app-web-1","State":"running","Health":"healthy"}`, nil)
-
-	err := client.WaitForHealthy(context.Background(), "web", 10*time.Second)
-
-	require.NoError(t, err)
-	mockExec.AssertExpectations(t)
-}
-
-func TestClient_WaitForHealthy_RunningNoHealthcheck(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
-		cmd := args[1]
-		return strings.Contains(cmd, "docker compose ps --format json web")
-	})).Return(`{"Name":"app-web-1","State":"running"}`, nil)
-
-	err := client.WaitForHealthy(context.Background(), "web", 10*time.Second)
-
-	require.NoError(t, err)
-}
-
-func TestClient_WaitForHealthy_Timeout(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	// Always return "starting" health — never becomes healthy
-	mockExec.On("Run", "ssh", mock.Anything).Return(
-		`{"Name":"app-web-1","State":"running","Health":"starting"}`, nil)
-
-	err := client.WaitForHealthy(context.Background(), "web", 3*time.Second)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "timeout waiting for web")
-}
-
-func TestClient_WaitForHealthy_ContextCancelled(t *testing.T) {
-	cfg := newTestConfig()
-	mockExec := new(testhelpers.MockExecutor)
-	client := NewClientWithExecutor(cfg, mockExec)
-
-	mockExec.On("Run", "ssh", mock.Anything).Return("", nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := client.WaitForHealthy(ctx, "web", 30*time.Second)
-
-	require.Error(t, err)
 }

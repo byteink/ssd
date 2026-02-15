@@ -45,57 +45,10 @@ type Network struct {
 	Driver   string `yaml:"driver,omitempty"`
 }
 
-// buildService creates a compose Service definition from a config.
-// project: project name derived from stack path
-// name: service name (used for image naming and env_file)
-// labelName: service name used for Traefik label generation (may differ for canary)
-// cfg: service configuration
-// version: image version tag
-// internalNetwork: project-specific internal network name
-func buildService(project, name, labelName string, cfg *config.Config, version int, internalNetwork string) Service {
-	svc := Service{
-		Restart:  "unless-stopped",
-		EnvFile:  fmt.Sprintf("./%s.env", name),
-		Networks: []string{"traefik_web", internalNetwork},
-	}
-
-	if cfg.IsPrebuilt() {
-		svc.Image = cfg.Image
-	} else {
-		svc.Image = fmt.Sprintf("ssd-%s-%s:%d", project, name, version)
-	}
-
-	if len(cfg.Volumes) > 0 {
-		svc.Volumes = make([]string, 0, len(cfg.Volumes))
-		for volumeName, mountPath := range cfg.Volumes {
-			svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", volumeName, mountPath))
-		}
-	}
-
-	if len(cfg.DependsOn) > 0 {
-		svc.DependsOn = cfg.DependsOn
-	}
-
-	if cfg.HealthCheck != nil {
-		svc.HealthCheck = &HealthCheck{
-			Test:     []string{"CMD", "sh", "-c", cfg.HealthCheck.Cmd},
-			Interval: cfg.HealthCheck.Interval,
-			Timeout:  cfg.HealthCheck.Timeout,
-			Retries:  cfg.HealthCheck.Retries,
-		}
-	}
-
-	if cfg.PrimaryDomain() != "" {
-		svc.Labels = generateTraefikLabels(project, labelName, cfg)
-	}
-
-	return svc
-}
-
 // GenerateCompose generates a docker-compose.yaml file for the given services
 // services: map of service name to config
 // stack: full path to stack directory (used to derive project name)
-// versions: map of service name to version number
+// version: version number to tag built images with
 //
 // Returns the generated YAML as a string, or an error
 func GenerateCompose(services map[string]*config.Config, stack string, versions map[string]int) (string, error) {
@@ -118,16 +71,57 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 		},
 	}
 
+	// Track which volumes are used
 	volumesUsed := make(map[string]bool)
 
+	// Generate service definitions
 	for name, cfg := range services {
-		svc := buildService(project, name, name, cfg, versions[name], internalNetwork)
-		for volumeName := range cfg.Volumes {
-			volumesUsed[volumeName] = true
+		svc := Service{
+			Restart:  "unless-stopped",
+			EnvFile:  fmt.Sprintf("./%s.env", name),
+			Networks: []string{"traefik_web", internalNetwork},
 		}
+
+		// Set image name
+		if cfg.IsPrebuilt() {
+			svc.Image = cfg.Image
+		} else {
+			svc.Image = fmt.Sprintf("ssd-%s-%s:%d", project, name, versions[name])
+		}
+
+		// Add volume mounts
+		if len(cfg.Volumes) > 0 {
+			svc.Volumes = make([]string, 0, len(cfg.Volumes))
+			for volumeName, mountPath := range cfg.Volumes {
+				svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", volumeName, mountPath))
+				volumesUsed[volumeName] = true
+			}
+		}
+
+		// Add depends_on if configured
+		if len(cfg.DependsOn) > 0 {
+			svc.DependsOn = cfg.DependsOn
+		}
+
+		// Add healthcheck if configured
+		if cfg.HealthCheck != nil {
+			svc.HealthCheck = &HealthCheck{
+				Test:     []string{"CMD", "sh", "-c", cfg.HealthCheck.Cmd},
+				Interval: cfg.HealthCheck.Interval,
+				Timeout:  cfg.HealthCheck.Timeout,
+				Retries:  cfg.HealthCheck.Retries,
+			}
+		}
+
+		// Add Traefik labels if domain is configured
+		if cfg.PrimaryDomain() != "" {
+			svc.Labels = generateTraefikLabels(project, name, cfg)
+		}
+
 		compose.Services[name] = svc
 	}
 
+	// Add volumes section if any volumes are used
 	if len(volumesUsed) > 0 {
 		compose.Volumes = make(map[string]interface{})
 		for volumeName := range volumesUsed {
@@ -135,74 +129,7 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 		}
 	}
 
-	data, err := yaml.Marshal(compose)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal compose file: %w", err)
-	}
-
-	return string(data), nil
-}
-
-// GenerateComposeWithCanary generates compose YAML with a canary service alongside all services.
-// The canary clones the target service's Traefik labels, networks, healthcheck, and env_file
-// but uses "{canaryName}-canary" as its compose service name.
-// Canary has no depends_on or volumes (it is ephemeral).
-func GenerateComposeWithCanary(
-	services map[string]*config.Config,
-	stack string,
-	versions map[string]int,
-	canaryName string,
-	canaryVersion int,
-) (string, error) {
-	if len(services) == 0 {
-		return "", fmt.Errorf("at least one service is required")
-	}
-
-	canaryCfg, exists := services[canaryName]
-	if !exists {
-		return "", fmt.Errorf("canary service %q not found in services", canaryName)
-	}
-
-	project := filepath.Base(stack)
-	internalNetwork := project + "_internal"
-
-	compose := ComposeFile{
-		Services: make(map[string]Service),
-		Networks: map[string]Network{
-			"traefik_web": {
-				External: true,
-			},
-			internalNetwork: {
-				Driver: "bridge",
-			},
-		},
-	}
-
-	volumesUsed := make(map[string]bool)
-
-	for name, cfg := range services {
-		svc := buildService(project, name, name, cfg, versions[name], internalNetwork)
-		for volumeName := range cfg.Volumes {
-			volumesUsed[volumeName] = true
-		}
-		compose.Services[name] = svc
-	}
-
-	// Build canary: same Traefik labels as main (labelName = canaryName), no depends_on, no volumes
-	canary := buildService(project, canaryName, canaryName, canaryCfg, canaryVersion, internalNetwork)
-	canary.DependsOn = nil
-	canary.Volumes = nil
-	// Use the main service's env_file
-	canary.EnvFile = fmt.Sprintf("./%s.env", canaryName)
-	compose.Services[canaryName+"-canary"] = canary
-
-	if len(volumesUsed) > 0 {
-		compose.Volumes = make(map[string]interface{})
-		for volumeName := range volumesUsed {
-			compose.Volumes[volumeName] = nil
-		}
-	}
-
+	// Marshal to YAML
 	data, err := yaml.Marshal(compose)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal compose file: %w", err)
