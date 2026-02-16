@@ -329,6 +329,7 @@ func GenerateTraefikCompose(email string) string {
 					"--api.dashboard=true",
 					"--providers.docker=true",
 					"--providers.docker.exposedbydefault=false",
+					"--providers.docker.network=traefik_web",
 					"--entrypoints.web.address=:80",
 					"--entrypoints.websecure.address=:443",
 					"--certificatesresolvers.letsencrypt.acme.email=" + email,
@@ -338,17 +339,14 @@ func GenerateTraefikCompose(email string) string {
 				Networks: []string{"traefik_web"},
 				Volumes: []string{
 					"/var/run/docker.sock:/var/run/docker.sock:ro",
-					"acme:/acme.json",
+					"/stacks/traefik/acme.json:/acme.json",
 				},
 			},
 		},
 		Networks: map[string]Network{
 			"traefik_web": {
-				Driver: "bridge",
+				External: true,
 			},
-		},
-		Volumes: map[string]interface{}{
-			"acme": nil,
 		},
 	}
 

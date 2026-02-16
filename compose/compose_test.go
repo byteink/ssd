@@ -1307,19 +1307,10 @@ func TestGenerateTraefikCompose(t *testing.T) {
 	if !ok {
 		t.Fatal("traefik_web network definition missing")
 	}
-	if traefikNet["driver"] != "bridge" {
-		t.Error("traefik_web network should use bridge driver")
+	if traefikNet["external"] != true {
+		t.Error("traefik_web network should be external")
 	}
 
-	// Verify top-level volumes section for acme.json
-	volumesMap, ok := parsed["volumes"].(map[string]interface{})
-	if !ok {
-		t.Fatal("volumes section missing or not a map")
-	}
-
-	if _, ok := volumesMap["acme"]; !ok {
-		t.Error("acme volume missing in top-level volumes")
-	}
 }
 
 func TestGenerateCompose_WithMultipleDomainsHTTPS(t *testing.T) {
