@@ -19,16 +19,52 @@ type ComposeFile struct {
 
 // Service represents a Docker Compose service definition
 type Service struct {
-	Image       string       `yaml:"image"`
-	Restart     string       `yaml:"restart"`
-	EnvFile     string       `yaml:"env_file,omitempty"`
-	Ports       []string     `yaml:"ports,omitempty"`
-	Command     []string     `yaml:"command,omitempty"`
-	Networks    []string     `yaml:"networks"`
-	Volumes     []string     `yaml:"volumes,omitempty"`
-	Labels      []string     `yaml:"labels,omitempty"`
-	DependsOn   []string     `yaml:"depends_on,omitempty"`
-	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty"`
+	Image       string           `yaml:"image"`
+	Restart     string           `yaml:"restart"`
+	EnvFile     string           `yaml:"env_file,omitempty"`
+	Ports       []string         `yaml:"ports,omitempty"`
+	Command     []string         `yaml:"command,omitempty"`
+	Networks    []string         `yaml:"networks"`
+	Volumes     []string         `yaml:"volumes,omitempty"`
+	Labels      []string         `yaml:"labels,omitempty"`
+	DependsOn   *ComposeDependsOn `yaml:"depends_on,omitempty"`
+	HealthCheck *HealthCheck     `yaml:"healthcheck,omitempty"`
+}
+
+// ComposeDependsOn marshals as a simple list when no conditions are set,
+// or as a map with conditions when any dependency specifies one.
+type ComposeDependsOn struct {
+	Deps config.Dependencies
+}
+
+// MarshalYAML outputs the appropriate depends_on format.
+func (c ComposeDependsOn) MarshalYAML() (interface{}, error) {
+	if len(c.Deps) == 0 {
+		return nil, nil
+	}
+
+	if !c.Deps.HasConditions() {
+		return c.Deps.Names(), nil
+	}
+
+	// Long-form map output, preserving order
+	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, dep := range c.Deps {
+		condition := dep.Condition
+		if condition == "" {
+			condition = "service_started"
+		}
+		valNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		valNode.Content = append(valNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "condition", Tag: "!!str"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: condition, Tag: "!!str"},
+		)
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: dep.Name, Tag: "!!str"},
+			valNode,
+		)
+	}
+	return node, nil
 }
 
 // HealthCheck represents a Docker Compose healthcheck definition
@@ -100,7 +136,7 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 
 		// Add depends_on if configured
 		if len(cfg.DependsOn) > 0 {
-			svc.DependsOn = cfg.DependsOn
+			svc.DependsOn = &ComposeDependsOn{Deps: cfg.DependsOn}
 		}
 
 		// Add healthcheck if configured

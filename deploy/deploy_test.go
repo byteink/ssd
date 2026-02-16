@@ -966,7 +966,7 @@ func TestDeploy_DependencyNotRunning_Started(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db"},
+		DependsOn:  config.Dependencies{{Name: "db"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)
@@ -998,7 +998,7 @@ func TestDeploy_DependencyRunning_NotRestarted(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db"},
+		DependsOn:  config.Dependencies{{Name: "db"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)
@@ -1029,7 +1029,7 @@ func TestDeploy_MultipleDependencies_AllHandled(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db", "redis", "cache"},
+		DependsOn:  config.Dependencies{{Name: "db"}, {Name: "redis"}, {Name: "cache"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)
@@ -1069,7 +1069,7 @@ func TestDeploy_DependencyCheckError_FailsDeployment(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db"},
+		DependsOn:  config.Dependencies{{Name: "db"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)
@@ -1095,7 +1095,7 @@ func TestDeploy_DependencyStartError_FailsDeployment(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db"},
+		DependsOn:  config.Dependencies{{Name: "db"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)
@@ -1148,7 +1148,7 @@ func TestDeploy_PrebuiltDependency_PullsImage(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"postgres"},
+		DependsOn:  config.Dependencies{{Name: "postgres"}},
 	}
 
 	// Pre-built postgres dependency
@@ -1196,7 +1196,7 @@ func TestDeploy_PrebuiltDependency_PullError(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"postgres"},
+		DependsOn:  config.Dependencies{{Name: "postgres"}},
 	}
 
 	postgresCfg := &config.Config{
@@ -1234,7 +1234,7 @@ func TestDeploy_CustomBuildDependency_NoPull(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"api"},
+		DependsOn:  config.Dependencies{{Name: "api"}},
 	}
 
 	// Custom-built API dependency (no Image field)
@@ -1354,7 +1354,7 @@ func TestDeploy_IntegrationWithStoppedDependency(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db", "redis"},
+		DependsOn:  config.Dependencies{{Name: "db"}, {Name: "redis"}},
 	}
 
 	dbCfg := &config.Config{
@@ -1418,7 +1418,7 @@ func TestDeploy_IntegrationWithRunningDependency(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"db", "redis"},
+		DependsOn:  config.Dependencies{{Name: "db"}, {Name: "redis"}},
 	}
 
 	dbCfg := &config.Config{
@@ -1507,7 +1507,7 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 		Stack:      "/stacks/myproject",
 		Dockerfile: "./Dockerfile",
 		Context:    "./api",
-		DependsOn:  []string{"postgres"},
+		DependsOn:  config.Dependencies{{Name: "postgres"}},
 	}
 
 	postgresCfg := &config.Config{
@@ -1576,7 +1576,7 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 		Stack:      "/stacks/myproject",
 		Dockerfile: "./Dockerfile",
 		Context:    "./api",
-		DependsOn:  []string{"postgres"},
+		DependsOn:  config.Dependencies{{Name: "postgres"}},
 	}
 
 	postgresCfg := &config.Config{
@@ -1661,7 +1661,7 @@ func TestDeploy_BuildOnly_SkipsStartAndDeps(t *testing.T) {
 		Stack:      "/stacks/myapp",
 		Dockerfile: "./Dockerfile",
 		Context:    ".",
-		DependsOn:  []string{"postgres"},
+		DependsOn:  config.Dependencies{{Name: "postgres"}},
 	}
 
 	mockClient.On("StackExists").Return(true, nil)

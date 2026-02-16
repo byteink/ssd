@@ -182,7 +182,7 @@ When `image` is set, ssd pulls it instead of building.
 | `path` | — | Path prefix for routing (e.g., `/api`). Requires `domain` |
 | `https` | `true` | Enable HTTPS via Let's Encrypt |
 | `port` | `80` | Container port |
-| `depends_on` | — | List of dependency services |
+| `depends_on` | — | Service dependencies (list or map with conditions) |
 | `volumes` | — | Named volumes (`name: mount_path`) |
 | `healthcheck` | — | Health check (cmd, interval, timeout, retries) |
 

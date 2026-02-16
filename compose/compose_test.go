@@ -945,7 +945,7 @@ func TestGenerateCompose_WithDependsOn(t *testing.T) {
 			Server:    "myserver",
 			Stack:     "/stacks/myapp",
 			Port:      80,
-			DependsOn: []string{"db", "redis"},
+			DependsOn: config.Dependencies{{Name: "db"}, {Name: "redis"}},
 		},
 		"db": {
 			Name:   "db",
@@ -1039,6 +1039,119 @@ func TestGenerateCompose_WithoutDependsOn(t *testing.T) {
 	// Verify depends_on does not exist
 	if _, ok := webService["depends_on"]; ok {
 		t.Error("depends_on should not be present when not configured")
+	}
+}
+
+func TestGenerateCompose_WithDependsOnConditions(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			DependsOn: config.Dependencies{
+				{Name: "db", Condition: "service_healthy"},
+				{Name: "redis", Condition: "service_started"},
+			},
+		},
+		"db": {
+			Name:   "db",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "postgres:16-alpine",
+		},
+		"redis": {
+			Name:   "redis",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "redis:7-alpine",
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1, "db": 1, "redis": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// depends_on should be a map when conditions are present
+	dependsOn, ok := webService["depends_on"].(map[string]interface{})
+	if !ok {
+		t.Fatal("depends_on should be a map when conditions are present")
+	}
+
+	dbDep := dependsOn["db"].(map[string]interface{})
+	if dbDep["condition"] != "service_healthy" {
+		t.Errorf("db condition = %v, want service_healthy", dbDep["condition"])
+	}
+
+	redisDep := dependsOn["redis"].(map[string]interface{})
+	if redisDep["condition"] != "service_started" {
+		t.Errorf("redis condition = %v, want service_started", redisDep["condition"])
+	}
+}
+
+func TestGenerateCompose_WithDependsOnMixedConditions(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			DependsOn: config.Dependencies{
+				{Name: "db", Condition: "service_healthy"},
+				{Name: "redis"}, // no condition
+			},
+		},
+		"db": {
+			Name:   "db",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "postgres:16-alpine",
+		},
+		"redis": {
+			Name:   "redis",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Image:  "redis:7-alpine",
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1, "db": 1, "redis": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+
+	// Mixed conditions should output map form
+	dependsOn, ok := webService["depends_on"].(map[string]interface{})
+	if !ok {
+		t.Fatal("depends_on should be a map when any condition is present")
+	}
+
+	dbDep := dependsOn["db"].(map[string]interface{})
+	if dbDep["condition"] != "service_healthy" {
+		t.Errorf("db condition = %v, want service_healthy", dbDep["condition"])
+	}
+
+	// No explicit condition defaults to service_started in output
+	redisDep := dependsOn["redis"].(map[string]interface{})
+	if redisDep["condition"] != "service_started" {
+		t.Errorf("redis condition = %v, want service_started", redisDep["condition"])
 	}
 }
 

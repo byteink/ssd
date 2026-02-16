@@ -122,7 +122,7 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
-    depends_on:
+    depends_on:                     # Simple list or map with conditions
       - db
       - redis
     volumes:
@@ -134,6 +134,21 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+### Dependency health conditions
+```yaml
+server: myserver
+
+services:
+  web:
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+```
+
+Conditions: `service_started` (default), `service_healthy` (requires healthcheck), `service_completed_successfully`.
 
 ### Pre-built image (skip build)
 ```yaml

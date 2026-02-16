@@ -10,6 +10,74 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Dependency represents a service dependency with an optional condition.
+type Dependency struct {
+	Name      string
+	Condition string
+}
+
+// Dependencies can be unmarshaled from either a YAML sequence of strings
+// or a YAML mapping with conditions.
+type Dependencies []Dependency
+
+// UnmarshalYAML handles both list and map forms of depends_on.
+func (d *Dependencies) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		var names []string
+		if err := node.Decode(&names); err != nil {
+			return err
+		}
+		deps := make(Dependencies, len(names))
+		for i, name := range names {
+			deps[i] = Dependency{Name: name}
+		}
+		*d = deps
+		return nil
+
+	case yaml.MappingNode:
+		type conditionSpec struct {
+			Condition string `yaml:"condition"`
+		}
+		deps := make(Dependencies, 0, len(node.Content)/2)
+		for i := 0; i < len(node.Content); i += 2 {
+			name := node.Content[i].Value
+			var spec conditionSpec
+			if err := node.Content[i+1].Decode(&spec); err != nil {
+				return err
+			}
+			deps = append(deps, Dependency{Name: name, Condition: spec.Condition})
+		}
+		*d = deps
+		return nil
+
+	default:
+		return fmt.Errorf("depends_on must be a list or a map")
+	}
+}
+
+// Names returns the dependency names as a string slice.
+func (d Dependencies) Names() []string {
+	if len(d) == 0 {
+		return nil
+	}
+	names := make([]string, len(d))
+	for i, dep := range d {
+		names[i] = dep.Name
+	}
+	return names
+}
+
+// HasConditions returns true if any dependency specifies a condition.
+func (d Dependencies) HasConditions() bool {
+	for _, dep := range d {
+		if dep.Condition != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // HealthCheck represents Docker healthcheck configuration
 type HealthCheck struct {
 	Cmd      string `yaml:"cmd"`
@@ -33,7 +101,7 @@ type Config struct {
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
 	Target      string            `yaml:"target"`      // Docker build target stage
-	DependsOn   []string          `yaml:"depends_on"`
+	DependsOn   Dependencies      `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
 }
@@ -209,6 +277,10 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if err := validateDependsOn(cfg.DependsOn); err != nil {
+		return err
+	}
+
 	for volumeName := range cfg.Volumes {
 		if err := ValidateVolumeName(volumeName); err != nil {
 			return fmt.Errorf("invalid volume name %q: %w", volumeName, err)
@@ -225,6 +297,22 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	return nil
+}
+
+// validateDependsOn validates dependency conditions
+func validateDependsOn(deps Dependencies) error {
+	valid := map[string]bool{
+		"":                               true,
+		"service_started":                true,
+		"service_healthy":                true,
+		"service_completed_successfully": true,
+	}
+	for _, dep := range deps {
+		if !valid[dep.Condition] {
+			return fmt.Errorf("invalid condition %q for dependency %q: must be service_started, service_healthy, or service_completed_successfully", dep.Condition, dep.Name)
+		}
+	}
 	return nil
 }
 

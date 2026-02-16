@@ -125,7 +125,7 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
-    depends_on:
+    depends_on:                     # Simple list or map with conditions
       - db
       - redis
     volumes:
@@ -137,6 +137,22 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+### Dependency health conditions:
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  web:
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+```
+
+Conditions: `service_started` (default), `service_healthy` (requires healthcheck), `service_completed_successfully`.
 
 ### Using pre-built images (skip build):
 ```yaml
@@ -231,7 +247,7 @@ services:
 - `path`: Path prefix for routing (e.g., `/api`). Requires `domain` or `domains`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)
 - `port`: Container port (default: `80`)
-- `depends_on`: List of service dependencies
+- `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
 - `healthcheck`: Health check configuration
   - `cmd`: Health check command

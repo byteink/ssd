@@ -510,9 +510,10 @@ func TestApplyDefaults_PortPreserved(t *testing.T) {
 
 func TestLoadFromBytes_DependsOn(t *testing.T) {
 	tests := []struct {
-		name     string
-		yaml     string
-		expected []string
+		name          string
+		yaml          string
+		expectedNames []string
+		expectedDeps  Dependencies
 	}{
 		{
 			name: "single dependency",
@@ -521,7 +522,8 @@ services:
   web:
     name: web
     depends_on: [db]`,
-			expected: []string{"db"},
+			expectedNames: []string{"db"},
+			expectedDeps:  Dependencies{{Name: "db"}},
 		},
 		{
 			name: "multiple dependencies",
@@ -530,7 +532,8 @@ services:
   web:
     name: web
     depends_on: [db, redis]`,
-			expected: []string{"db", "redis"},
+			expectedNames: []string{"db", "redis"},
+			expectedDeps:  Dependencies{{Name: "db"}, {Name: "redis"}},
 		},
 		{
 			name: "empty depends_on",
@@ -539,7 +542,8 @@ services:
   web:
     name: web
     depends_on: []`,
-			expected: []string{},
+			expectedNames: nil,
+			expectedDeps:  Dependencies{},
 		},
 		{
 			name: "no depends_on field",
@@ -547,7 +551,39 @@ services:
 services:
   web:
     name: web`,
-			expected: nil,
+			expectedNames: nil,
+			expectedDeps:  nil,
+		},
+		{
+			name: "long-form with conditions",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started`,
+			expectedNames: []string{"db", "redis"},
+			expectedDeps: Dependencies{
+				{Name: "db", Condition: "service_healthy"},
+				{Name: "redis", Condition: "service_started"},
+			},
+		},
+		{
+			name: "long-form service_completed_successfully",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    depends_on:
+      migration:
+        condition: service_completed_successfully`,
+			expectedNames: []string{"migration"},
+			expectedDeps: Dependencies{
+				{Name: "migration", Condition: "service_completed_successfully"},
+			},
 		},
 	}
 
@@ -559,11 +595,64 @@ services:
 			svc, err := cfg.GetService("web")
 			require.NoError(t, err)
 
-			if tt.expected == nil {
+			if tt.expectedDeps == nil {
 				assert.Nil(t, svc.DependsOn)
 			} else {
-				assert.Equal(t, tt.expected, svc.DependsOn)
+				assert.Equal(t, tt.expectedDeps, svc.DependsOn)
 			}
+			assert.Equal(t, tt.expectedNames, svc.DependsOn.Names())
+		})
+	}
+}
+
+func TestLoadFromBytes_DependsOn_InvalidCondition(t *testing.T) {
+	input := `server: myserver
+services:
+  web:
+    name: web
+    depends_on:
+      db:
+        condition: invalid_condition`
+
+	cfg, err := LoadFromBytes([]byte(input))
+	require.NoError(t, err)
+
+	_, err = cfg.GetService("web")
+	assert.ErrorContains(t, err, "invalid condition")
+}
+
+func TestDependencies_Names(t *testing.T) {
+	tests := []struct {
+		name     string
+		deps     Dependencies
+		expected []string
+	}{
+		{"nil", nil, nil},
+		{"empty", Dependencies{}, nil},
+		{"simple", Dependencies{{Name: "db"}, {Name: "redis"}}, []string{"db", "redis"}},
+		{"with conditions", Dependencies{{Name: "db", Condition: "service_healthy"}}, []string{"db"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.deps.Names())
+		})
+	}
+}
+
+func TestDependencies_HasConditions(t *testing.T) {
+	tests := []struct {
+		name     string
+		deps     Dependencies
+		expected bool
+	}{
+		{"nil", nil, false},
+		{"no conditions", Dependencies{{Name: "db"}}, false},
+		{"with condition", Dependencies{{Name: "db", Condition: "service_healthy"}}, true},
+		{"mixed", Dependencies{{Name: "db"}, {Name: "redis", Condition: "service_started"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.deps.HasConditions())
 		})
 	}
 }

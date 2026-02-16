@@ -168,9 +168,10 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 
 	// Load dependency configs if any
 	var depConfigs map[string]*config.Config
-	if len(cfg.DependsOn) > 0 {
+	depNames := cfg.DependsOn.Names()
+	if len(depNames) > 0 {
 		depConfigs = make(map[string]*config.Config)
-		for _, dep := range cfg.DependsOn {
+		for _, dep := range depNames {
 			depCfg, err := rootCfg.GetService(dep)
 			if err != nil {
 				fmt.Printf("Warning: Could not load dependency %s config: %v\n", dep, err)

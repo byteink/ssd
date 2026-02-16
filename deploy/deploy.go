@@ -170,9 +170,10 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 	// Check and start dependencies if needed (skip in BuildOnly mode)
 	buildOnly := opts != nil && opts.BuildOnly
-	if !buildOnly && len(cfg.DependsOn) > 0 {
+	depNames := cfg.DependsOn.Names()
+	if !buildOnly && len(depNames) > 0 {
 		logln(output, "==> Checking dependencies...")
-		for _, dep := range cfg.DependsOn {
+		for _, dep := range depNames {
 			running, err := client.IsServiceRunning(ctx, dep)
 			if err != nil {
 				return fmt.Errorf("failed to check if dependency %s is running: %w", dep, err)
