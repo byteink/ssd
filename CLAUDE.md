@@ -65,7 +65,7 @@ Configurable via `deploy.strategy` in ssd.yaml. Two strategies:
 - **recreate**: In-place replacement via `docker compose up -d --force-recreate`. Brief downtime.
 
 Strategy is set at root level and inherited by services. Per-service override supported.
-Deploy-all (`ssd deploy` with no args) builds all images first, then does a single `docker compose up -d`.
+Deploy-all (`ssd deploy` with no args) builds all images first, then deploys each service using its configured strategy.
 
 ## Conventions
 

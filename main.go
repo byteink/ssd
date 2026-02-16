@@ -133,17 +133,25 @@ func runDeploy(args []string) {
 			}
 		}
 
-		// Start everything at once — compose handles dependency order via depends_on
+		// Deploy each service using its configured strategy
 		fmt.Println("\n==> Starting all services...")
-		anyCfg, err := rootCfg.GetService(services[0])
-		if err != nil {
-			fmt.Printf("\nError: %v\n", err)
-			os.Exit(1)
-		}
-		client := remote.NewClient(anyCfg)
-		if err := client.RestartStack(context.Background()); err != nil {
-			fmt.Printf("\nError starting services: %v\n", err)
-			os.Exit(1)
+		client := remote.NewClient(allServices[services[0]])
+		for _, name := range services {
+			cfg := allServices[name]
+			strategy := cfg.DeployStrategy()
+			fmt.Printf("    %s (strategy: %s)...\n", name, strategy)
+			switch strategy {
+			case "rollout":
+				if err := client.RolloutService(context.Background(), name); err != nil {
+					fmt.Printf("\nError rolling out %s: %v\n", name, err)
+					os.Exit(1)
+				}
+			default:
+				if err := client.StartService(context.Background(), name); err != nil {
+					fmt.Printf("\nError starting %s: %v\n", name, err)
+					os.Exit(1)
+				}
+			}
 		}
 
 		fmt.Println("\nAll services deployed successfully!")
