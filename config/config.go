@@ -86,6 +86,11 @@ type HealthCheck struct {
 	Retries  int    `yaml:"retries"`
 }
 
+// DeployConfig holds deployment strategy options
+type DeployConfig struct {
+	Strategy string `yaml:"strategy"` // "rollout" (default) or "recreate"
+}
+
 // Config represents a single service configuration
 type Config struct {
 	Name        string            `yaml:"name"`
@@ -101,6 +106,7 @@ type Config struct {
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
 	Target      string            `yaml:"target"`      // Docker build target stage
+	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
 	DependsOn   Dependencies      `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
@@ -110,6 +116,7 @@ type Config struct {
 type RootConfig struct {
 	Server   string              `yaml:"server"`
 	Stack    string              `yaml:"stack"`
+	Deploy   *DeployConfig       `yaml:"deploy"`
 	Services map[string]*Config `yaml:"services"`
 }
 
@@ -164,6 +171,9 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 	}
 	if cfg.Stack == "" {
 		cfg.Stack = r.Stack
+	}
+	if (cfg.Deploy == nil || cfg.Deploy.Strategy == "") && r.Deploy != nil && r.Deploy.Strategy != "" {
+		cfg.Deploy = &DeployConfig{Strategy: r.Deploy.Strategy}
 	}
 
 	result, err := applyDefaults(&cfg, serviceName)
@@ -297,7 +307,24 @@ func validateConfig(cfg *Config) error {
 		}
 	}
 
+	if err := validateDeployStrategy(cfg.Deploy); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateDeployStrategy validates the deploy strategy field
+func validateDeployStrategy(deploy *DeployConfig) error {
+	if deploy == nil {
+		return nil
+	}
+	switch deploy.Strategy {
+	case "rollout", "recreate":
+		return nil
+	default:
+		return fmt.Errorf("invalid deploy strategy %q: must be rollout or recreate", deploy.Strategy)
+	}
 }
 
 // validateDependsOn validates dependency conditions
@@ -362,6 +389,11 @@ func applyDefaults(cfg *Config, serviceName string) (*Config, error) {
 		result.Port = 80
 	}
 
+	// Default deploy strategy: rollout
+	if result.Deploy == nil || result.Deploy.Strategy == "" {
+		result.Deploy = &DeployConfig{Strategy: "rollout"}
+	}
+
 	return &result, nil
 }
 
@@ -383,6 +415,14 @@ func (c *Config) ImageName() string {
 // IsPrebuilt returns true if this config uses a pre-built image
 func (c *Config) IsPrebuilt() bool {
 	return c.Image != ""
+}
+
+// DeployStrategy returns the deploy strategy for this config
+func (c *Config) DeployStrategy() string {
+	if c.Deploy == nil {
+		return "rollout"
+	}
+	return c.Deploy.Strategy
 }
 
 // UseHTTPS returns true if HTTPS should be used for this config

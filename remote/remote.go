@@ -39,6 +39,7 @@ type RemoteClient interface {
 	CreateStack(ctx context.Context, composeContent string) error
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
+	RolloutService(ctx context.Context, serviceName string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -505,5 +506,12 @@ func (c *Client) PullImage(ctx context.Context, image string) error {
 func (c *Client) StartService(ctx context.Context, serviceName string) error {
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker compose up -d --force-recreate %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
+	return c.SSHInteractive(ctx, cmd)
+}
+
+// RolloutService performs a zero-downtime update using docker rollout
+func (c *Client) RolloutService(ctx context.Context, serviceName string) error {
+	stackPath := c.cfg.StackPath()
+	cmd := fmt.Sprintf("cd %s && docker rollout %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
 	return c.SSHInteractive(ctx, cmd)
 }

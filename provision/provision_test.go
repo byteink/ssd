@@ -101,6 +101,41 @@ func TestProvision_SkipsDockerIfInstalled(t *testing.T) {
 	}
 }
 
+func TestProvision_InstallsDockerRollout(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+
+	err := provisionWithClient(context.Background(), mock, "test-server", "test@example.com")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	found := false
+	for _, call := range mock.SSHCalls {
+		if strings.Contains(call, "docker-rollout") && strings.Contains(call, "curl -fsSL") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected docker-rollout installation command, but not found")
+	}
+}
+
+func TestProvision_ErrorInInstallDockerRolloutReturnsError(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHErrors["docker-rollout"] = fmt.Errorf("curl failed")
+
+	err := provisionWithClient(context.Background(), mock, "test-server", "test@example.com")
+	if err == nil {
+		t.Error("expected error when docker-rollout install fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to install docker-rollout") {
+		t.Errorf("expected error message to contain 'failed to install docker-rollout', got: %v", err)
+	}
+}
+
 func TestProvision_CreatesNetwork(t *testing.T) {
 	mock := NewMockRemoteClient()
 	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
@@ -261,9 +296,10 @@ func TestProvision_CallsStepsInOrder(t *testing.T) {
 	// Verify all steps were called in the correct order
 	expectedSSHSequence := []string{
 		"which docker",                                     // Step 1: Check Docker
-		"docker network create traefik_web",               // Step 2: Create network
-		"mkdir -p /stacks/traefik",                        // Step 3: Create directory
-		"test -f /stacks/traefik/acme.json",               // Step 4: Create acme.json
+		"docker-rollout",                                   // Step 2: Install docker-rollout
+		"docker network create traefik_web",               // Step 3: Create network
+		"mkdir -p /stacks/traefik",                        // Step 4: Create directory
+		"test -f /stacks/traefik/acme.json",               // Step 5: Create acme.json
 	}
 
 	if len(mock.SSHCalls) < len(expectedSSHSequence) {

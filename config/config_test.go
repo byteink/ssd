@@ -1911,6 +1911,64 @@ func TestRootConfig_GetService_ValidatesTarget(t *testing.T) {
 	}
 }
 
+func TestRootConfig_GetService_DeployStrategyDefault(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Services: map[string]*Config{
+			"web": {},
+		},
+	}
+
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, "rollout", svc.DeployStrategy())
+}
+
+func TestRootConfig_GetService_DeployStrategyInheritance(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Deploy: &DeployConfig{Strategy: "recreate"},
+		Services: map[string]*Config{
+			"web": {},
+		},
+	}
+
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, "recreate", svc.DeployStrategy())
+}
+
+func TestRootConfig_GetService_DeployStrategyOverride(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Deploy: &DeployConfig{Strategy: "rollout"},
+		Services: map[string]*Config{
+			"web": {
+				Deploy: &DeployConfig{Strategy: "recreate"},
+			},
+		},
+	}
+
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, "recreate", svc.DeployStrategy())
+}
+
+func TestRootConfig_GetService_DeployStrategyInvalid(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Services: map[string]*Config{
+			"web": {
+				Deploy: &DeployConfig{Strategy: "bluegreen"},
+			},
+		},
+	}
+
+	_, err := cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid deploy strategy")
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

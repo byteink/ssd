@@ -20,11 +20,12 @@ type RemoteClient interface {
 //
 // Steps performed:
 // 1. Install Docker if not present
-// 2. Create traefik_web network
-// 3. Create /stacks/traefik directory
-// 4. Create acme.json with mode 600
-// 5. Write Traefik compose.yaml with atomic write
-// 6. Start Traefik with docker compose up -d
+// 2. Install docker-rollout plugin if not present
+// 3. Create traefik_web network
+// 4. Create /stacks/traefik directory
+// 5. Create acme.json with mode 600
+// 6. Write Traefik compose.yaml with atomic write
+// 7. Start Traefik with docker compose up -d
 //
 // server: SSH host from ~/.ssh/config
 // email: email for Let's Encrypt certificate registration
@@ -53,27 +54,32 @@ func provisionWithClient(ctx context.Context, client RemoteClient, server, email
 		return fmt.Errorf("failed to install Docker: %w", err)
 	}
 
-	// Step 2: Create network (idempotent)
+	// Step 2: Install docker-rollout plugin (idempotent)
+	if err := installDockerRollout(ctx, client); err != nil {
+		return fmt.Errorf("failed to install docker-rollout: %w", err)
+	}
+
+	// Step 3: Create network (idempotent)
 	if err := createNetwork(ctx, client); err != nil {
 		return fmt.Errorf("failed to create network: %w", err)
 	}
 
-	// Step 3: Create traefik directory (idempotent)
+	// Step 4: Create traefik directory (idempotent)
 	if err := createTraefikDirectory(ctx, client); err != nil {
 		return fmt.Errorf("failed to create traefik directory: %w", err)
 	}
 
-	// Step 4: Create acme.json (idempotent)
+	// Step 5: Create acme.json (idempotent)
 	if err := createAcmeJson(ctx, client); err != nil {
 		return fmt.Errorf("failed to create acme.json: %w", err)
 	}
 
-	// Step 5: Write compose.yaml (atomic)
+	// Step 6: Write compose.yaml (atomic)
 	if err := writeTraefikCompose(ctx, client, email); err != nil {
 		return fmt.Errorf("failed to write compose.yaml: %w", err)
 	}
 
-	// Step 6: Start Traefik
+	// Step 7: Start Traefik
 	if err := startTraefik(ctx, client); err != nil {
 		return fmt.Errorf("failed to start Traefik: %w", err)
 	}
@@ -93,6 +99,17 @@ func installDocker(ctx context.Context, client RemoteClient) error {
 	// Install Docker
 	cmd := "which docker || curl -fsSL https://get.docker.com | sh"
 	return client.SSHInteractive(ctx, cmd)
+}
+
+// installDockerRollout installs the docker-rollout CLI plugin for zero-downtime deploys (idempotent)
+func installDockerRollout(ctx context.Context, client RemoteClient) error {
+	cmd := "test -f ~/.docker/cli-plugins/docker-rollout || " +
+		"(mkdir -p ~/.docker/cli-plugins && " +
+		"curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/main/docker-rollout " +
+		"-o ~/.docker/cli-plugins/docker-rollout && " +
+		"chmod +x ~/.docker/cli-plugins/docker-rollout)"
+	_, err := client.SSH(ctx, cmd)
+	return err
 }
 
 // createNetwork creates the traefik_web network (idempotent)

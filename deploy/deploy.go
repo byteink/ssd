@@ -54,6 +54,7 @@ type Deployer interface {
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
+	RolloutService(ctx context.Context, serviceName string) error
 }
 
 // parseServiceVersions extracts current version numbers from compose.yaml content
@@ -268,9 +269,16 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		return nil
 	}
 
-	logf(output, "==> Starting service %s...\n", cfg.Name)
-	if err := client.StartService(ctx, cfg.Name); err != nil {
-		return fmt.Errorf("failed to start service: %w", err)
+	logf(output, "==> Starting service %s (strategy: %s)...\n", cfg.Name, cfg.DeployStrategy())
+	switch cfg.DeployStrategy() {
+	case "rollout":
+		if err := client.RolloutService(ctx, cfg.Name); err != nil {
+			return fmt.Errorf("failed to rollout service: %w", err)
+		}
+	default:
+		if err := client.StartService(ctx, cfg.Name); err != nil {
+			return fmt.Errorf("failed to start service: %w", err)
+		}
 	}
 
 	logf(output, "\nDeployed %s version %d successfully!\n", cfg.Name, newVersion)

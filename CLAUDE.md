@@ -55,12 +55,16 @@ goreleaser release --snapshot --clean   # Test release locally
 4. Rsync code to temp dir (excludes .git, node_modules, .next)
 5. Build Docker image on server: `ssd-{name}:{version}`
 6. Parse current version from compose.yaml, increment it
-7. Recreate service with `docker compose up -d --force-recreate`
+7. Start service using configured strategy (`docker rollout` or `--force-recreate`)
 8. Clean up temp directory
 
 ## Deployment Strategy
 
-Single-service deploys (`ssd deploy <service>`) use `--force-recreate` to replace the running container.
+Configurable via `deploy.strategy` in ssd.yaml. Two strategies:
+- **rollout** (default): Zero-downtime via `docker rollout` plugin. Scales up new container, waits for health, removes old.
+- **recreate**: In-place replacement via `docker compose up -d --force-recreate`. Brief downtime.
+
+Strategy is set at root level and inherited by services. Per-service override supported.
 Deploy-all (`ssd deploy` with no args) builds all images first, then does a single `docker compose up -d`.
 
 ## Conventions
@@ -133,6 +137,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+```
+
+### Deploy strategy
+```yaml
+server: myserver
+deploy:
+  strategy: rollout           # "rollout" (default) or "recreate"
+
+services:
+  web:
+    # Inherits rollout from root
+  worker:
+    deploy:
+      strategy: recreate      # Per-service override
 ```
 
 ### Dependency health conditions

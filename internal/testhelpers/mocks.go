@@ -153,3 +153,21 @@ func (m *MockRemoteClient) PullImage(ctx context.Context, image string) error {
 	args := m.Called(image)
 	return args.Error(0)
 }
+
+// StartService mocks starting a service
+func (m *MockRemoteClient) StartService(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
+// ReadCompose mocks reading compose file content
+func (m *MockRemoteClient) ReadCompose(ctx context.Context) (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+// RolloutService mocks rolling out a service with zero downtime
+func (m *MockRemoteClient) RolloutService(ctx context.Context, serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
