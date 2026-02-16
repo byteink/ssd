@@ -81,6 +81,20 @@ func NewClient(cfg *config.Config) *Client {
 	}
 }
 
+// NewSSHClient creates a client for SSH-only operations (no config required).
+// Used by provision where no ssd.yaml exists yet.
+func NewSSHClient(server string) *Client {
+	return &Client{
+		server:   server,
+		executor: NewRealExecutor(),
+		sshArgs: []string{
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath=/tmp/ssd-%C",
+			"-o", "ControlPersist=60s",
+		},
+	}
+}
+
 // NewClientWithExecutor creates a client with a custom executor (for testing)
 func NewClientWithExecutor(cfg *config.Config, executor CommandExecutor) *Client {
 	return &Client{

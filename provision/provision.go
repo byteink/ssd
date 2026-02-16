@@ -7,6 +7,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/byteink/ssd/compose"
+	"github.com/byteink/ssd/remote"
 )
 
 // RemoteClient defines the interface for remote operations needed by provision
@@ -46,7 +47,7 @@ func provisionWithClient(ctx context.Context, client RemoteClient, server, email
 
 	// Create real client if not provided (for production use)
 	if client == nil {
-		return fmt.Errorf("real SSH client not yet implemented")
+		client = remote.NewSSHClient(server)
 	}
 
 	// Step 1: Install Docker (idempotent)
