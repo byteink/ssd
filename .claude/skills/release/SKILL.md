@@ -1,7 +1,6 @@
 ---
 name: release
 description: Create a new release by tagging and pushing. Triggers GoReleaser via GitHub Actions.
-disable-model-invocation: true
 argument-hint: "[version]"
 ---
 
