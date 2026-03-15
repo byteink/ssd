@@ -35,11 +35,11 @@ func Generate(opts Options) string {
 	var sb strings.Builder
 
 	// Server (required)
-	sb.WriteString(fmt.Sprintf("server: %s\n", opts.Server))
+	fmt.Fprintf(&sb, "server: %s\n", opts.Server)
 
 	// Stack (optional)
 	if opts.Stack != "" {
-		sb.WriteString(fmt.Sprintf("stack: %s\n", opts.Stack))
+		fmt.Fprintf(&sb, "stack: %s\n", opts.Stack)
 	}
 
 	sb.WriteString("\nservices:\n")
@@ -49,7 +49,7 @@ func Generate(opts Options) string {
 	if serviceName == "" {
 		serviceName = "app"
 	}
-	sb.WriteString(fmt.Sprintf("  %s:\n", serviceName))
+	fmt.Fprintf(&sb, "  %s:\n", serviceName)
 
 	// Domain, path, port - show configured values, comment out unconfigured
 	hasDomain := opts.Domain != ""
@@ -57,13 +57,13 @@ func Generate(opts Options) string {
 	hasPort := opts.Port > 0
 
 	if hasDomain {
-		sb.WriteString(fmt.Sprintf("    domain: %s\n", opts.Domain))
+		fmt.Fprintf(&sb, "    domain: %s\n", opts.Domain)
 	}
 	if hasPath {
-		sb.WriteString(fmt.Sprintf("    path: %s\n", opts.Path))
+		fmt.Fprintf(&sb, "    path: %s\n", opts.Path)
 	}
 	if hasPort {
-		sb.WriteString(fmt.Sprintf("    port: %d\n", opts.Port))
+		fmt.Fprintf(&sb, "    port: %d\n", opts.Port)
 	}
 
 	// Add commented hints for unconfigured options

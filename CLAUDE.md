@@ -43,8 +43,9 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── remote.go     # SSH, rsync, docker operations
 ├── deploy/
 │   └── deploy.go     # Deploy orchestration
-└── scaffold/
-    └── scaffold.go   # ssd init command (generate ssd.yaml)
+├── scaffold/
+│   └── scaffold.go   # ssd init command (generate ssd.yaml)
+└── SKILL.md          # Claude Code skill file (for end users)
 ```
 
 ## Core Workflow
