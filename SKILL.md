@@ -1,7 +1,6 @@
 ---
 name: ssd
 description: Deploy and manage Docker services on remote servers using ssd (SSH Deploy). Use when the user asks to deploy, restart, rollback, check status, view logs, or configure services.
-disable-model-invocation: true
 argument-hint: "[command] [service] [args...]"
 ---
 
