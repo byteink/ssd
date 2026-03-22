@@ -65,49 +65,26 @@ func TestGenerateCompose_SingleService(t *testing.T) {
 		t.Errorf("env_file = %q, want ./web.env", envFile)
 	}
 
-	// Verify networks
+	// Verify networks — no domain means only internal network
 	networks, ok := webService["networks"].([]interface{})
 	if !ok {
 		t.Fatal("networks missing or not an array")
 	}
-	if len(networks) != 2 {
-		t.Fatalf("networks count = %d, want 2", len(networks))
+	if len(networks) != 1 {
+		t.Fatalf("networks count = %d, want 1 (no domain = no traefik_web)", len(networks))
+	}
+	if networks[0] != "myapp_internal" {
+		t.Errorf("network = %v, want myapp_internal", networks[0])
 	}
 
-	// Verify traefik_web and myapp_internal networks
-	hasTraefik := false
-	hasInternal := false
-	for _, n := range networks {
-		name, ok := n.(string)
-		if !ok {
-			continue
-		}
-		if name == "traefik_web" {
-			hasTraefik = true
-		}
-		if name == "myapp_internal" {
-			hasInternal = true
-		}
-	}
-	if !hasTraefik {
-		t.Error("traefik_web network missing")
-	}
-	if !hasInternal {
-		t.Error("myapp_internal network missing")
-	}
-
-	// Verify top-level networks section
+	// Verify top-level networks section — no traefik_web
 	networksMap, ok := parsed["networks"].(map[string]interface{})
 	if !ok {
 		t.Fatal("networks section missing or not a map")
 	}
 
-	traefikNet, ok := networksMap["traefik_web"].(map[string]interface{})
-	if !ok {
-		t.Fatal("traefik_web network definition missing")
-	}
-	if traefikNet["external"] != true {
-		t.Error("traefik_web network should be external")
+	if _, ok := networksMap["traefik_web"]; ok {
+		t.Error("traefik_web network should not exist when no service has a domain")
 	}
 
 	internalNet, ok := networksMap["myapp_internal"].(map[string]interface{})
@@ -1613,5 +1590,181 @@ func TestGenerateCompose_WithMultipleDomainsNoRedirect(t *testing.T) {
 		if strings.Contains(label, "alias") || strings.Contains(label, "redirectregex") {
 			t.Errorf("Unexpected redirect label found: %s", label)
 		}
+	}
+}
+
+func TestGenerateCompose_NoDomain_NoTraefikNetwork(t *testing.T) {
+	services := map[string]*config.Config{
+		"worker": {
+			Name:   "worker",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"worker": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	// Service should only have internal network
+	servicesMap := parsed["services"].(map[string]interface{})
+	workerService := servicesMap["worker"].(map[string]interface{})
+	networks := workerService["networks"].([]interface{})
+
+	if len(networks) != 1 {
+		t.Fatalf("networks count = %d, want 1", len(networks))
+	}
+	if networks[0] != "myapp_internal" {
+		t.Errorf("network = %v, want myapp_internal", networks[0])
+	}
+
+	// Top-level networks should not include traefik_web
+	networksMap := parsed["networks"].(map[string]interface{})
+	if _, ok := networksMap["traefik_web"]; ok {
+		t.Error("traefik_web network should not exist when no service has a domain")
+	}
+	if _, ok := networksMap["myapp_internal"]; !ok {
+		t.Error("myapp_internal network missing")
+	}
+}
+
+func TestGenerateCompose_MixedDomainServices(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Domain: "example.com",
+			Port:   3000,
+		},
+		"worker": {
+			Name:   "worker",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1, "worker": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+
+	// Web (has domain) should have both networks
+	webService := servicesMap["web"].(map[string]interface{})
+	webNetworks := webService["networks"].([]interface{})
+	webHasTraefik := false
+	webHasInternal := false
+	for _, n := range webNetworks {
+		switch n {
+		case "traefik_web":
+			webHasTraefik = true
+		case "myapp_internal":
+			webHasInternal = true
+		}
+	}
+	if !webHasTraefik {
+		t.Error("web service should have traefik_web network")
+	}
+	if !webHasInternal {
+		t.Error("web service should have myapp_internal network")
+	}
+
+	// Worker (no domain) should only have internal network
+	workerService := servicesMap["worker"].(map[string]interface{})
+	workerNetworks := workerService["networks"].([]interface{})
+	if len(workerNetworks) != 1 {
+		t.Fatalf("worker networks count = %d, want 1", len(workerNetworks))
+	}
+	if workerNetworks[0] != "myapp_internal" {
+		t.Errorf("worker network = %v, want myapp_internal", workerNetworks[0])
+	}
+
+	// Top-level should have traefik_web since web needs it
+	networksMap := parsed["networks"].(map[string]interface{})
+	if _, ok := networksMap["traefik_web"]; !ok {
+		t.Error("traefik_web should exist when at least one service has a domain")
+	}
+}
+
+func TestGenerateCompose_WithPorts(t *testing.T) {
+	services := map[string]*config.Config{
+		"app": {
+			Name:   "app",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			Ports:  []string{"3000:3000", "8080:80"},
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"app": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	appService := servicesMap["app"].(map[string]interface{})
+
+	ports, ok := appService["ports"].([]interface{})
+	if !ok {
+		t.Fatal("ports missing or not an array")
+	}
+
+	if len(ports) != 2 {
+		t.Fatalf("ports count = %d, want 2", len(ports))
+	}
+	if ports[0] != "3000:3000" {
+		t.Errorf("ports[0] = %v, want 3000:3000", ports[0])
+	}
+	if ports[1] != "8080:80" {
+		t.Errorf("ports[1] = %v, want 8080:80", ports[1])
+	}
+}
+
+func TestGenerateCompose_NoPorts(t *testing.T) {
+	services := map[string]*config.Config{
+		"app": {
+			Name:   "app",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"app": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	appService := servicesMap["app"].(map[string]interface{})
+
+	if _, ok := appService["ports"]; ok {
+		t.Error("ports should not be present when not configured")
 	}
 }

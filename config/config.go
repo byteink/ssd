@@ -105,6 +105,7 @@ type Config struct {
 	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
+	Ports       []string          `yaml:"ports"`       // host:container port mappings
 	Target      string            `yaml:"target"`      // Docker build target stage
 	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
 	DependsOn   Dependencies      `yaml:"depends_on"`
@@ -289,6 +290,12 @@ func validateConfig(cfg *Config) error {
 
 	if err := validateDependsOn(cfg.DependsOn); err != nil {
 		return err
+	}
+
+	for _, portMapping := range cfg.Ports {
+		if err := ValidatePortMapping(portMapping); err != nil {
+			return fmt.Errorf("invalid port mapping %q: %w", portMapping, err)
+		}
 	}
 
 	for volumeName := range cfg.Volumes {
@@ -752,6 +759,44 @@ func ValidateTarget(target string) error {
 		}
 	}
 
+	return nil
+}
+
+// ValidatePortMapping validates a Docker port mapping string (e.g., "3000:3000", "8080:80")
+func ValidatePortMapping(mapping string) error {
+	if mapping == "" {
+		return fmt.Errorf("port mapping cannot be empty")
+	}
+
+	parts := strings.SplitN(mapping, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("must be in host:container format")
+	}
+
+	if err := validatePortNumber(parts[0], "host"); err != nil {
+		return err
+	}
+	return validatePortNumber(parts[1], "container")
+}
+
+// validatePortNumber validates a single port number string
+func validatePortNumber(s, label string) error {
+	if s == "" {
+		return fmt.Errorf("%s port cannot be empty", label)
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("%s port contains invalid character: %c", label, r)
+		}
+		n = n*10 + int(r-'0')
+		if n > 65535 {
+			return fmt.Errorf("%s port %s exceeds maximum 65535", label, s)
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("%s port cannot be 0", label)
+	}
 	return nil
 }
 

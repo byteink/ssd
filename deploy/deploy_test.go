@@ -726,11 +726,10 @@ func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
-	// Stack doesn't exist yet
+	// Stack doesn't exist yet (no domain = no traefik_web)
 	mockClient.On("StackExists").Return(false, nil)
 	mockClient.On("CreateEnvFiles", []string{"myapp"}).Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
-	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
 
 	// Normal deploy flow
@@ -749,7 +748,7 @@ func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
 	mockClient.AssertCalled(t, "StackExists")
 	mockClient.AssertCalled(t, "CreateEnvFiles", []string{"myapp"})
 	mockClient.AssertCalled(t, "CreateStack", mock.AnythingOfType("string"))
-	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertNotCalled(t, "EnsureNetwork", "traefik_web")
 	mockClient.AssertCalled(t, "EnsureNetwork", "myapp_internal")
 }
 
@@ -815,11 +814,18 @@ func TestDeploy_AutoCreateStack_CreateStackError(t *testing.T) {
 
 func TestDeploy_AutoCreateStack_EnsureNetworkError(t *testing.T) {
 	mockClient := new(MockDeployer)
-	cfg := newTestConfig()
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Domain:     "example.com",
+	}
 
-	// Env files and stack creation succeed, but network creation fails
+	// Env files and stack creation succeed, but traefik network creation fails
 	mockClient.On("StackExists").Return(false, nil)
-	mockClient.On("CreateEnvFiles", []string{"myapp"}).Return(nil)
+	mockClient.On("CreateEnvFiles", []string{"web"}).Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
 	mockClient.On("EnsureNetwork", "traefik_web").Return(errors.New("network error"))
 
@@ -827,7 +833,7 @@ func TestDeploy_AutoCreateStack_EnsureNetworkError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to ensure network")
-	mockClient.AssertCalled(t, "CreateEnvFiles", []string{"myapp"})
+	mockClient.AssertCalled(t, "CreateEnvFiles", []string{"web"})
 	mockClient.AssertCalled(t, "EnsureNetwork", "traefik_web")
 }
 
@@ -1608,7 +1614,6 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 		// Compose must contain both api AND postgres services
 		return strings.Contains(content, "api:") && strings.Contains(content, "postgres:")
 	})).Return(nil)
-	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myproject_internal").Return(nil)
 
 	// Normal deploy flow for api
@@ -1640,7 +1645,6 @@ func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
 	mockClient.On("StackExists").Return(false, nil)
 	mockClient.On("CreateEnvFiles", []string{"myapp"}).Return(nil)
 	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(nil)
-	mockClient.On("EnsureNetwork", "traefik_web").Return(nil)
 	mockClient.On("EnsureNetwork", "myapp_internal").Return(nil)
 
 	mockClient.On("GetCurrentVersion").Return(0, nil)

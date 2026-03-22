@@ -44,6 +44,7 @@ services:
     path: /api                # Path prefix routing
     https: true               # Default true
     port: 3000                # Container port, default 80
+    ports: ["3000:3000"]      # Host:container port mappings (optional)
     depends_on: [db, redis]   # Or map with conditions (service_healthy, service_started)
     volumes:
       pg-data: /var/lib/postgresql/data
@@ -57,6 +58,7 @@ services:
 ```
 
 Root-level `server`, `stack`, and `deploy.strategy` are inherited by all services.
+Traefik is only included when a service has `domain` or `domains` set. Services without domains can use `ports` for host access (Tailscale, Cloudflare tunnels).
 
 ## Workflow
 

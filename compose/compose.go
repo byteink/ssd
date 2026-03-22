@@ -95,16 +95,25 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 	project := filepath.Base(stack)
 	internalNetwork := project + "_internal"
 
+	// Check if any service needs Traefik (has a domain configured)
+	needsTraefik := false
+	for _, cfg := range services {
+		if cfg.PrimaryDomain() != "" {
+			needsTraefik = true
+			break
+		}
+	}
+
 	compose := ComposeFile{
 		Services: make(map[string]Service),
 		Networks: map[string]Network{
-			"traefik_web": {
-				External: true,
-			},
 			internalNetwork: {
 				Driver: "bridge",
 			},
 		},
+	}
+	if needsTraefik {
+		compose.Networks["traefik_web"] = Network{External: true}
 	}
 
 	// Track which volumes are used
@@ -112,10 +121,16 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 
 	// Generate service definitions
 	for name, cfg := range services {
+		networks := []string{internalNetwork}
+		if cfg.PrimaryDomain() != "" {
+			networks = append([]string{"traefik_web"}, networks...)
+		}
+
 		svc := Service{
 			Restart:  "unless-stopped",
 			EnvFile:  fmt.Sprintf("./%s.env", name),
-			Networks: []string{"traefik_web", internalNetwork},
+			Networks: networks,
+			Ports:    cfg.Ports,
 		}
 
 		// Set image name

@@ -147,8 +147,19 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 
 		logln(output, "    Creating networks...")
-		if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
-			return fmt.Errorf("failed to ensure network traefik_web: %w", err)
+
+		// Only create traefik_web network if any service has a domain
+		needsTraefik := false
+		for _, svc := range services {
+			if svc.PrimaryDomain() != "" {
+				needsTraefik = true
+				break
+			}
+		}
+		if needsTraefik {
+			if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
+				return fmt.Errorf("failed to ensure network traefik_web: %w", err)
+			}
 		}
 
 		project := filepath.Base(cfg.StackPath())

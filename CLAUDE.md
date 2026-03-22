@@ -127,6 +127,9 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
+    ports:                          # Host:container port mappings (optional)
+      - "3000:3000"
+      - "8080:80"
     depends_on:                     # Simple list or map with conditions
       - db
       - redis
@@ -222,6 +225,31 @@ Notes:
 - Works with both HTTPS and HTTP
 - HTTPS redirects happen after TLS termination (certificates issued for all domains)
 - Cannot use both `domain` and `domains` fields (mutually exclusive)
+
+### Internal-only service (no Traefik)
+```yaml
+server: myserver
+
+services:
+  app:
+    ports:
+      - "3000:3000"             # Expose on host for Tailscale/CF tunnel
+```
+
+When no `domain` or `domains` is set, the service is deployed without Traefik labels or the `traefik_web` network. Use `ports` to map host:container ports for access via Tailscale, Cloudflare tunnels, or direct host access.
+
+### Port mapping
+```yaml
+server: myserver
+
+services:
+  web:
+    domain: example.com         # Traefik routing
+    ports:
+      - "9090:9090"             # Additional port exposure alongside Traefik
+```
+
+`ports` maps directly to Docker Compose `ports:`. Each entry is `host:container` format. Works independently of domain/Traefik configuration.
 
 ## Commands
 

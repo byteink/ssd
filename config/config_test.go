@@ -1969,6 +1969,69 @@ func TestRootConfig_GetService_DeployStrategyInvalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid deploy strategy")
 }
 
+func TestValidatePortMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		mapping string
+		wantErr bool
+	}{
+		{name: "valid same port", mapping: "3000:3000", wantErr: false},
+		{name: "valid different ports", mapping: "8080:80", wantErr: false},
+		{name: "valid high port", mapping: "65535:443", wantErr: false},
+		{name: "empty string", mapping: "", wantErr: true},
+		{name: "missing colon", mapping: "3000", wantErr: true},
+		{name: "empty host port", mapping: ":3000", wantErr: true},
+		{name: "empty container port", mapping: "3000:", wantErr: true},
+		{name: "non-numeric host", mapping: "abc:3000", wantErr: true},
+		{name: "non-numeric container", mapping: "3000:abc", wantErr: true},
+		{name: "port zero", mapping: "0:80", wantErr: true},
+		{name: "port exceeds max", mapping: "65536:80", wantErr: true},
+		{name: "container port exceeds max", mapping: "80:65536", wantErr: true},
+		{name: "negative-looking port", mapping: "-1:80", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePortMapping(tt.mapping)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoadFromBytes_Ports(t *testing.T) {
+	yaml := `server: myserver
+services:
+  web:
+    ports:
+      - "3000:3000"
+      - "8080:80"
+`
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"3000:3000", "8080:80"}, svc.Ports)
+}
+
+func TestRootConfig_GetService_ValidatesPorts(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Services: map[string]*Config{
+			"web": {Ports: []string{"abc:80"}},
+		},
+	}
+
+	_, err := cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid port mapping")
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

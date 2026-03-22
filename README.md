@@ -125,6 +125,9 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
+    ports:                          # Host:container port mappings (optional)
+      - "3000:3000"
+      - "8080:80"
     depends_on:                     # Simple list or map with conditions
       - db
       - redis
@@ -153,6 +156,19 @@ services:
 ```
 
 Conditions: `service_started` (default), `service_healthy` (requires healthcheck), `service_completed_successfully`.
+
+### Internal-only service (no Traefik):
+```yaml
+# ssd.yaml
+server: myserver
+
+services:
+  app:
+    ports:
+      - "3000:3000"             # Expose on host for Tailscale/CF tunnel
+```
+
+When no `domain` or `domains` is set, the service is deployed without Traefik labels or the `traefik_web` network. Use `ports` to map host:container ports for access via Tailscale, Cloudflare tunnels, or direct host access.
 
 ### Using pre-built images (skip build):
 ```yaml
@@ -247,6 +263,7 @@ services:
 - `path`: Path prefix for routing (e.g., `/api`). Requires `domain` or `domains`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)
 - `port`: Container port (default: `80`)
+- `ports`: Host:container port mappings (e.g., `["3000:3000"]`). Maps directly to Docker Compose `ports:`
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
 - `healthcheck`: Health check configuration
