@@ -526,8 +526,23 @@ func (c *Client) StartService(ctx context.Context, serviceName string) error {
 	return c.SSHInteractive(ctx, cmd)
 }
 
-// RolloutService performs a zero-downtime update using docker rollout
+// ensureDockerRollout installs the docker-rollout CLI plugin if not already present (idempotent)
+func (c *Client) ensureDockerRollout(ctx context.Context) error {
+	cmd := "test -f ~/.docker/cli-plugins/docker-rollout || " +
+		"(mkdir -p ~/.docker/cli-plugins && " +
+		"curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/main/docker-rollout " +
+		"-o ~/.docker/cli-plugins/docker-rollout && " +
+		"chmod +x ~/.docker/cli-plugins/docker-rollout)"
+	_, err := c.SSH(ctx, cmd)
+	return err
+}
+
+// RolloutService performs a zero-downtime update using docker rollout.
+// Ensures the docker-rollout plugin is installed before attempting the rollout.
 func (c *Client) RolloutService(ctx context.Context, serviceName string) error {
+	if err := c.ensureDockerRollout(ctx); err != nil {
+		return fmt.Errorf("failed to ensure docker-rollout plugin: %w", err)
+	}
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker rollout %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
 	return c.SSHInteractive(ctx, cmd)

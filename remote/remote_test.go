@@ -1326,6 +1326,69 @@ func TestClient_StartService_SSHError(t *testing.T) {
 	assert.Contains(t, err.Error(), "connection refused")
 }
 
+func TestClient_RolloutService_InstallsPluginThenRolls(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// First call: install docker-rollout plugin (idempotent)
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker-rollout") &&
+			strings.Contains(cmd, "curl -fsSL")
+	})).Return("", nil)
+
+	// Second call: docker rollout
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "cd /stacks/myapp") &&
+			strings.Contains(cmd, "docker rollout myapp")
+	})).Return(nil)
+
+	err := client.RolloutService(context.Background(), "myapp")
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_RolloutService_PluginInstallFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker-rollout")
+	})).Return("", errors.New("curl failed"))
+
+	err := client.RolloutService(context.Background(), "myapp")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ensure docker-rollout plugin")
+}
+
+func TestClient_RolloutService_RolloutFails(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker-rollout") &&
+			strings.Contains(cmd, "curl -fsSL")
+	})).Return("", nil)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "docker rollout")
+	})).Return(errors.New("rollout failed"))
+
+	err := client.RolloutService(context.Background(), "myapp")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rollout failed")
+}
+
 func TestClient_CopyFiles_Success(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
