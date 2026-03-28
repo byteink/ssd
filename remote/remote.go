@@ -2,7 +2,9 @@ package remote
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -40,6 +42,7 @@ type RemoteClient interface {
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
 	RolloutService(ctx context.Context, serviceName string) error
+	CopyFiles(ctx context.Context, files map[string]string) error
 }
 
 // Ensure Client implements RemoteClient
@@ -528,4 +531,38 @@ func (c *Client) RolloutService(ctx context.Context, serviceName string) error {
 	stackPath := c.cfg.StackPath()
 	cmd := fmt.Sprintf("cd %s && docker rollout %s", shellescape.Quote(stackPath), shellescape.Quote(serviceName))
 	return c.SSHInteractive(ctx, cmd)
+}
+
+// CopyFiles copies local files to the stack directory on the remote server.
+// files maps absolute local paths to container mount paths; only the basename
+// is used for the remote filename in the stack directory.
+// Files are transferred via base64 encoding over SSH, independent of git tracking.
+func (c *Client) CopyFiles(ctx context.Context, files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	stackDir := c.cfg.StackPath()
+
+	for localPath := range files {
+		data, err := os.ReadFile(localPath)
+		if err != nil {
+			return fmt.Errorf("failed to read local file %s: %w", localPath, err)
+		}
+
+		remoteName := filepath.Base(localPath)
+		remotePath := filepath.Join(stackDir, remoteName)
+		encoded := base64.StdEncoding.EncodeToString(data)
+
+		cmd := fmt.Sprintf("mkdir -p %s && echo %s | base64 -d > %s",
+			shellescape.Quote(stackDir),
+			shellescape.Quote(encoded),
+			shellescape.Quote(remotePath))
+
+		if _, err := c.SSH(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to copy file %s: %w", remoteName, err)
+		}
+	}
+
+	return nil
 }

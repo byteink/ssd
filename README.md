@@ -131,6 +131,8 @@ services:
     depends_on:                     # Simple list or map with conditions
       - db
       - redis
+    files:
+      ./config.yaml: /app/config.yaml  # Local file -> container path
     volumes:
       postgres-data: /var/lib/postgresql/data
       redis-data: /data
@@ -140,6 +142,20 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+### Config files
+
+```yaml
+server: myserver
+
+services:
+  api:
+    files:
+      ./config.yaml: /app/config.yaml             # relative to project
+      /opt/shared/ca.pem: /etc/ssl/ca.pem          # absolute path outside project
+```
+
+Copy local files to the stack directory and bind-mount into the container. Files are transferred via SSH on every deploy, independent of git tracking (works with `.gitignore`d files). Relative paths resolve from the working directory where `ssd` is run. Absolute paths work for files outside the project. Basenames must be unique per service.
 
 ### Dependency health conditions:
 ```yaml
@@ -266,6 +282,7 @@ services:
 - `ports`: Host:container port mappings (e.g., `["3000:3000"]`). Maps directly to Docker Compose `ports:`
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
+- `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files
 - `healthcheck`: Health check configuration
   - `cmd`: Health check command
   - `interval`: Check interval (e.g., `30s`)

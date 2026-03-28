@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1322,4 +1324,75 @@ func TestClient_StartService_SSHError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")
+}
+
+func TestClient_CopyFiles_Success(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	// Create a temp file to copy
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(testFile, []byte("key: value"), 0644))
+
+	files := map[string]string{testFile: "/app/config.yaml"}
+
+	// Expect mkdir + base64-decoded write to stack dir
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "mkdir -p") &&
+			strings.Contains(cmd, "/stacks/myapp") &&
+			strings.Contains(cmd, "base64 -d") &&
+			strings.Contains(cmd, "/stacks/myapp/config.yaml")
+	})).Return("", nil)
+
+	err := client.CopyFiles(context.Background(), files)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_CopyFiles_Empty(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	err := client.CopyFiles(context.Background(), nil)
+
+	require.NoError(t, err)
+	// No SSH calls expected
+	mockExec.AssertNotCalled(t, "Run", mock.Anything, mock.Anything)
+}
+
+func TestClient_CopyFiles_LocalFileNotFound(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	files := map[string]string{"/nonexistent/config.yaml": "/app/config.yaml"}
+
+	err := client.CopyFiles(context.Background(), files)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read local file")
+}
+
+func TestClient_CopyFiles_SSHError(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(testFile, []byte("key: value"), 0644))
+
+	files := map[string]string{testFile: "/app/config.yaml"}
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("permission denied"))
+
+	err := client.CopyFiles(context.Background(), files)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to copy file")
 }

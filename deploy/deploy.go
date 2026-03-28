@@ -55,6 +55,7 @@ type Deployer interface {
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
 	RolloutService(ctx context.Context, serviceName string) error
+	CopyFiles(ctx context.Context, files map[string]string) error
 }
 
 // parseServiceVersions extracts current version numbers from compose.yaml content
@@ -169,6 +170,14 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 
 		logln(output, "    Stack created successfully")
+	}
+
+	// Copy config files to the stack directory (every deploy, not just first)
+	if len(cfg.Files) > 0 {
+		logln(output, "==> Copying config files...")
+		if err := client.CopyFiles(ctx, cfg.Files); err != nil {
+			return fmt.Errorf("failed to copy config files: %w", err)
+		}
 	}
 
 	// Get current version

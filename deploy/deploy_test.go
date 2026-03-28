@@ -104,6 +104,11 @@ func (m *MockDeployer) RolloutService(ctx context.Context, serviceName string) e
 	return args.Error(0)
 }
 
+func (m *MockDeployer) CopyFiles(ctx context.Context, files map[string]string) error {
+	args := m.Called(files)
+	return args.Error(0)
+}
+
 func newTestConfig() *config.Config {
 	return &config.Config{
 		Name:       "myapp",
@@ -1847,4 +1852,63 @@ func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
+}
+
+func TestDeploy_CopiesConfigFiles(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	cfg.Files = map[string]string{
+		"./config.yaml": "/app/config.yaml",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("CopyFiles", cfg.Files).Return(nil)
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "CopyFiles", cfg.Files)
+}
+
+func TestDeploy_CopyFilesError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	cfg.Files = map[string]string{
+		"./config.yaml": "/app/config.yaml",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("CopyFiles", cfg.Files).Return(errors.New("permission denied"))
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to copy config files")
+}
+
+func TestDeploy_NoFiles_SkipsCopyFiles(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	// No files set
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, nil)
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "CopyFiles", mock.Anything)
 }

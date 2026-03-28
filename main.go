@@ -650,6 +650,12 @@ func printConfig(cfg *config.Config, indent string) {
 	if cfg.Image == "" {
 		fmt.Printf("%simage: %s\n", indent, cfg.ImageName())
 	}
+	if len(cfg.Files) > 0 {
+		fmt.Printf("%sfiles:\n", indent)
+		for local, container := range cfg.Files {
+			fmt.Printf("%s  %s -> %s\n", indent, local, container)
+		}
+	}
 }
 
 func printUsage() {

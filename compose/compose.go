@@ -141,11 +141,14 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 		}
 
 		// Add volume mounts
-		if len(cfg.Volumes) > 0 {
-			svc.Volumes = make([]string, 0, len(cfg.Volumes))
+		if len(cfg.Volumes) > 0 || len(cfg.Files) > 0 {
+			svc.Volumes = make([]string, 0, len(cfg.Volumes)+len(cfg.Files))
 			for volumeName, mountPath := range cfg.Volumes {
 				svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", volumeName, mountPath))
 				volumesUsed[volumeName] = true
+			}
+			for localPath, containerPath := range cfg.Files {
+				svc.Volumes = append(svc.Volumes, fmt.Sprintf("./%s:%s", filepath.Base(localPath), containerPath))
 			}
 		}
 

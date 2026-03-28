@@ -1768,3 +1768,104 @@ func TestGenerateCompose_NoPorts(t *testing.T) {
 		t.Error("ports should not be present when not configured")
 	}
 }
+
+func TestGenerateCompose_WithFiles(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Files: map[string]string{
+				"./config.yaml": "/app/config.yaml",
+			},
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+	volumes, ok := webService["volumes"].([]interface{})
+	if !ok {
+		t.Fatal("volumes section missing or not an array")
+	}
+
+	found := false
+	for _, v := range volumes {
+		if v == "./config.yaml:/app/config.yaml" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected bind mount ./config.yaml:/app/config.yaml, got %v", volumes)
+	}
+}
+
+func TestGenerateCompose_WithFilesAndVolumes(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Files: map[string]string{
+				"./config.yaml": "/app/config.yaml",
+			},
+			Volumes: map[string]string{
+				"data": "/app/data",
+			},
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	servicesMap := parsed["services"].(map[string]interface{})
+	webService := servicesMap["web"].(map[string]interface{})
+	volumes, ok := webService["volumes"].([]interface{})
+	if !ok {
+		t.Fatal("volumes section missing")
+	}
+
+	hasBindMount := false
+	hasNamedVolume := false
+	for _, v := range volumes {
+		s := v.(string)
+		if s == "./config.yaml:/app/config.yaml" {
+			hasBindMount = true
+		}
+		if s == "data:/app/data" {
+			hasNamedVolume = true
+		}
+	}
+	if !hasBindMount {
+		t.Error("bind mount for config file missing")
+	}
+	if !hasNamedVolume {
+		t.Error("named volume missing")
+	}
+
+	// Named volumes should appear in top-level volumes section
+	topVolumes, ok := parsed["volumes"].(map[string]interface{})
+	if !ok {
+		t.Fatal("top-level volumes section missing")
+	}
+	if _, ok := topVolumes["data"]; !ok {
+		t.Error("named volume 'data' missing from top-level volumes")
+	}
+}

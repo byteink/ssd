@@ -723,6 +723,139 @@ services:
 	}
 }
 
+func TestLoadFromBytes_Files(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected map[string]string
+	}{
+		{
+			name: "single file",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    files:
+      ./config.yaml: /app/config.yaml`,
+			expected: map[string]string{"./config.yaml": "/app/config.yaml"},
+		},
+		{
+			name: "multiple files",
+			yaml: `server: myserver
+services:
+  web:
+    name: web
+    files:
+      ./config.yaml: /app/config.yaml
+      ./certs/ca.pem: /etc/ssl/ca.pem`,
+			expected: map[string]string{
+				"./config.yaml":   "/app/config.yaml",
+				"./certs/ca.pem": "/etc/ssl/ca.pem",
+			},
+		},
+		{
+			name: "no files field",
+			yaml: `server: myserver
+services:
+  web:
+    name: web`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadFromBytes([]byte(tt.yaml))
+			require.NoError(t, err)
+
+			svc, err := cfg.GetService("web")
+			require.NoError(t, err)
+
+			if tt.expected == nil {
+				assert.Nil(t, svc.Files)
+			} else {
+				assert.Equal(t, tt.expected, svc.Files)
+			}
+		})
+	}
+}
+
+func TestValidateFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   map[string]string
+		wantErr string
+	}{
+		{
+			name:    "valid file mapping",
+			files:   map[string]string{"./config.yaml": "/app/config.yaml"},
+			wantErr: "",
+		},
+		{
+			name:    "empty local path",
+			files:   map[string]string{"": "/app/config.yaml"},
+			wantErr: "local path cannot be empty",
+		},
+		{
+			name:    "empty container path",
+			files:   map[string]string{"./config.yaml": ""},
+			wantErr: "container path cannot be empty",
+		},
+		{
+			name:    "absolute local path accepted",
+			files:   map[string]string{"/opt/configs/app.yaml": "/app/config.yaml"},
+			wantErr: "",
+		},
+		{
+			name:    "relative local path traversal rejected",
+			files:   map[string]string{"../../../etc/passwd": "/app/passwd"},
+			wantErr: "local path contains path traversal",
+		},
+		{
+			name:    "absolute local path with traversal accepted",
+			files:   map[string]string{"/home/user/../shared/config.yaml": "/app/config.yaml"},
+			wantErr: "",
+		},
+		{
+			name:    "container path must be absolute",
+			files:   map[string]string{"./config.yaml": "relative/path"},
+			wantErr: "container path must be absolute",
+		},
+		{
+			name:    "container path traversal rejected",
+			files:   map[string]string{"./config.yaml": "/app/../etc/shadow"},
+			wantErr: "container path contains path traversal",
+		},
+		{
+			name:    "shell metacharacter in local path",
+			files:   map[string]string{"./config;rm -rf /": "/app/config"},
+			wantErr: "local path contains shell metacharacter",
+		},
+		{
+			name:    "shell metacharacter in container path",
+			files:   map[string]string{"./config.yaml": "/app/$(whoami)"},
+			wantErr: "container path contains shell metacharacter",
+		},
+		{
+			name:    "duplicate basenames rejected",
+			files:   map[string]string{"./a/config.yaml": "/app/a.yaml", "./b/config.yaml": "/app/b.yaml"},
+			wantErr: "duplicate file basename",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFiles(tt.files)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfig_IsPrebuilt(t *testing.T) {
 	tests := []struct {
 		name     string

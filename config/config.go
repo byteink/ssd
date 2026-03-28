@@ -110,6 +110,7 @@ type Config struct {
 	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
 	DependsOn   Dependencies      `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
+	Files       map[string]string `yaml:"files"`       // local_path: container_mount_path
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
 }
 
@@ -302,6 +303,10 @@ func validateConfig(cfg *Config) error {
 		if err := ValidateVolumeName(volumeName); err != nil {
 			return fmt.Errorf("invalid volume name %q: %w", volumeName, err)
 		}
+	}
+
+	if err := ValidateFiles(cfg.Files); err != nil {
+		return fmt.Errorf("invalid files: %w", err)
 	}
 
 	if err := ValidateHealthCheck(cfg.HealthCheck); err != nil {
@@ -700,6 +705,61 @@ func ValidateVolumeName(name string) error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateFiles validates the files mapping for security and correctness.
+// Keys are local relative paths, values are absolute container mount paths.
+func ValidateFiles(files map[string]string) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	dangerousChars := ";|&$`(){}[]<>\\\"'*?"
+	basenames := make(map[string]bool, len(files))
+
+	for local, container := range files {
+		if err := validateFilePath(local, container, dangerousChars); err != nil {
+			return err
+		}
+
+		base := filepath.Base(local)
+		if basenames[base] {
+			return fmt.Errorf("duplicate file basename %q: files are placed in the stack directory by basename", base)
+		}
+		basenames[base] = true
+	}
+
+	return nil
+}
+
+func validateFilePath(local, container, dangerousChars string) error {
+	if local == "" {
+		return fmt.Errorf("local path cannot be empty")
+	}
+	if container == "" {
+		return fmt.Errorf("container path cannot be empty")
+	}
+	// Relative paths must not escape the project directory
+	if !filepath.IsAbs(local) && strings.Contains(local, "..") {
+		return fmt.Errorf("local path contains path traversal sequence (..): %s", local)
+	}
+	for _, r := range local {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("local path contains shell metacharacter: %c", r)
+		}
+	}
+	if !filepath.IsAbs(container) {
+		return fmt.Errorf("container path must be absolute: %s", container)
+	}
+	if strings.Contains(container, "..") {
+		return fmt.Errorf("container path contains path traversal sequence (..): %s", container)
+	}
+	for _, r := range container {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("container path contains shell metacharacter: %c", r)
+		}
+	}
 	return nil
 }
 

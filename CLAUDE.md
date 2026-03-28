@@ -133,6 +133,8 @@ services:
     depends_on:                     # Simple list or map with conditions
       - db
       - redis
+    files:
+      ./config.yaml: /app/config.yaml  # Local file -> container path
     volumes:
       postgres-data: /var/lib/postgresql/data
       redis-data: /data
@@ -250,6 +252,26 @@ services:
 ```
 
 `ports` maps directly to Docker Compose `ports:`. Each entry is `host:container` format. Works independently of domain/Traefik configuration.
+
+### Config files
+```yaml
+server: myserver
+
+services:
+  api:
+    files:
+      ./config.yaml: /app/config.yaml
+      ./certs/ca.pem: /etc/ssl/ca.pem
+```
+
+`files` copies local files to the stack directory on the server and bind-mounts them into the container. Keys are local relative paths, values are absolute container mount paths.
+
+- Files are transferred via SSH on every deploy, independent of git tracking (works with .gitignored files)
+- Files are placed in the stack directory using their basename (e.g., `./config.yaml` becomes `/stacks/project/config.yaml`)
+- Generates bind mounts in compose.yaml: `./config.yaml:/app/config.yaml`
+- Local paths can be relative or absolute (for files outside the project directory)
+- Relative local paths must not contain `..` traversal
+- Basenames must be unique across all files in a service
 
 ## Commands
 

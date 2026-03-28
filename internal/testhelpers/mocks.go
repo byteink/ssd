@@ -171,3 +171,9 @@ func (m *MockRemoteClient) RolloutService(ctx context.Context, serviceName strin
 	args := m.Called(serviceName)
 	return args.Error(0)
 }
+
+// CopyFiles mocks copying local files to the stack directory
+func (m *MockRemoteClient) CopyFiles(ctx context.Context, files map[string]string) error {
+	args := m.Called(files)
+	return args.Error(0)
+}

@@ -46,6 +46,8 @@ services:
     port: 3000                # Container port, default 80
     ports: ["3000:3000"]      # Host:container port mappings (optional)
     depends_on: [db, redis]   # Or map with conditions (service_healthy, service_started)
+    files:
+      ./config.yaml: /app/config.yaml  # Local file -> container path (works with .gitignored files)
     volumes:
       pg-data: /var/lib/postgresql/data
     healthcheck:
