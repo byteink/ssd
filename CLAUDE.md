@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **TDD**: Write tests first, then implementation
 - **Never weaken tests**: Fix code, not tests
 - **Never relax linting**: Fix errors, don't disable rules or use `_ =`
-- **Keep docs updated**: When adding/changing features, update both `README.md` and `CLAUDE.md`
+- **CLAUDE.md is the source of truth**: This file must always reflect the current state of the app. Every feature addition, removal, or change must include a CLAUDE.md update in the same changeset. If the code and CLAUDE.md disagree, the code is wrong or CLAUDE.md is stale — fix whichever is behind. Never merge a change that leaves CLAUDE.md out of sync.
+- **Help text is the user interface**: Every command, subcommand, and flag must have accurate, complete `-h`/`--help` output. When adding or changing any feature, update the help text (descriptions, usage strings, examples) in the same commit. Help text is not optional documentation — it is the primary way users discover and understand the tool. Outdated or missing help text is a bug.
+- **README.md stays current**: When adding/changing features, update `README.md` alongside code and CLAUDE.md
 
 ## Setup
 
