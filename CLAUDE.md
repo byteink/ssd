@@ -304,7 +304,7 @@ ssd env <service> list               # List all environment variables
 ssd env <service> rm KEY             # Remove environment variable
 ```
 
-**Note**: `env` command is currently a stub (not yet implemented).
+Environment variables are stored in `{service}.env` files on the server inside the stack directory (e.g., `/stacks/myapp/web.env`). Files are created automatically on first deploy with mode 600. Changes require `ssd restart <service>` to take effect.
 
 ### Provision (future)
 Server provisioning with Docker and Traefik is planned but not yet available. Tests exist in `provision/provision_test.go`.

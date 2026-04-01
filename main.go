@@ -97,6 +97,11 @@ func loadConfig(serviceName string) *config.Config {
 }
 
 func runDeploy(args []string) {
+	if wantsHelp(args) {
+		printDeployHelp()
+		return
+	}
+
 	rootCfg, err := config.Load("")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -212,6 +217,11 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 }
 
 func runRestart(args []string) {
+	if wantsHelp(args) {
+		printRestartHelp()
+		return
+	}
+
 	serviceName := ""
 	if len(args) > 0 {
 		serviceName = args[0]
@@ -228,6 +238,11 @@ func runRestart(args []string) {
 }
 
 func runRollback(args []string) {
+	if wantsHelp(args) {
+		printRollbackHelp()
+		return
+	}
+
 	serviceName := ""
 	if len(args) > 0 {
 		serviceName = args[0]
@@ -244,6 +259,11 @@ func runRollback(args []string) {
 }
 
 func runStatus(args []string) {
+	if wantsHelp(args) {
+		printStatusHelp()
+		return
+	}
+
 	serviceName := ""
 	if len(args) > 0 {
 		serviceName = args[0]
@@ -268,6 +288,11 @@ func runStatus(args []string) {
 }
 
 func runLogs(args []string) {
+	if wantsHelp(args) {
+		printLogsHelp()
+		return
+	}
+
 	serviceName := ""
 	follow := false
 	tail := 100
@@ -290,6 +315,11 @@ func runLogs(args []string) {
 }
 
 func runConfig(args []string) {
+	if wantsHelp(args) {
+		printConfigHelp()
+		return
+	}
+
 	serviceName := ""
 	if len(args) > 0 {
 		serviceName = args[0]
@@ -323,9 +353,12 @@ func runConfig(args []string) {
 }
 
 func runEnv(args []string) {
-	if len(args) < 2 {
-		fmt.Println("Usage: ssd env <service> <set|list|rm> [...]")
-		os.Exit(1)
+	if wantsHelp(args) || len(args) < 2 {
+		printEnvHelp()
+		if !wantsHelp(args) && len(args) < 2 {
+			os.Exit(1)
+		}
+		return
 	}
 	service := args[0]
 	action := args[1]
@@ -414,6 +447,11 @@ func runEnvRm(service string, args []string) {
 }
 
 func runProvision(args []string) {
+	if wantsHelp(args) {
+		printProvisionHelp()
+		return
+	}
+
 	var server, email string
 
 	// Parse flags
@@ -482,6 +520,11 @@ func runProvision(args []string) {
 }
 
 func runInit(args []string) {
+	if wantsHelp(args) {
+		printInitHelp()
+		return
+	}
+
 	opts := scaffold.Options{}
 
 	// Parse flags
@@ -540,7 +583,7 @@ func runInit(args []string) {
 			i++
 		default:
 			fmt.Printf("Error: Unknown flag: %s\n", args[i])
-			printInitUsage()
+			printInitHelp()
 			os.Exit(1)
 		}
 	}
@@ -609,19 +652,37 @@ func runInit(args []string) {
 	fmt.Println("  3. Run: ssd deploy app")
 }
 
-func printInitUsage() {
-	fmt.Println("Usage: ssd init [flags]")
-	fmt.Println()
-	fmt.Println("Flags:")
-	fmt.Println("  -s, --server STRING   SSH host name (required)")
-	fmt.Println("      --stack STRING    Stack path (e.g., /dockge/stacks/myapp)")
-	fmt.Println("      --service STRING  Service name (default: app)")
-	fmt.Println("  -d, --domain STRING   Domain for Traefik routing")
-	fmt.Println("      --path STRING     Path prefix for routing (e.g., /api)")
-	fmt.Println("  -p, --port INT        Container port")
-	fmt.Println("  -f, --force           Overwrite existing ssd.yaml")
-	fmt.Println()
-	fmt.Println("If no flags are provided, runs in interactive mode.")
+func printInitHelp() {
+	fmt.Print(`ssd init - Create an ssd.yaml configuration file
+
+Usage:
+  ssd init                        Interactive mode (prompts for each field)
+  ssd init [flags]                Non-interactive mode
+
+Flags:
+  -s, --server STRING             SSH host name (from ~/.ssh/config)
+      --stack STRING              Stack path on server (default: /stacks/{service})
+      --service STRING            Service name (default: app)
+  -d, --domain STRING             Domain for Traefik routing
+      --path STRING               Path prefix for routing (e.g., /api)
+  -p, --port INT                  Container port
+  -f, --force                     Overwrite existing ssd.yaml
+
+If no flags are provided, runs in interactive mode and prompts for each field.
+
+Examples:
+  # Interactive mode
+  ssd init
+
+  # Minimal non-interactive
+  ssd init -s myserver
+
+  # Full non-interactive
+  ssd init -s myserver --stack /stacks/myapp -d myapp.example.com -p 3000
+
+  # Overwrite existing config
+  ssd init -s myserver -f
+`)
 }
 
 func printConfig(cfg *config.Config, indent string) {
@@ -658,25 +719,244 @@ func printConfig(cfg *config.Config, indent string) {
 	}
 }
 
+// wantsHelp returns true if args contain -h, --help, or help.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
 func printUsage() {
-	fmt.Println("ssd - SSH Deploy")
-	fmt.Println()
-	fmt.Println("Agentless remote deployment tool for Docker Compose stacks.")
-	fmt.Println()
-	fmt.Println("Usage:")
-	fmt.Println("  ssd init                        Create ssd.yaml (interactive or flags)")
-	fmt.Println("  ssd deploy [service]            Deploy service (or all if omitted)")
-	fmt.Println("  ssd restart [service]           Restart stack without rebuilding")
-	fmt.Println("  ssd rollback [service]          Rollback to previous version")
-	fmt.Println("  ssd status [service]            Check deployment status")
-	fmt.Println("  ssd logs [service] [-f]         View logs (-f to follow)")
-	fmt.Println("  ssd config [service]            Show current configuration")
-	fmt.Println("  ssd env <svc> set K=V           Set environment variable")
-	fmt.Println("  ssd env <svc> list              List environment variables")
-	fmt.Println("  ssd env <svc> rm KEY            Remove environment variable")
-	fmt.Println("  ssd provision                   Provision server (Docker + Traefik)")
-	fmt.Println("  ssd version                     Show version")
-	fmt.Println("  ssd help                        Show this help")
-	fmt.Println()
-	fmt.Println("Learn more: https://github.com/byteink/ssd")
+	fmt.Print(`ssd - SSH Deploy
+
+Agentless remote deployment tool for Docker Compose stacks.
+Reads ssd.yaml from the current directory, SSHs into the configured server,
+builds/pulls Docker images, generates compose.yaml, and starts services.
+
+No agent, no daemon, no CI required. Just SSH and Docker.
+
+Usage:
+  ssd <command> [arguments]
+
+Commands:
+  init                            Create ssd.yaml configuration file
+  deploy [service]                Build and deploy a service (or all services)
+  restart [service]               Restart without rebuilding
+  rollback [service]              Rollback to the previous version
+  status [service]                Show container status
+  logs [service] [-f]             View service logs
+  config [service]                Show resolved configuration
+  env <service> <set|list|rm>     Manage environment variables on the server
+  provision                       Provision server with Docker and Traefik
+  version                         Show ssd version
+  help                            Show this help
+
+Run 'ssd <command> help' or 'ssd <command> -h' for detailed help on any command.
+
+Learn more: https://github.com/byteink/ssd
+`)
+}
+
+func printDeployHelp() {
+	fmt.Print(`ssd deploy - Build and deploy services
+
+Usage:
+  ssd deploy                      Deploy all services defined in ssd.yaml
+  ssd deploy <service>            Deploy a single service
+
+Workflow:
+  1. Reads ssd.yaml from the current directory
+  2. SSHs into the configured server
+  3. Rsyncs source code to a temp directory on the server (skipped for pre-built images)
+  4. Builds the Docker image on the server (or pulls if 'image' is set)
+  5. Generates compose.yaml in the stack directory
+  6. Starts the service using the configured deploy strategy
+  7. Cleans up the temp directory
+
+Deploy strategies (set via deploy.strategy in ssd.yaml):
+  rollout   (default) Zero-downtime. Scales up new container, health-checks, removes old.
+  recreate  In-place replacement via docker compose up --force-recreate. Brief downtime.
+
+Examples:
+  # Deploy a single service
+  ssd deploy web
+
+  # Deploy all services (builds all images first, then starts)
+  ssd deploy
+
+  # ssd.yaml for building from source
+  server: myserver
+  services:
+    web:
+      dockerfile: ./Dockerfile
+      domain: example.com
+      port: 3000
+
+  # ssd.yaml for a pre-built image (no build step)
+  server: myserver
+  services:
+    mongo:
+      image: mongo:7
+      volumes:
+        mongo-data: /data/db
+      ports:
+        - "27017:27017"
+
+  # ssd.yaml with deploy strategy
+  server: myserver
+  deploy:
+    strategy: rollout
+  services:
+    web:
+      dockerfile: ./Dockerfile
+    worker:
+      dockerfile: ./Dockerfile.worker
+      deploy:
+        strategy: recreate    # per-service override
+`)
+}
+
+func printRestartHelp() {
+	fmt.Print(`ssd restart - Restart services without rebuilding
+
+Usage:
+  ssd restart                     Restart all services in the stack
+  ssd restart <service>           Restart a single service
+
+Runs 'docker compose restart' on the server. Does not rebuild images
+or update configuration. Use 'ssd deploy' to apply changes.
+
+Examples:
+  ssd restart web
+  ssd restart
+`)
+}
+
+func printRollbackHelp() {
+	fmt.Print(`ssd rollback - Rollback to the previous version
+
+Usage:
+  ssd rollback <service>          Rollback a service to its previous image version
+
+Reads the current image tag from compose.yaml on the server, decrements the
+version number, updates compose.yaml, and restarts the service.
+
+Examples:
+  ssd rollback web
+  ssd rollback api
+`)
+}
+
+func printStatusHelp() {
+	fmt.Print(`ssd status - Show container status
+
+Usage:
+  ssd status                      Show status for all containers in the stack
+  ssd status <service>            Show status for a specific service
+
+Runs 'docker compose ps' on the server and displays container state,
+health, ports, and uptime.
+
+Examples:
+  ssd status web
+  ssd status
+`)
+}
+
+func printLogsHelp() {
+	fmt.Print(`ssd logs - View service logs
+
+Usage:
+  ssd logs [service] [-f]
+
+Flags:
+  -f, --follow                    Stream logs in real time (like tail -f)
+
+Shows the last 100 lines of logs by default. Use -f to follow.
+
+Examples:
+  ssd logs web                    Show recent logs for web
+  ssd logs web -f                 Follow logs for web in real time
+  ssd logs                        Show recent logs for all services
+`)
+}
+
+func printConfigHelp() {
+	fmt.Print(`ssd config - Show resolved configuration
+
+Usage:
+  ssd config                      Show configuration for all services
+  ssd config <service>            Show configuration for a specific service
+
+Displays the fully resolved configuration after applying inheritance
+(root-level server, stack, deploy strategy inherited by services).
+
+Examples:
+  ssd config web
+  ssd config
+`)
+}
+
+func printEnvHelp() {
+	fmt.Print(`ssd env - Manage environment variables on the server
+
+Usage:
+  ssd env <service> set KEY=VALUE Set or update an environment variable
+  ssd env <service> list          List all environment variables
+  ssd env <service> rm KEY        Remove an environment variable
+
+Environment variables are stored in {service}.env files on the server
+inside the stack directory (e.g., /stacks/myapp/web.env). These files
+are referenced by compose.yaml via env_file and are created automatically
+on first deploy with mode 600.
+
+The env file is read, modified in memory, and written back atomically.
+Values containing '=' are handled correctly (split on first '=' only).
+
+Examples:
+  # Set a database URL (value contains '=')
+  ssd env api set DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=require
+
+  # Set multiple variables one at a time
+  ssd env api set NODE_ENV=production
+  ssd env api set PORT=3000
+  ssd env api set SECRET_KEY=abc123
+
+  # List all variables for a service
+  ssd env api list
+
+  # Remove a variable
+  ssd env api rm OLD_SECRET
+
+  # Variables are available inside containers via env_file in compose.yaml
+  # No restart needed after set/rm - run 'ssd restart <service>' to apply
+`)
+}
+
+func printProvisionHelp() {
+	fmt.Print(`ssd provision - Provision a server with Docker and Traefik
+
+Usage:
+  ssd provision [flags]
+
+Flags:
+  --server STRING                 SSH host to provision (reads from ssd.yaml if omitted)
+  --email STRING                  Email for Let's Encrypt certificates (prompted if omitted)
+
+Installs Docker, Docker Compose, and sets up Traefik as a reverse proxy
+with automatic HTTPS via Let's Encrypt on the target server.
+
+Examples:
+  # Provision with flags
+  ssd provision --server myserver --email admin@example.com
+
+  # Provision using server from ssd.yaml (prompts for email)
+  ssd provision
+
+  # Provision with server flag only (prompts for email)
+  ssd provision --server myserver
+`)
 }
