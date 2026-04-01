@@ -452,6 +452,12 @@ func runProvision(args []string) {
 		return
 	}
 
+	// Handle subcommands
+	if len(args) > 0 && args[0] == "check" {
+		runProvisionCheck(args[1:])
+		return
+	}
+
 	var server, email string
 
 	// Parse flags
@@ -517,6 +523,82 @@ func runProvision(args []string) {
 	}
 
 	fmt.Println("\nProvisioning completed successfully!")
+}
+
+func runProvisionCheck(args []string) {
+	if wantsHelp(args) {
+		printProvisionCheckHelp()
+		return
+	}
+
+	var server string
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--server":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --server requires a value")
+				os.Exit(1)
+			}
+			server = args[i+1]
+			i += 2
+		default:
+			fmt.Printf("Error: Unknown flag: %s\n", args[i])
+			fmt.Println("Usage: ssd provision check [--server SERVER]")
+			os.Exit(1)
+		}
+	}
+
+	if server == "" {
+		rootCfg, err := config.Load("")
+		if err == nil && rootCfg.Server != "" {
+			server = rootCfg.Server
+		}
+	}
+
+	if server == "" {
+		fmt.Println("Error: server not specified and not found in config")
+		fmt.Println("Usage: ssd provision check [--server SERVER]")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Checking server %s...\n\n", server)
+
+	results, err := provision.Check(server)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	hasFail := false
+	hasWarn := false
+	for _, r := range results {
+		var label string
+		switch r.Status {
+		case provision.StatusOK:
+			label = "OK"
+		case provision.StatusWarn:
+			label = "WARN"
+			hasWarn = true
+		default:
+			label = "FAIL"
+			hasFail = true
+		}
+		fmt.Printf("  %-22s %-4s  %s\n", r.Name, label, r.Message)
+	}
+
+	fmt.Println()
+	if hasFail {
+		fmt.Println("Server is not ready. Run 'ssd provision' to set up missing components.")
+		os.Exit(1)
+	}
+	if hasWarn {
+		fmt.Println("Server is ready for ssd deployments.")
+		fmt.Println("Traefik is not configured — domain routing will not work.")
+	} else {
+		fmt.Println("Server is ready for ssd deployments.")
+	}
 }
 
 func runInit(args []string) {
@@ -751,6 +833,7 @@ Commands:
   config [service]                Show resolved configuration
   env <service> <set|list|rm>     Manage environment variables on the server
   provision                       Provision server with Docker and Traefik
+  provision check                 Verify server readiness for ssd
   version                         Show ssd version
   help                            Show this help
 
@@ -940,14 +1023,16 @@ func printProvisionHelp() {
 	fmt.Print(`ssd provision - Provision a server with Docker and Traefik
 
 Usage:
-  ssd provision [flags]
+  ssd provision [flags]           Install Docker, Traefik, and dependencies
+  ssd provision check [flags]     Verify server readiness for ssd
 
 Flags:
   --server STRING                 SSH host to provision (reads from ssd.yaml if omitted)
   --email STRING                  Email for Let's Encrypt certificates (prompted if omitted)
 
-Installs Docker, Docker Compose, and sets up Traefik as a reverse proxy
-with automatic HTTPS via Let's Encrypt on the target server.
+Installs Docker, Docker Compose, docker-rollout plugin, and sets up Traefik
+as a reverse proxy with automatic HTTPS via Let's Encrypt. All steps are
+idempotent and safe to run multiple times.
 
 Examples:
   # Provision with flags
@@ -956,7 +1041,33 @@ Examples:
   # Provision using server from ssd.yaml (prompts for email)
   ssd provision
 
-  # Provision with server flag only (prompts for email)
-  ssd provision --server myserver
+  # Check if server is ready
+  ssd provision check
+  ssd provision check --server myserver
+`)
+}
+
+func printProvisionCheckHelp() {
+	fmt.Print(`ssd provision check - Verify server readiness for ssd
+
+Usage:
+  ssd provision check [flags]
+
+Flags:
+  --server STRING                 SSH host to check (reads from ssd.yaml if omitted)
+
+Checks:
+  Docker                          Docker engine is installed
+  Docker Compose                  docker compose plugin is available
+  docker-rollout                  Zero-downtime rollout plugin is installed
+  traefik_web network             Docker network for Traefik routing exists
+  Traefik                         Traefik reverse proxy is running
+
+Examples:
+  # Check server from ssd.yaml
+  ssd provision check
+
+  # Check a specific server
+  ssd provision check --server myserver
 `)
 }

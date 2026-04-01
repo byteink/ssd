@@ -45,6 +45,8 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── remote.go     # SSH, rsync, docker operations
 ├── deploy/
 │   └── deploy.go     # Deploy orchestration
+├── provision/
+│   └── provision.go  # Server provisioning and readiness checks
 ├── scaffold/
 │   └── scaffold.go   # ssd init command (generate ssd.yaml)
 └── SKILL.md          # Claude Code skill file (for end users)
@@ -308,5 +310,15 @@ ssd env <service> rm KEY             # Remove environment variable
 
 Environment variables are stored in `{service}.env` files on the server inside the stack directory (e.g., `/stacks/myapp/web.env`). Files are created automatically on first deploy with mode 600. Changes require `ssd restart <service>` to take effect.
 
-### Provision (future)
-Server provisioning with Docker and Traefik is planned but not yet available. Tests exist in `provision/provision_test.go`.
+### Provision
+```bash
+ssd provision                         # Provision server (Docker, Traefik, docker-rollout)
+ssd provision --server myserver       # Specify server explicitly
+ssd provision --email admin@x.com     # Provide Let's Encrypt email via flag
+ssd provision check                   # Verify server readiness for ssd
+ssd provision check --server myserver # Check a specific server
+```
+
+Installs Docker, Docker Compose, docker-rollout plugin, creates the `traefik_web` network, and starts Traefik with automatic HTTPS via Let's Encrypt. All steps are idempotent.
+
+`provision check` verifies: Docker, Docker Compose, docker-rollout plugin, traefik_web network, and Traefik running status.

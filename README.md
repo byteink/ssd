@@ -342,15 +342,21 @@ ssd env <service> rm KEY             # Remove environment variable
 
 ### Server Provisioning
 ```bash
-ssd provision                 # Provision server with Docker and Traefik
+ssd provision                                         # Provision server from ssd.yaml
+ssd provision --server myserver --email admin@x.com   # Explicit server and email
+ssd provision check                                   # Verify server readiness
+ssd provision check --server myserver                 # Check a specific server
 ```
 
 Provisions the target server with:
 - Docker and Docker Compose installation
+- docker-rollout plugin for zero-downtime deploys
 - Traefik reverse proxy with automatic HTTPS (Let's Encrypt)
-- Docker network for service discovery
+- `traefik_web` Docker network for service discovery
 
-**Note**: This command is planned but not yet implemented.
+All steps are idempotent and safe to run multiple times.
+
+`provision check` verifies that Docker, Docker Compose, docker-rollout, the traefik_web network, and Traefik are all present and running.
 
 ### Other
 ```bash

@@ -19,6 +19,8 @@ ssd env <service> set K=V     # Set env var on server
 ssd env <service> list        # List env vars
 ssd env <service> rm KEY      # Remove env var
 ssd init [-s host] [-d domain] [-p port]  # Generate ssd.yaml
+ssd provision [--server S] [--email E]    # Provision server (Docker + Traefik)
+ssd provision check [--server S]          # Verify server readiness
 ```
 
 ## Config (ssd.yaml)

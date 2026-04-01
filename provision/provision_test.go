@@ -415,3 +415,128 @@ func TestProvision_ErrorInStartTraefikReturnsError(t *testing.T) {
 		t.Errorf("expected error message to contain 'failed to start Traefik', got: %v", err)
 	}
 }
+
+// --- Check tests ---
+
+func TestCheckAllPassing(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHOutputs["docker compose version"] = "Docker Compose version v2.24.0"
+	mock.SSHOutputs["docker-rollout"] = "ok"
+	mock.SSHOutputs["docker network inspect traefik_web"] = "ok"
+	mock.SSHOutputs["docker compose ps"] = "running"
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	for _, r := range results {
+		if r.Status != StatusOK {
+			t.Errorf("expected check %q to pass, got status %d: %s", r.Name, r.Status, r.Message)
+		}
+	}
+
+	if len(results) != 5 {
+		t.Errorf("expected 5 checks, got %d", len(results))
+	}
+}
+
+func TestCheckDockerMissing(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHErrors["which docker"] = fmt.Errorf("not found")
+	mock.SSHErrors["docker compose version"] = fmt.Errorf("not found")
+	mock.SSHErrors["docker-rollout"] = fmt.Errorf("not found")
+	mock.SSHErrors["docker network inspect traefik_web"] = fmt.Errorf("not found")
+	mock.SSHErrors["docker compose ps"] = fmt.Errorf("not found")
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[0].Status != StatusFail {
+		t.Error("expected Docker check to fail")
+	}
+}
+
+func TestCheckDockerComposeMissing(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHErrors["docker compose version"] = fmt.Errorf("not a docker command")
+	mock.SSHOutputs["docker-rollout"] = "ok"
+	mock.SSHOutputs["docker network inspect traefik_web"] = "ok"
+	mock.SSHOutputs["docker compose ps"] = "running"
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[1].Status != StatusFail {
+		t.Error("expected Docker Compose check to fail")
+	}
+}
+
+func TestCheckTraefikNotRunning(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHOutputs["docker compose version"] = "Docker Compose version v2.24.0"
+	mock.SSHOutputs["docker-rollout"] = "ok"
+	mock.SSHOutputs["docker network inspect traefik_web"] = "ok"
+	mock.SSHErrors["docker compose ps"] = fmt.Errorf("no such file")
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[4].Status != StatusWarn {
+		t.Error("expected Traefik running check to warn")
+	}
+}
+
+func TestCheckNetworkMissing(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHOutputs["docker compose version"] = "Docker Compose version v2.24.0"
+	mock.SSHOutputs["docker-rollout"] = "ok"
+	mock.SSHErrors["docker network inspect traefik_web"] = fmt.Errorf("not found")
+	mock.SSHOutputs["docker compose ps"] = "running"
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[3].Status != StatusWarn {
+		t.Error("expected network check to warn")
+	}
+}
+
+func TestCheckRolloutMissing(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["which docker"] = "/usr/bin/docker"
+	mock.SSHOutputs["docker compose version"] = "Docker Compose version v2.24.0"
+	mock.SSHErrors["docker-rollout"] = fmt.Errorf("not found")
+	mock.SSHOutputs["docker network inspect traefik_web"] = "ok"
+	mock.SSHOutputs["docker compose ps"] = "running"
+
+	results, err := checkWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[2].Status != StatusFail {
+		t.Error("expected docker-rollout check to fail")
+	}
+}
+
+func TestCheckValidatesServer(t *testing.T) {
+	mock := NewMockRemoteClient()
+
+	_, err := checkWithClient(context.Background(), mock, "")
+	if err == nil {
+		t.Error("expected error for empty server, got nil")
+	}
+}

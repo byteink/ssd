@@ -167,3 +167,90 @@ func startTraefik(ctx context.Context, client RemoteClient) error {
 	cmd := "cd /stacks/traefik && docker compose up -d"
 	return client.SSHInteractive(ctx, cmd)
 }
+
+// CheckStatus represents the severity of a check result
+type CheckStatus int
+
+const (
+	StatusOK   CheckStatus = iota
+	StatusWarn             // optional component missing (e.g., Traefik)
+	StatusFail             // required component missing
+)
+
+// CheckResult represents the result of a single readiness check
+type CheckResult struct {
+	Name    string
+	Status  CheckStatus
+	Message string
+}
+
+// Check verifies that a server is ready for ssd deployments.
+// Returns a slice of check results (one per check) and an error only for invalid inputs.
+// Individual check failures are reported via CheckResult.OK, not as errors.
+func Check(server string) ([]CheckResult, error) {
+	return checkWithClient(context.Background(), nil, server)
+}
+
+// checkWithClient is the internal implementation that accepts a RemoteClient.
+func checkWithClient(ctx context.Context, client RemoteClient, server string) ([]CheckResult, error) {
+	if server == "" {
+		return nil, fmt.Errorf("server cannot be empty")
+	}
+
+	if client == nil {
+		client = remote.NewSSHClient(server)
+	}
+
+	results := make([]CheckResult, 0, 5)
+
+	results = append(results, checkDocker(ctx, client))
+	results = append(results, checkDockerCompose(ctx, client))
+	results = append(results, checkDockerRollout(ctx, client))
+	results = append(results, checkTraefikNetwork(ctx, client))
+	results = append(results, checkTraefikRunning(ctx, client))
+
+	return results, nil
+}
+
+func checkDocker(ctx context.Context, client RemoteClient) CheckResult {
+	output, err := client.SSH(ctx, "which docker")
+	if err != nil || strings.TrimSpace(output) == "" {
+		return CheckResult{Name: "Docker", Status: StatusFail, Message: "not installed"}
+	}
+	return CheckResult{Name: "Docker", Status: StatusOK, Message: strings.TrimSpace(output)}
+}
+
+func checkDockerCompose(ctx context.Context, client RemoteClient) CheckResult {
+	output, err := client.SSH(ctx, "docker compose version")
+	if err != nil || strings.TrimSpace(output) == "" {
+		return CheckResult{Name: "Docker Compose", Status: StatusFail, Message: "not installed"}
+	}
+	return CheckResult{Name: "Docker Compose", Status: StatusOK, Message: strings.TrimSpace(output)}
+}
+
+func checkDockerRollout(ctx context.Context, client RemoteClient) CheckResult {
+	_, err := client.SSH(ctx, "test -f ~/.docker/cli-plugins/docker-rollout && echo ok")
+	if err != nil {
+		return CheckResult{Name: "docker-rollout", Status: StatusFail, Message: "plugin not installed"}
+	}
+	return CheckResult{Name: "docker-rollout", Status: StatusOK, Message: "installed"}
+}
+
+func checkTraefikNetwork(ctx context.Context, client RemoteClient) CheckResult {
+	_, err := client.SSH(ctx, "docker network inspect traefik_web >/dev/null 2>&1 && echo ok")
+	if err != nil {
+		return CheckResult{Name: "traefik_web network", Status: StatusWarn, Message: "not found (needed for domain routing)"}
+	}
+	return CheckResult{Name: "traefik_web network", Status: StatusOK, Message: "exists"}
+}
+
+func checkTraefikRunning(ctx context.Context, client RemoteClient) CheckResult {
+	output, err := client.SSH(ctx, "cd /stacks/traefik && docker compose ps --format '{{.State}}' 2>/dev/null")
+	if err != nil || strings.TrimSpace(output) == "" {
+		return CheckResult{Name: "Traefik", Status: StatusWarn, Message: "not running (needed for domain routing)"}
+	}
+	if strings.Contains(output, "running") {
+		return CheckResult{Name: "Traefik", Status: StatusOK, Message: "running"}
+	}
+	return CheckResult{Name: "Traefik", Status: StatusWarn, Message: "not running (state: " + strings.TrimSpace(output) + ")"}
+}
