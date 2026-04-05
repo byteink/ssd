@@ -45,29 +45,59 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── remote.go     # SSH, rsync, docker operations
 ├── deploy/
 │   └── deploy.go     # Deploy orchestration
+├── compose/
+│   └── compose.go    # Docker Compose YAML generation
+├── k8s/
+│   └── manifest.go   # K8s manifest YAML generation (for k3s runtime)
+├── runtime/
+│   ├── runtime.go    # Runtime factory (compose or k3s)
+│   └── k3s/
+│       ├── client.go # K3s remote client (nerdctl/kubectl)
+│       └── secret.go # K8s secret management
 ├── provision/
-│   └── provision.go  # Server provisioning and readiness checks
+│   └── provision.go  # Server provisioning (Docker or K3s)
 ├── scaffold/
 │   └── scaffold.go   # ssd init command (generate ssd.yaml)
 └── SKILL.md          # Claude Code skill file (for end users)
 ```
 
+## Runtime
+
+ssd supports two runtimes, selected via `runtime` field in ssd.yaml:
+
+- **compose** (default): Docker Compose + Traefik. Builds with `docker build`, deploys with `docker compose`.
+- **k3s**: Kubernetes via K3s. Builds with `nerdctl build`, deploys with `kubectl apply`. K3s ships Traefik as ingress controller.
+
+The runtime factory (`runtime/runtime.go`) selects the right client implementation. All ssd commands work identically across runtimes — the user experience doesn't change.
+
 ## Core Workflow
 
+### Compose runtime
 1. Read `ssd.yaml` config from current directory
 2. SSH into configured server (uses `~/.ssh/config` hosts)
 3. Create temp directory on server
-4. Rsync code to temp dir (excludes .git, node_modules, .next)
+4. Rsync code to temp dir (via git archive)
 5. Build Docker image on server: `ssd-{name}:{version}`
 6. Parse current version from compose.yaml, increment it
 7. Start service using configured strategy (`docker rollout` or `--force-recreate`)
 8. Clean up temp directory
 
+### K3s runtime
+1. Read `ssd.yaml` config from current directory
+2. SSH into configured server
+3. Create temp directory on server
+4. Rsync code to temp dir (via git archive)
+5. Ensure buildkitd is running, build image with `nerdctl --namespace k8s.io build`
+6. Parse current version from manifests.yaml, increment it
+7. Generate K8s manifests, apply with `kubectl apply`
+8. Wait for rollout: `kubectl rollout status`
+9. Clean up temp directory
+
 ## Deployment Strategy
 
 Configurable via `deploy.strategy` in ssd.yaml. Two strategies:
-- **rollout** (default): Zero-downtime via `docker rollout` plugin. Scales up new container, waits for health, removes old.
-- **recreate**: In-place replacement via `docker compose up -d --force-recreate`. Brief downtime.
+- **rollout** (default): Zero-downtime. Compose: `docker rollout` plugin. K3s: native K8s `RollingUpdate`.
+- **recreate**: In-place replacement. Compose: `docker compose up --force-recreate`. K3s: K8s `Recreate` strategy.
 
 Strategy is set at root level and inherited by services. Per-service override supported.
 Deploy-all (`ssd deploy` with no args) builds all images first, then deploys each service using its configured strategy.
@@ -79,8 +109,23 @@ Deploy-all (`ssd deploy` with no args) builds all images first, then deploys eac
 - **Version tracking**: Parsed from compose.yaml image tag, auto-incremented on deploy
 - **Config inheritance**: Root-level `server` and `stack` are inherited by services
 - **Services-only mode**: All configs must use `services:` map (single-service mode removed)
+- **Runtime**: `compose` (default) or `k3s`, set via `runtime:` field in ssd.yaml
+- **K3s namespace**: One namespace per stack, derived from stack path basename (`/stacks/myapp` → `myapp`)
+- **K3s manifests**: Single `manifests.yaml` in stack dir, all K8s resources separated by `---`
+- **K3s builds**: `nerdctl --namespace k8s.io build` (images land directly in K3s containerd)
 
 ## ssd.yaml Patterns
+
+### K3s runtime
+```yaml
+runtime: k3s
+server: myserver
+
+services:
+  web:
+    domain: example.com
+    port: 3000
+```
 
 ### Minimal (single service)
 ```yaml
@@ -281,8 +326,9 @@ services:
 
 ### Initialize
 ```bash
-ssd init                      # Interactive mode
+ssd init                      # Interactive mode (prompts for runtime, server, etc.)
 ssd init -s myserver          # Non-interactive with flags
+ssd init -s myserver -r k3s   # K3s runtime
 ssd init -s myserver --stack /dockge/stacks/myapp -d myapp.example.com -p 3000
 ```
 
@@ -310,15 +356,38 @@ ssd env <service> rm KEY             # Remove environment variable
 
 Environment variables are stored in `{service}.env` files on the server inside the stack directory (e.g., `/stacks/myapp/web.env`). Files are created automatically on first deploy with mode 600. Changes require `ssd restart <service>` to take effect.
 
-### Provision
+For K3s runtime, env vars are translated to a ConfigMap on deploy.
+
+### Secrets (k3s only)
 ```bash
-ssd provision                         # Provision server (Docker, Traefik, docker-rollout)
-ssd provision --server myserver       # Specify server explicitly
-ssd provision --email admin@x.com     # Provide Let's Encrypt email via flag
-ssd provision check                   # Verify server readiness for ssd
-ssd provision check --server myserver # Check a specific server
+ssd secret <service> set KEY=VALUE    # Set a K8s Secret
+ssd secret <service> list             # List all secrets
+ssd secret <service> rm KEY           # Remove a secret
 ```
 
-Installs Docker, Docker Compose, docker-rollout plugin, creates the `traefik_web` network, and starts Traefik with automatic HTTPS via Let's Encrypt. All steps are idempotent.
+K8s Secrets are injected as env vars alongside ConfigMap vars. Only available with `runtime: k3s`. Running `ssd secret` with compose runtime errors out.
 
-`provision check` verifies: Docker, Docker Compose, docker-rollout plugin, traefik_web network, and Traefik running status.
+### Prune
+```bash
+ssd prune                             # Remove orphaned services from server
+ssd prune --dry-run                   # Preview without removing
+```
+
+Compares ssd.yaml services against what's deployed on the server. Removes orphans. Works with both runtimes. Deploy-all (`ssd deploy`) warns about orphans after deployment.
+
+### Provision
+```bash
+ssd provision                         # Provision server (reads runtime from ssd.yaml)
+ssd provision --server myserver       # Specify server explicitly
+ssd provision --runtime k3s           # K3s provisioning
+ssd provision --email admin@x.com     # Provide Let's Encrypt email via flag
+ssd provision check                   # Verify server readiness
+ssd provision check --server myserver # Check a specific server
+ssd provision check --runtime k3s     # Check K3s readiness
+```
+
+**Compose provision**: Installs Docker, Docker Compose, docker-rollout plugin, creates `traefik_web` network, starts Traefik with HTTPS via Let's Encrypt.
+
+**K3s provision**: Installs K3s, nerdctl + buildkit, configures nerdctl for K3s containerd socket (`/run/k3s/containerd/containerd.sock`, namespace `k8s.io`), installs buildkitd as systemd service, configures Traefik ACME via HelmChartConfig CRD.
+
+All steps are idempotent.

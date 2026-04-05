@@ -2165,6 +2165,51 @@ func TestRootConfig_GetService_ValidatesPorts(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid port mapping")
 }
 
+func TestRootConfig_Runtime_DefaultsToCompose(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte("server: myserver\nservices:\n  web: {}"))
+	require.NoError(t, err)
+	assert.Equal(t, "compose", cfg.Runtime)
+}
+
+func TestRootConfig_Runtime_K3s(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte("runtime: k3s\nserver: myserver\nservices:\n  web: {}"))
+	require.NoError(t, err)
+	assert.Equal(t, "k3s", cfg.Runtime)
+}
+
+func TestRootConfig_Runtime_Compose(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte("runtime: compose\nserver: myserver\nservices:\n  web: {}"))
+	require.NoError(t, err)
+	assert.Equal(t, "compose", cfg.Runtime)
+}
+
+func TestRootConfig_Runtime_InvalidValue(t *testing.T) {
+	cfg := &RootConfig{
+		Runtime: "docker-swarm",
+		Server:  "myserver",
+		Services: map[string]*Config{
+			"web": {},
+		},
+	}
+	_, err := cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid runtime")
+}
+
+func TestRootConfig_Runtime_EmptyDefaultsToCompose(t *testing.T) {
+	cfg := &RootConfig{
+		Server: "myserver",
+		Services: map[string]*Config{
+			"web": {},
+		},
+	}
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.NotNil(t, svc)
+	// Runtime is on RootConfig, not Config — just verify no error when empty
+	assert.Equal(t, "compose", cfg.Runtime)
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

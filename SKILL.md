@@ -1,10 +1,10 @@
 ---
 name: ssd
-description: Deploy and manage Docker services on remote servers using ssd (SSH Deploy). Use when the user asks to deploy, restart, rollback, check status, view logs, or configure services.
+description: Deploy and manage services on remote servers using ssd (SSH Deploy). Supports Docker Compose and K3s runtimes. Use when the user asks to deploy, restart, rollback, check status, view logs, or configure services.
 argument-hint: "[command] [service] [args...]"
 ---
 
-`ssd` deploys Docker Compose stacks to remote servers via SSH. No agents — just rsync, build on server, and restart.
+`ssd` deploys containerized stacks to remote servers via SSH. Supports Docker Compose and K3s runtimes. No agents — just rsync, build on server, and restart.
 
 ## Commands
 
@@ -18,9 +18,14 @@ ssd config [service]          # Show resolved config
 ssd env <service> set K=V     # Set env var on server
 ssd env <service> list        # List env vars
 ssd env <service> rm KEY      # Remove env var
-ssd init [-s host] [-d domain] [-p port]  # Generate ssd.yaml
-ssd provision [--server S] [--email E]    # Provision server (Docker + Traefik)
-ssd provision check [--server S]          # Verify server readiness
+ssd secret <service> set K=V  # Set K8s secret (k3s only)
+ssd secret <service> list     # List secrets (k3s only)
+ssd secret <service> rm KEY   # Remove secret (k3s only)
+ssd prune                     # Remove orphaned services from server
+ssd prune --dry-run           # Preview orphans without removing
+ssd init [-s host] [-r runtime] [-d domain] [-p port]  # Generate ssd.yaml
+ssd provision [--server S] [--email E] [--runtime R]    # Provision server
+ssd provision check [--server S] [--runtime R]          # Verify server readiness
 ```
 
 ## Config (ssd.yaml)
@@ -28,6 +33,7 @@ ssd provision check [--server S]          # Verify server readiness
 Read `ssd.yaml` in the project root before running commands. Key structure:
 
 ```yaml
+runtime: k3s                  # "compose" (default) or "k3s"
 server: myserver              # SSH host from ~/.ssh/config
 stack: /stacks/myapp          # Stack dir on server (default: /stacks/{name})
 deploy:

@@ -1,19 +1,20 @@
 # ssd - SSH Deploy
 
-Agentless remote deployment tool for Docker Compose stacks.
+Agentless remote deployment tool for Docker Compose and K3s.
 
 ## What is ssd?
 
-`ssd` is a lightweight CLI tool that simplifies deploying Docker applications to remote servers via SSH. No agents, no complex setup—just SSH access and Docker Compose.
+`ssd` is a lightweight CLI tool that simplifies deploying containerized applications to remote servers via SSH. Supports both Docker Compose and K3s (Kubernetes) runtimes. No agents, no complex setup—just SSH access.
 
 ## Features
 
 - **Simple**: Convention-over-configuration approach
 - **Flexible**: Works with monorepos and simple projects
-- **Agentless**: Only requires SSH access and Docker on the server
+- **Agentless**: Only requires SSH access
+- **Dual runtime**: Docker Compose or K3s — same ssd.yaml, same commands
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
-- **Reliable**: Force-recreate deployment with automatic version tracking
+- **Reliable**: Zero-downtime deployments with automatic version tracking
 
 ## Installation
 
@@ -60,9 +61,22 @@ ssd deploy app
 
 That's it! `ssd` will:
 - Sync your code to the server via rsync
-- Build the Docker image on the server
+- Build the container image on the server
 - Auto-increment the version number
-- Update compose.yaml and restart the stack
+- Update compose.yaml (or K8s manifests for k3s) and restart the stack
+
+### K3s Quick Start
+
+```bash
+# Initialize with K3s runtime
+ssd init -s myserver -r k3s -d myapp.example.com -p 3000
+
+# Provision the server (installs K3s, nerdctl, buildkit, configures Traefik)
+ssd provision
+
+# Deploy
+ssd deploy app
+```
 
 ## Configuration
 

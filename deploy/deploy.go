@@ -10,6 +10,7 @@ import (
 
 	"github.com/byteink/ssd/compose"
 	"github.com/byteink/ssd/config"
+	"github.com/byteink/ssd/k8s"
 	"github.com/byteink/ssd/remote"
 )
 
@@ -40,15 +41,15 @@ func sortedKeys(m map[string]*config.Config) []string {
 // Deployer defines the interface for deployment operations
 type Deployer interface {
 	GetCurrentVersion(ctx context.Context) (int, error)
-	ReadCompose(ctx context.Context) (string, error)
+	ReadManifest(ctx context.Context) (string, error)
 	MakeTempDir(ctx context.Context) (string, error)
 	Rsync(ctx context.Context, localPath, remotePath string) error
 	BuildImage(ctx context.Context, buildDir string, version int) error
-	UpdateCompose(ctx context.Context, version int) error
+	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	Cleanup(ctx context.Context, path string) error
 	StackExists(ctx context.Context) (bool, error)
-	CreateStack(ctx context.Context, composeContent string) error
+	CreateStack(ctx context.Context, content string) error
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFiles(ctx context.Context, serviceNames []string) error
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
@@ -58,7 +59,7 @@ type Deployer interface {
 	CopyFiles(ctx context.Context, files map[string]string) error
 }
 
-// parseServiceVersions extracts current version numbers from compose.yaml content
+// parseServiceVersions extracts current version numbers from manifest content
 func parseServiceVersions(content, stack string, services map[string]*config.Config) map[string]int {
 	versions := make(map[string]int, len(services))
 	project := filepath.Base(stack)
@@ -81,18 +82,30 @@ type Options struct {
 	Dependencies map[string]*config.Config
 	// AllServices maps all service names to their configs (used for initial stack creation)
 	AllServices map[string]*config.Config
-	// BuildOnly builds/pulls the image and updates compose.yaml but does not start the service.
-	// Used by deploy-all: build everything first, then docker compose up -d once.
+	// BuildOnly builds/pulls the image and updates the manifest but does not start the service.
+	// Used by deploy-all: build everything first, then start all services at once.
 	BuildOnly bool
+	// Runtime is the deployment runtime ("compose" or "k3s")
+	Runtime string
 }
 
-// Deploy performs a full deployment using the default client
-func Deploy(cfg *config.Config) error {
-	client := remote.NewClient(cfg)
-	return DeployWithClient(cfg, client, nil)
+// generateManifest calls the appropriate manifest generator based on runtime.
+func generateManifest(runtime string, services map[string]*config.Config, stack string, versions map[string]int) (string, error) {
+	if runtime == "k3s" {
+		return k8s.GenerateManifests(services, stack, versions)
+	}
+	return compose.GenerateCompose(services, stack, versions)
 }
 
-// DeployWithClient performs a deployment with a custom client (for testing)
+// manifestName returns the filename for the current runtime.
+func manifestName(runtime string) string {
+	if runtime == "k3s" {
+		return "manifests.yaml"
+	}
+	return "compose.yaml"
+}
+
+// DeployWithClient performs a deployment with a custom client
 func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error {
 	ctx := context.Background()
 
@@ -100,6 +113,11 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	output := io.Discard
 	if opts != nil && opts.Output != nil {
 		output = opts.Output
+	}
+
+	rt := "compose"
+	if opts != nil && opts.Runtime != "" {
+		rt = opts.Runtime
 	}
 
 	// Acquire deployment lock
@@ -118,8 +136,8 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	if !stackExists {
 		logln(output, "==> Creating stack (first deploy)...")
 
-		// Use all services for compose generation if available,
-		// so depends_on references are valid in the compose file
+		// Use all services for manifest generation if available,
+		// so depends_on references are valid
 		services := map[string]*config.Config{
 			cfg.Name: cfg,
 		}
@@ -127,46 +145,49 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 			services = opts.AllServices
 		}
 
-		logln(output, "    Generating compose.yaml...")
+		manifest := manifestName(rt)
+		logf(output, "    Generating %s...\n", manifest)
 		versions := make(map[string]int, len(services))
-		composeContent, err := compose.GenerateCompose(services, cfg.StackPath(), versions)
+		manifestContent, err := generateManifest(rt, services, cfg.StackPath(), versions)
 		if err != nil {
-			return fmt.Errorf("failed to generate compose file: %w", err)
+			return fmt.Errorf("failed to generate %s: %w", manifest, err)
 		}
 
-		// Create env files BEFORE CreateStack, because docker compose config
-		// validates that referenced env_file paths exist on disk
+		// Create env files BEFORE CreateStack — compose validates env_file
+		// paths exist; K3s needs them for ConfigMap population
 		envNames := sortedKeys(services)
 		logln(output, "    Creating env files...")
 		if err := client.CreateEnvFiles(ctx, envNames); err != nil {
 			return fmt.Errorf("failed to create env files: %w", err)
 		}
 
-		logln(output, "    Validating compose.yaml...")
-		if err := client.CreateStack(ctx, composeContent); err != nil {
+		logf(output, "    Validating %s...\n", manifest)
+		if err := client.CreateStack(ctx, manifestContent); err != nil {
 			return fmt.Errorf("failed to create stack: %w", err)
 		}
 
-		logln(output, "    Creating networks...")
+		// Networks are compose-only; K3s uses K8s Services for networking
+		if rt != "k3s" {
+			logln(output, "    Creating networks...")
 
-		// Only create traefik_web network if any service has a domain
-		needsTraefik := false
-		for _, svc := range services {
-			if svc.PrimaryDomain() != "" {
-				needsTraefik = true
-				break
+			needsTraefik := false
+			for _, svc := range services {
+				if svc.PrimaryDomain() != "" {
+					needsTraefik = true
+					break
+				}
 			}
-		}
-		if needsTraefik {
-			if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
-				return fmt.Errorf("failed to ensure network traefik_web: %w", err)
+			if needsTraefik {
+				if err := client.EnsureNetwork(ctx, "traefik_web"); err != nil {
+					return fmt.Errorf("failed to ensure network traefik_web: %w", err)
+				}
 			}
-		}
 
-		project := filepath.Base(cfg.StackPath())
-		internalNetwork := project + "_internal"
-		if err := client.EnsureNetwork(ctx, internalNetwork); err != nil {
-			return fmt.Errorf("failed to ensure network %s: %w", internalNetwork, err)
+			project := filepath.Base(cfg.StackPath())
+			internalNetwork := project + "_internal"
+			if err := client.EnsureNetwork(ctx, internalNetwork); err != nil {
+				return fmt.Errorf("failed to ensure network %s: %w", internalNetwork, err)
+			}
 		}
 
 		logln(output, "    Stack created successfully")
@@ -255,17 +276,18 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		}
 	}
 
-	// Update compose.yaml: regenerate from config when all services are known,
+	// Update manifest: regenerate from config when all services are known,
 	// otherwise fall back to regex replacement for the deployed service only
+	manifest := manifestName(rt)
 	if opts != nil && len(opts.AllServices) > 0 {
-		logln(output, "==> Updating compose.yaml...")
-		existingCompose, _ := client.ReadCompose(ctx)
-		currentVersions := parseServiceVersions(existingCompose, cfg.StackPath(), opts.AllServices)
+		logf(output, "==> Updating %s...\n", manifest)
+		existingManifest, _ := client.ReadManifest(ctx)
+		currentVersions := parseServiceVersions(existingManifest, cfg.StackPath(), opts.AllServices)
 		currentVersions[cfg.Name] = newVersion
 
-		newCompose, err := compose.GenerateCompose(opts.AllServices, cfg.StackPath(), currentVersions)
+		newManifest, err := generateManifest(rt, opts.AllServices, cfg.StackPath(), currentVersions)
 		if err != nil {
-			return fmt.Errorf("failed to generate compose.yaml: %w", err)
+			return fmt.Errorf("failed to generate %s: %w", manifest, err)
 		}
 
 		envNames := sortedKeys(opts.AllServices)
@@ -273,17 +295,17 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 			return fmt.Errorf("failed to create env files: %w", err)
 		}
 
-		if err := client.CreateStack(ctx, newCompose); err != nil {
-			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		if err := client.CreateStack(ctx, newManifest); err != nil {
+			return fmt.Errorf("failed to update %s: %w", manifest, err)
 		}
 	} else if !cfg.IsPrebuilt() {
-		logln(output, "==> Updating compose.yaml...")
-		if err := client.UpdateCompose(ctx, newVersion); err != nil {
-			return fmt.Errorf("failed to update compose.yaml: %w", err)
+		logf(output, "==> Updating %s...\n", manifest)
+		if err := client.UpdateManifest(ctx, newVersion); err != nil {
+			return fmt.Errorf("failed to update %s: %w", manifest, err)
 		}
 	}
 
-	// In BuildOnly mode, skip starting — caller will docker compose up -d once
+	// In BuildOnly mode, skip starting — caller will start all services at once
 	if buildOnly {
 		logf(output, "    Built %s version %d\n", cfg.Name, newVersion)
 		return nil
@@ -305,13 +327,7 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	return nil
 }
 
-// Restart restarts the stack without building a new image
-func Restart(cfg *config.Config) error {
-	client := remote.NewClient(cfg)
-	return RestartWithClient(cfg, client, nil)
-}
-
-// RestartWithClient restarts with a custom client (for testing)
+// RestartWithClient restarts a service without building a new image
 func RestartWithClient(cfg *config.Config, client Deployer, opts *Options) error {
 	ctx := context.Background()
 
@@ -337,13 +353,7 @@ func RestartWithClient(cfg *config.Config, client Deployer, opts *Options) error
 	return nil
 }
 
-// Rollback rolls back to the previous version
-func Rollback(cfg *config.Config) error {
-	client := remote.NewClient(cfg)
-	return RollbackWithClient(cfg, client, nil)
-}
-
-// RollbackWithClient rolls back with a custom client (for testing)
+// RollbackWithClient rolls back to the previous version
 func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) error {
 	ctx := context.Background()
 
@@ -358,6 +368,11 @@ func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) erro
 		return fmt.Errorf("failed to acquire deployment lock: %w", err)
 	}
 	defer unlock()
+
+	rt := "compose"
+	if opts != nil && opts.Runtime != "" {
+		rt = opts.Runtime
+	}
 
 	// Check if this is a pre-built service
 	if cfg.IsPrebuilt() {
@@ -379,10 +394,10 @@ func RollbackWithClient(cfg *config.Config, client Deployer, opts *Options) erro
 	previousVersion := currentVersion - 1
 	logf(output, "Current version: %d, rolling back to: %d\n", currentVersion, previousVersion)
 
-	// Update compose.yaml to previous version
-	logln(output, "Updating compose.yaml...")
-	if err := client.UpdateCompose(ctx, previousVersion); err != nil {
-		return fmt.Errorf("failed to update compose.yaml: %w", err)
+	manifest := manifestName(rt)
+	logf(output, "Updating %s...\n", manifest)
+	if err := client.UpdateManifest(ctx, previousVersion); err != nil {
+		return fmt.Errorf("failed to update %s: %w", manifest, err)
 	}
 
 	// Rollback only this service, not all

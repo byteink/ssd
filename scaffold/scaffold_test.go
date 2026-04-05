@@ -129,6 +129,39 @@ services:
     port: 3000
 `,
 		},
+		{
+			name: "with k3s runtime",
+			opts: Options{
+				Server:  "myserver",
+				Runtime: "k3s",
+			},
+			expected: `runtime: k3s
+server: myserver
+
+services:
+  app:
+    # Uncomment and configure as needed:
+    # domain: example.com
+    # path: /api
+    # port: 3000
+`,
+		},
+		{
+			name: "compose runtime omitted from output",
+			opts: Options{
+				Server:  "myserver",
+				Runtime: "compose",
+			},
+			expected: `server: myserver
+
+services:
+  app:
+    # Uncomment and configure as needed:
+    # domain: example.com
+    # path: /api
+    # port: 3000
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +215,22 @@ func TestValidate(t *testing.T) {
 				Port:   70000,
 			},
 			wantErr: "port must be between 1 and 65535",
+		},
+		{
+			name: "invalid runtime",
+			opts: Options{
+				Server:  "myserver",
+				Runtime: "swarm",
+			},
+			wantErr: "invalid runtime \"swarm\": must be compose or k3s",
+		},
+		{
+			name: "valid k3s runtime",
+			opts: Options{
+				Server:  "myserver",
+				Runtime: "k3s",
+			},
+			wantErr: "",
 		},
 	}
 

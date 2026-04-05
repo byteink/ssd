@@ -314,7 +314,7 @@ func TestClient_BuildImage_NoTarget(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-func TestClient_UpdateCompose(t *testing.T) {
+func TestClient_UpdateManifest(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
@@ -328,20 +328,20 @@ func TestClient_UpdateCompose(t *testing.T) {
 			strings.Contains(cmd, "/stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
-	err := client.UpdateCompose(context.Background(), 5)
+	err := client.UpdateManifest(context.Background(), 5)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
 }
 
-func TestClient_UpdateCompose_SedError(t *testing.T) {
+func TestClient_UpdateManifest_SedError(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
 	mockExec.On("Run", "ssh", mock.Anything).Return("", errors.New("sed failed"))
 
-	err := client.UpdateCompose(context.Background(), 5)
+	err := client.UpdateManifest(context.Background(), 5)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to update compose.yaml")

@@ -58,8 +58,8 @@ func (m *MockRemoteClient) BuildImage(ctx context.Context, buildDir string, vers
 	return args.Error(0)
 }
 
-// UpdateCompose mocks compose file updates
-func (m *MockRemoteClient) UpdateCompose(ctx context.Context, version int) error {
+// UpdateManifest mocks compose file updates
+func (m *MockRemoteClient) UpdateManifest(ctx context.Context, version int) error {
 	args := m.Called(version)
 	return args.Error(0)
 }
@@ -160,8 +160,8 @@ func (m *MockRemoteClient) StartService(ctx context.Context, serviceName string)
 	return args.Error(0)
 }
 
-// ReadCompose mocks reading compose file content
-func (m *MockRemoteClient) ReadCompose(ctx context.Context) (string, error) {
+// ReadManifest mocks reading compose file content
+func (m *MockRemoteClient) ReadManifest(ctx context.Context) (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
 }

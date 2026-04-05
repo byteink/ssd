@@ -540,3 +540,216 @@ func TestCheckValidatesServer(t *testing.T) {
 		t.Error("expected error for empty server, got nil")
 	}
 }
+
+// --- K3s Provision tests ---
+
+func TestProvisionK3s_Success(t *testing.T) {
+	mock := NewMockRemoteClient()
+	// K3s not installed yet
+	mock.SSHErrors["which k3s"] = fmt.Errorf("not found")
+	// nerdctl not installed yet
+	mock.SSHErrors["which nerdctl"] = fmt.Errorf("not found")
+	// buildkitd not active yet
+	mock.SSHOutputs["systemctl is-active buildkitd"] = "inactive"
+	// K3s ready after install
+	mock.SSHOutputs["k3s kubectl get nodes"] = "NAME   STATUS   ROLES\nnode1  Ready    control-plane"
+
+	err := provisionK3sWithClient(context.Background(), mock, "test-server", "test@example.com")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify K3s installation attempted
+	foundK3sInstall := false
+	for _, call := range mock.SSHInteractiveCalls {
+		if strings.Contains(call, "https://get.k3s.io") {
+			foundK3sInstall = true
+			break
+		}
+	}
+	if !foundK3sInstall {
+		t.Error("expected K3s installation command, but not found")
+	}
+
+	// Verify nerdctl installation attempted
+	foundNerdctl := false
+	for _, call := range mock.SSHCalls {
+		if strings.Contains(call, "nerdctl") && strings.Contains(call, "install") {
+			foundNerdctl = true
+			break
+		}
+	}
+	// Also check interactive calls
+	if !foundNerdctl {
+		for _, call := range mock.SSHInteractiveCalls {
+			if strings.Contains(call, "nerdctl") {
+				foundNerdctl = true
+				break
+			}
+		}
+	}
+	if !foundNerdctl {
+		t.Error("expected nerdctl installation command, but not found")
+	}
+
+	// Verify buildkit installation attempted
+	foundBuildkit := false
+	for _, call := range mock.SSHCalls {
+		if strings.Contains(call, "buildkit") {
+			foundBuildkit = true
+			break
+		}
+	}
+	if !foundBuildkit {
+		for _, call := range mock.SSHInteractiveCalls {
+			if strings.Contains(call, "buildkit") {
+				foundBuildkit = true
+				break
+			}
+		}
+	}
+	if !foundBuildkit {
+		t.Error("expected buildkit installation command, but not found")
+	}
+
+	// Verify nerdctl config written
+	foundNerdctlConfig := false
+	for _, call := range mock.SSHCalls {
+		if strings.Contains(call, "/etc/nerdctl/nerdctl.toml") {
+			foundNerdctlConfig = true
+			break
+		}
+	}
+	if !foundNerdctlConfig {
+		t.Error("expected nerdctl config write, but not found")
+	}
+
+	// Verify Traefik ACME configured
+	foundTraefikACME := false
+	for _, call := range mock.SSHCalls {
+		if strings.Contains(call, "HelmChartConfig") && strings.Contains(call, "test@example.com") {
+			foundTraefikACME = true
+			break
+		}
+	}
+	if !foundTraefikACME {
+		t.Error("expected Traefik ACME configuration, but not found")
+	}
+}
+
+func TestProvisionK3s_EmptyServer(t *testing.T) {
+	mock := NewMockRemoteClient()
+
+	err := provisionK3sWithClient(context.Background(), mock, "", "test@example.com")
+	if err == nil {
+		t.Error("expected error for empty server, got nil")
+	}
+	if !strings.Contains(err.Error(), "server cannot be empty") {
+		t.Errorf("expected 'server cannot be empty', got: %v", err)
+	}
+}
+
+func TestProvisionK3s_EmptyEmail(t *testing.T) {
+	mock := NewMockRemoteClient()
+
+	err := provisionK3sWithClient(context.Background(), mock, "test-server", "")
+	if err == nil {
+		t.Error("expected error for empty email, got nil")
+	}
+	if !strings.Contains(err.Error(), "email cannot be empty") {
+		t.Errorf("expected 'email cannot be empty', got: %v", err)
+	}
+}
+
+func TestProvisionK3s_K3sAlreadyInstalled(t *testing.T) {
+	mock := NewMockRemoteClient()
+	// K3s already installed
+	mock.SSHOutputs["which k3s"] = "/usr/local/bin/k3s"
+	// nerdctl already installed
+	mock.SSHOutputs["which nerdctl"] = "/usr/local/bin/nerdctl"
+	// buildkitd already active
+	mock.SSHOutputs["systemctl is-active buildkitd"] = "active"
+	// K3s ready
+	mock.SSHOutputs["k3s kubectl get nodes"] = "NAME   STATUS   ROLES\nnode1  Ready    control-plane"
+
+	err := provisionK3sWithClient(context.Background(), mock, "test-server", "test@example.com")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify K3s installation NOT attempted
+	for _, call := range mock.SSHInteractiveCalls {
+		if strings.Contains(call, "https://get.k3s.io") {
+			t.Error("K3s installation should have been skipped")
+		}
+	}
+}
+
+func TestProvisionK3s_K3sInstallFails(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHErrors["which k3s"] = fmt.Errorf("not found")
+	mock.InteractiveErrors["curl -sfL https://get.k3s.io | sh -"] = fmt.Errorf("install failed")
+
+	err := provisionK3sWithClient(context.Background(), mock, "test-server", "test@example.com")
+	if err == nil {
+		t.Error("expected error when K3s installation fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to install K3s") {
+		t.Errorf("expected error to contain 'failed to install K3s', got: %v", err)
+	}
+}
+
+// --- K3s Check tests ---
+
+func TestCheckK3s_AllOK(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHOutputs["k3s kubectl cluster-info"] = "Kubernetes control plane is running"
+	mock.SSHOutputs["which kubectl"] = "/usr/local/bin/kubectl"
+	mock.SSHOutputs["which nerdctl"] = "/usr/local/bin/nerdctl"
+	mock.SSHOutputs["systemctl is-active buildkitd"] = "active"
+	mock.SSHOutputs["k3s kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik"] = "traefik-abc123   1/1     Running"
+	mock.SSHOutputs["k3s kubectl get helmchartconfig"] = "traefik"
+
+	results, err := checkK3sWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	for _, r := range results {
+		if r.Status != StatusOK {
+			t.Errorf("expected check %q to pass, got status %d: %s", r.Name, r.Status, r.Message)
+		}
+	}
+
+	if len(results) != 6 {
+		t.Errorf("expected 6 checks, got %d", len(results))
+	}
+}
+
+func TestCheckK3s_K3sNotInstalled(t *testing.T) {
+	mock := NewMockRemoteClient()
+	mock.SSHErrors["k3s kubectl cluster-info"] = fmt.Errorf("not found")
+	mock.SSHErrors["which kubectl"] = fmt.Errorf("not found")
+	mock.SSHErrors["which nerdctl"] = fmt.Errorf("not found")
+	mock.SSHOutputs["systemctl is-active buildkitd"] = "inactive"
+	mock.SSHErrors["k3s kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik"] = fmt.Errorf("not found")
+	mock.SSHErrors["k3s kubectl get helmchartconfig"] = fmt.Errorf("not found")
+
+	results, err := checkK3sWithClient(context.Background(), mock, "test-server")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if results[0].Status != StatusFail {
+		t.Error("expected K3s check to fail")
+	}
+}
+
+func TestCheckK3s_ValidatesServer(t *testing.T) {
+	mock := NewMockRemoteClient()
+
+	_, err := checkK3sWithClient(context.Background(), mock, "")
+	if err == nil {
+		t.Error("expected error for empty server, got nil")
+	}
+}

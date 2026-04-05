@@ -144,7 +144,7 @@ EOF`)
 	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
-func (s *SSHIntegrationSuite) TestUpdateCompose() {
+func (s *SSHIntegrationSuite) TestUpdateManifest() {
 	client := s.newClient()
 
 	// Create stack directory and compose file using heredoc for reliable multi-line content
@@ -161,7 +161,7 @@ EOF`)
 	require.NoError(s.T(), err)
 
 	// Update to version 2
-	err = client.UpdateCompose(context.Background(), 2)
+	err = client.UpdateManifest(context.Background(), 2)
 	require.NoError(s.T(), err)
 
 	// Verify

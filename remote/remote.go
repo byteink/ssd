@@ -23,14 +23,14 @@ type RemoteClient interface {
 	Rsync(ctx context.Context, localPath, remotePath string) error
 	GetCurrentVersion(ctx context.Context) (int, error)
 	BuildImage(ctx context.Context, buildDir string, version int) error
-	UpdateCompose(ctx context.Context, version int) error
+	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	GetContainerStatus(ctx context.Context) (string, error)
 	GetLogs(ctx context.Context, follow bool, tail int) error
 	Cleanup(ctx context.Context, path string) error
 	MakeTempDir(ctx context.Context) (string, error)
 	StackExists(ctx context.Context) (bool, error)
-	ReadCompose(ctx context.Context) (string, error)
+	ReadManifest(ctx context.Context) (string, error)
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFile(ctx context.Context, serviceName string) error
@@ -167,10 +167,10 @@ func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error 
 	return c.executor.RunInteractive(ctx, "bash", "-c", pipeline)
 }
 
-// ReadCompose reads the current compose.yaml content from the remote server.
+// ReadManifest reads the current compose.yaml content from the remote server.
 // Returns empty string (no error) if the file does not exist.
-// Results are cached per Client instance; writes via CreateStack/UpdateCompose invalidate the cache.
-func (c *Client) ReadCompose(ctx context.Context) (string, error) {
+// Results are cached per Client instance; writes via CreateStack/UpdateManifest invalidate the cache.
+func (c *Client) ReadManifest(ctx context.Context) (string, error) {
 	if c.composeCached {
 		return c.composeCache, nil
 	}
@@ -204,9 +204,9 @@ func ParseVersionFromContent(content, imageName string) (int, error) {
 }
 
 // GetCurrentVersion reads the current image version from compose.yaml on the server.
-// Reuses cached compose content from ReadCompose when available.
+// Reuses cached compose content from ReadManifest when available.
 func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
-	content, err := c.ReadCompose(ctx)
+	content, err := c.ReadManifest(ctx)
 	if err != nil {
 		return 0, nil
 	}
@@ -231,9 +231,9 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 	return c.SSHInteractive(ctx, cmd)
 }
 
-// UpdateCompose updates the image tag in compose.yaml via server-side sed.
+// UpdateManifest updates the image tag in compose.yaml via server-side sed.
 // Single SSH call instead of read-modify-write.
-func (c *Client) UpdateCompose(ctx context.Context, version int) error {
+func (c *Client) UpdateManifest(ctx context.Context, version int) error {
 	composePath := filepath.Join(c.cfg.StackPath(), "compose.yaml")
 	newImage := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 	project := filepath.Base(c.cfg.Stack)

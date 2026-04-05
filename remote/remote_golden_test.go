@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// transformCompose applies the same transformation logic as UpdateCompose
+// transformCompose applies the same transformation logic as UpdateManifest
 // but operates on strings directly for testing purposes
 // project and service are both appName to simulate the common case where they match
 func transformCompose(input string, appName string, newVersion int) string {
@@ -34,7 +34,7 @@ func readGoldenFile(testCase, filename string) string {
 	return string(data)
 }
 
-func TestGolden_UpdateCompose(t *testing.T) {
+func TestGolden_UpdateManifest(t *testing.T) {
 	tests := []struct {
 		name       string
 		appName    string
@@ -66,7 +66,7 @@ func TestGolden_UpdateCompose(t *testing.T) {
 	}
 }
 
-func TestGolden_UpdateCompose_MultipleOccurrences(t *testing.T) {
+func TestGolden_UpdateManifest_MultipleOccurrences(t *testing.T) {
 	input := `services:
   app:
     image: ssd-myapp-myapp:3
@@ -86,7 +86,7 @@ func TestGolden_UpdateCompose_MultipleOccurrences(t *testing.T) {
 	require.Equal(t, expected, result)
 }
 
-func TestGolden_UpdateCompose_NoMatch(t *testing.T) {
+func TestGolden_UpdateManifest_NoMatch(t *testing.T) {
 	input := `services:
   app:
     image: nginx:latest
@@ -100,7 +100,7 @@ func TestGolden_UpdateCompose_NoMatch(t *testing.T) {
 	require.Equal(t, expected, result)
 }
 
-func TestGolden_UpdateCompose_MixedSpacing(t *testing.T) {
+func TestGolden_UpdateManifest_MixedSpacing(t *testing.T) {
 	input := `services:
   app:
     image:  ssd-myapp-myapp:4

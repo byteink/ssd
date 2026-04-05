@@ -43,7 +43,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 	mockClient1.On("MakeTempDir").Return("/tmp/build1", nil)
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
-	mockClient1.On("UpdateCompose", 2).Return(nil)
+	mockClient1.On("UpdateManifest", 2).Return(nil)
 	mockClient1.On("RolloutService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "first-completed")
@@ -66,7 +66,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 3).Return(nil)
-	mockClient2.On("UpdateCompose", 3).Return(nil)
+	mockClient2.On("UpdateManifest", 3).Return(nil)
 	mockClient2.On("RolloutService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "second-completed")
@@ -161,7 +161,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 	mockClient1.On("MakeTempDir").Return("/tmp/build1", nil)
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
-	mockClient1.On("UpdateCompose", 2).Return(nil)
+	mockClient1.On("UpdateManifest", 2).Return(nil)
 	mockClient1.On("RolloutService", "app1").Return(nil)
 	mockClient1.On("Cleanup", "/tmp/build1").Return(nil)
 
@@ -180,7 +180,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 4).Return(nil)
-	mockClient2.On("UpdateCompose", 4).Return(nil)
+	mockClient2.On("UpdateManifest", 4).Return(nil)
 	mockClient2.On("RolloutService", "app2").Return(nil)
 	mockClient2.On("Cleanup", "/tmp/build2").Return(nil)
 
@@ -242,7 +242,7 @@ func TestConcurrent_LockTimeout(t *testing.T) {
 	mockClient1.On("MakeTempDir").Return("/tmp/build1", nil)
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 2).Return(nil)
-	mockClient1.On("UpdateCompose", 2).Return(nil)
+	mockClient1.On("UpdateManifest", 2).Return(nil)
 	mockClient1.On("RolloutService", "myapp").Return(nil)
 	mockClient1.On("Cleanup", "/tmp/build1").Return(nil)
 
@@ -314,7 +314,7 @@ func TestConcurrent_LockReleasedOnFailure(t *testing.T) {
 	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 2).Return(nil)
-	mockClient2.On("UpdateCompose", 2).Return(nil)
+	mockClient2.On("UpdateManifest", 2).Return(nil)
 	mockClient2.On("RolloutService", "myapp").Return(nil)
 	mockClient2.On("Cleanup", "/tmp/build2").Return(nil)
 
@@ -373,7 +373,7 @@ func TestConcurrent_RaceConditions(t *testing.T) {
 				mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 				mockClient.On("BuildImage", "/tmp/build", version).Return(nil)
-				mockClient.On("UpdateCompose", version).Return(nil)
+				mockClient.On("UpdateManifest", version).Return(nil)
 				mockClient.On("RolloutService", "racetest").Return(nil)
 				mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -443,7 +443,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 	mockClient1.On("MakeTempDir").Return("/tmp/build1", nil)
 	mockClient1.On("Rsync", mock.Anything, "/tmp/build1").Return(nil)
 	mockClient1.On("BuildImage", "/tmp/build1", 6).Return(nil)
-	mockClient1.On("UpdateCompose", 6).Return(nil)
+	mockClient1.On("UpdateManifest", 6).Return(nil)
 	mockClient1.On("RolloutService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "first-completed")
@@ -466,7 +466,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 	mockClient2.On("MakeTempDir").Return("/tmp/build2", nil)
 	mockClient2.On("Rsync", mock.Anything, "/tmp/build2").Return(nil)
 	mockClient2.On("BuildImage", "/tmp/build2", 7).Return(nil)
-	mockClient2.On("UpdateCompose", 7).Return(nil)
+	mockClient2.On("UpdateManifest", 7).Return(nil)
 	mockClient2.On("RolloutService", "myapp").Run(func(args mock.Arguments) {
 		mu.Lock()
 		executionOrder = append(executionOrder, "second-completed")
@@ -556,7 +556,7 @@ func TestConcurrent_MultipleStacksNoInterference(t *testing.T) {
 				mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 				mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 				mockClient.On("BuildImage", "/tmp/build", version).Return(nil)
-				mockClient.On("UpdateCompose", version).Return(nil)
+				mockClient.On("UpdateManifest", version).Return(nil)
 				mockClient.On("RolloutService", "app").Return(nil)
 				mockClient.On("Cleanup", "/tmp/build").Return(nil)
 

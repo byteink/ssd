@@ -6,11 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/byteink/ssd/config"
 )
 
 // Options holds configuration for init command
 type Options struct {
 	Server  string // Required: SSH host name
+	Runtime string // Optional: "compose" (default) or "k3s"
 	Stack   string // Optional: stack path (e.g., /dockge/stacks/myapp)
 	Service string // Optional: service name (default: "app")
 	Domain  string // Optional: domain for Traefik routing
@@ -27,12 +30,22 @@ func Validate(opts Options) error {
 	if opts.Port < 0 || opts.Port > 65535 {
 		return errors.New("port must be between 1 and 65535")
 	}
+	if opts.Runtime != "" {
+		if err := config.ValidateRuntime(opts.Runtime); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Generate creates the ssd.yaml content from options
 func Generate(opts Options) string {
 	var sb strings.Builder
+
+	// Runtime (only emit if not default)
+	if opts.Runtime == "k3s" {
+		fmt.Fprintf(&sb, "runtime: %s\n", opts.Runtime)
+	}
 
 	// Server (required)
 	fmt.Fprintf(&sb, "server: %s\n", opts.Server)

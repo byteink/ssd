@@ -145,7 +145,7 @@ func TestShellInjection_StackPathWithDollarSign(t *testing.T) {
 	_, err := client.GetCurrentVersion(context.Background())
 	require.NoError(t, err)
 
-	// Verify UpdateCompose also properly escapes (single sed call)
+	// Verify UpdateManifest also properly escapes (single sed call)
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
 		return strings.Contains(cmd, "sed -i") &&
@@ -153,7 +153,7 @@ func TestShellInjection_StackPathWithDollarSign(t *testing.T) {
 				strings.Contains(cmd, `"/stacks/$HOME/compose.yaml"`))
 	})).Return("", nil)
 
-	err = client.UpdateCompose(context.Background(), 2)
+	err = client.UpdateManifest(context.Background(), 2)
 	require.NoError(t, err)
 
 	mockExec.AssertExpectations(t)
@@ -282,7 +282,7 @@ func TestShellInjection_DockerfilePathWithSpecialChars(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-// TestShellInjection_ComposeContentWithSpecialChars verifies UpdateCompose sed pattern is safe
+// TestShellInjection_ComposeContentWithSpecialChars verifies UpdateManifest sed pattern is safe
 func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 	cfg := &config.Config{
 		Name:       "myapp",
@@ -294,7 +294,7 @@ func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	// sed-based UpdateCompose uses a single call with pipe delimiter
+	// sed-based UpdateManifest uses a single call with pipe delimiter
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
 		return strings.Contains(cmd, "sed -i") &&
@@ -303,7 +303,7 @@ func TestShellInjection_ComposeContentWithSpecialChars(t *testing.T) {
 			strings.Contains(cmd, "/stacks/myapp/compose.yaml")
 	})).Return("", nil)
 
-	err := client.UpdateCompose(context.Background(), 2)
+	err := client.UpdateManifest(context.Background(), 2)
 	require.NoError(t, err)
 
 	mockExec.AssertExpectations(t)

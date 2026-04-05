@@ -18,7 +18,7 @@ func TestChaos_ComposeUpdatedRestartFails(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 4).Return(nil)
-	mockClient.On("UpdateCompose", 4).Return(nil)
+	mockClient.On("UpdateManifest", 4).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(errors.New("docker rollout failed"))
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -27,7 +27,7 @@ func TestChaos_ComposeUpdatedRestartFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to rollout service")
 	assert.Contains(t, err.Error(), "docker rollout failed")
-	mockClient.AssertCalled(t, "UpdateCompose", 4)
+	mockClient.AssertCalled(t, "UpdateManifest", 4)
 	mockClient.AssertCalled(t, "RolloutService", "myapp")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
@@ -41,7 +41,7 @@ func TestChaos_BuildSucceededUpdateFails(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
-	mockClient.On("UpdateCompose", 6).Return(errors.New("permission denied on compose.yaml"))
+	mockClient.On("UpdateManifest", 6).Return(errors.New("permission denied on compose.yaml"))
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	err := DeployWithClient(cfg, mockClient, nil)
@@ -50,7 +50,7 @@ func TestChaos_BuildSucceededUpdateFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to update compose.yaml")
 	assert.Contains(t, err.Error(), "permission denied on compose.yaml")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 6)
-	mockClient.AssertCalled(t, "UpdateCompose", 6)
+	mockClient.AssertCalled(t, "UpdateManifest", 6)
 	mockClient.AssertNotCalled(t, "RolloutService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
@@ -64,7 +64,7 @@ func TestChaos_CleanupFailsAfterSuccess(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
-	mockClient.On("UpdateCompose", 3).Return(nil)
+	mockClient.On("UpdateManifest", 3).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(errors.New("failed to remove temp directory"))
 
@@ -94,7 +94,7 @@ func TestChaos_MkTempFailsDiskFull(t *testing.T) {
 	mockClient.AssertCalled(t, "MakeTempDir")
 	mockClient.AssertNotCalled(t, "Rsync", mock.Anything, mock.Anything)
 	mockClient.AssertNotCalled(t, "BuildImage", mock.Anything, mock.Anything)
-	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
+	mockClient.AssertNotCalled(t, "UpdateManifest", mock.Anything)
 	mockClient.AssertNotCalled(t, "RolloutService")
 	mockClient.AssertNotCalled(t, "Cleanup", mock.Anything)
 }
@@ -118,7 +118,7 @@ func TestChaos_DiskFullDuringBuild(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to build image")
 	assert.Contains(t, err.Error(), "no space left on device")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 2)
-	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
+	mockClient.AssertNotCalled(t, "UpdateManifest", mock.Anything)
 	mockClient.AssertNotCalled(t, "RolloutService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
@@ -142,7 +142,7 @@ func TestChaos_OutOfMemoryDuringBuild(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to build image")
 	assert.Contains(t, err.Error(), "cannot allocate memory")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 3)
-	mockClient.AssertNotCalled(t, "UpdateCompose", mock.Anything)
+	mockClient.AssertNotCalled(t, "UpdateManifest", mock.Anything)
 	mockClient.AssertNotCalled(t, "RolloutService")
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
@@ -158,7 +158,7 @@ func TestChaos_TempDirCleanupRace(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
-	mockClient.On("UpdateCompose", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(racErr)
 

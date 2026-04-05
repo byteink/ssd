@@ -5,14 +5,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"al.essio.dev/pkg/shellescape"
 
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/deploy"
 	"github.com/byteink/ssd/provision"
 	"github.com/byteink/ssd/remote"
+	"github.com/byteink/ssd/runtime"
+	"github.com/byteink/ssd/runtime/k3s"
 	"github.com/byteink/ssd/scaffold"
 )
 
@@ -26,11 +31,12 @@ func deployServiceBuildOnly(rootCfg *config.RootConfig, serviceName string, allS
 
 	fmt.Printf("Building %s...\n", cfg.Name)
 
-	client := remote.NewClient(cfg)
+	client := runtime.New(rootCfg.Runtime, cfg)
 	opts := &deploy.Options{
 		Output:      os.Stdout,
 		AllServices: allServices,
 		BuildOnly:   true,
+		Runtime:     rootCfg.Runtime,
 	}
 
 	return deploy.DeployWithClient(cfg, client, opts)
@@ -64,6 +70,10 @@ func main() {
 		runConfig(args)
 	case "env":
 		runEnv(args)
+	case "secret":
+		runSecret(args)
+	case "prune":
+		runPrune(args)
 	case "init":
 		runInit(args)
 	case "provision":
@@ -77,7 +87,7 @@ func main() {
 	}
 }
 
-func loadConfig(serviceName string) *config.Config {
+func loadConfig(serviceName string) (*config.RootConfig, *config.Config) {
 	rootCfg, err := config.Load("")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -93,7 +103,7 @@ func loadConfig(serviceName string) *config.Config {
 		os.Exit(1)
 	}
 
-	return cfg
+	return rootCfg, cfg
 }
 
 func runDeploy(args []string) {
@@ -140,7 +150,7 @@ func runDeploy(args []string) {
 
 		// Deploy each service using its configured strategy
 		fmt.Println("\n==> Starting all services...")
-		client := remote.NewClient(allServices[services[0]])
+		client := runtime.New(rootCfg.Runtime, allServices[services[0]])
 		for _, name := range services {
 			cfg := allServices[name]
 			strategy := cfg.DeployStrategy()
@@ -160,6 +170,9 @@ func runDeploy(args []string) {
 		}
 
 		fmt.Println("\nAll services deployed successfully!")
+
+		// Detect orphaned services on the server
+		detectOrphans(rootCfg, allServices, client)
 		return
 	}
 
@@ -206,11 +219,12 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 
 	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
 
-	client := remote.NewClient(cfg)
+	client := runtime.New(rootCfg.Runtime, cfg)
 	opts := &deploy.Options{
 		Output:       os.Stdout,
 		Dependencies: depConfigs,
 		AllServices:  allServices,
+		Runtime:      rootCfg.Runtime,
 	}
 
 	return deploy.DeployWithClient(cfg, client, opts)
@@ -227,11 +241,12 @@ func runRestart(args []string) {
 		serviceName = args[0]
 	}
 
-	cfg := loadConfig(serviceName)
+	rootCfg, cfg := loadConfig(serviceName)
 
 	fmt.Printf("Restarting %s on %s...\n\n", cfg.Name, cfg.Server)
 
-	if err := deploy.Restart(cfg); err != nil {
+	client := runtime.New(rootCfg.Runtime, cfg)
+	if err := deploy.RestartWithClient(cfg, client, &deploy.Options{Output: os.Stdout, Runtime: rootCfg.Runtime}); err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -248,11 +263,12 @@ func runRollback(args []string) {
 		serviceName = args[0]
 	}
 
-	cfg := loadConfig(serviceName)
+	rootCfg, cfg := loadConfig(serviceName)
 
 	fmt.Printf("Rolling back %s on %s...\n\n", cfg.Name, cfg.Server)
 
-	if err := deploy.Rollback(cfg); err != nil {
+	client := runtime.New(rootCfg.Runtime, cfg)
+	if err := deploy.RollbackWithClient(cfg, client, &deploy.Options{Output: os.Stdout, Runtime: rootCfg.Runtime}); err != nil {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
 	}
@@ -269,8 +285,8 @@ func runStatus(args []string) {
 		serviceName = args[0]
 	}
 
-	cfg := loadConfig(serviceName)
-	client := remote.NewClient(cfg)
+	rootCfg, cfg := loadConfig(serviceName)
+	client := runtime.New(rootCfg.Runtime, cfg)
 
 	fmt.Printf("Status for %s on %s:\n\n", cfg.Name, cfg.Server)
 
@@ -305,8 +321,8 @@ func runLogs(args []string) {
 		}
 	}
 
-	cfg := loadConfig(serviceName)
-	client := remote.NewClient(cfg)
+	rootCfg, cfg := loadConfig(serviceName)
+	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.GetLogs(context.Background(), follow, tail); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -398,8 +414,8 @@ func runEnvSet(service string, args []string) {
 		os.Exit(1)
 	}
 
-	cfg := loadConfig(service)
-	client := remote.NewClient(cfg)
+	rootCfg, cfg := loadConfig(service)
+	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.SetEnvVar(context.Background(), service, key, value); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -410,8 +426,8 @@ func runEnvSet(service string, args []string) {
 }
 
 func runEnvList(service string, args []string) {
-	cfg := loadConfig(service)
-	client := remote.NewClient(cfg)
+	rootCfg, cfg := loadConfig(service)
+	client := runtime.New(rootCfg.Runtime, cfg)
 
 	content, err := client.GetEnvFile(context.Background(), service)
 	if err != nil {
@@ -435,8 +451,8 @@ func runEnvRm(service string, args []string) {
 
 	key := args[0]
 
-	cfg := loadConfig(service)
-	client := remote.NewClient(cfg)
+	rootCfg, cfg := loadConfig(service)
+	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.RemoveEnvVar(context.Background(), service, key); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -444,6 +460,254 @@ func runEnvRm(service string, args []string) {
 	}
 
 	fmt.Printf("Removed %s from service %s\n", key, service)
+}
+
+func detectOrphans(rootCfg *config.RootConfig, allServices map[string]*config.Config, client remote.RemoteClient) {
+	configServices := make(map[string]bool, len(allServices))
+	for name := range allServices {
+		configServices[name] = true
+	}
+
+	// Pick any config to get stack path
+	var cfg *config.Config
+	for _, c := range allServices {
+		cfg = c
+		break
+	}
+	if cfg == nil {
+		return
+	}
+
+	var orphans []string
+
+	switch rootCfg.Runtime {
+	case "k3s":
+		namespace := filepath.Base(cfg.Stack)
+		cmd := fmt.Sprintf("k3s kubectl get deployments -n %s -l managed-by=ssd -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}' 2>/dev/null",
+			shellescape.Quote(namespace))
+		output, err := client.SSH(context.Background(), cmd)
+		if err == nil {
+			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
+				name = strings.TrimSpace(name)
+				if name != "" && !configServices[name] {
+					orphans = append(orphans, name)
+				}
+			}
+		}
+	default: // compose
+		cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Service}}' 2>/dev/null",
+			shellescape.Quote(cfg.StackPath()))
+		output, err := client.SSH(context.Background(), cmd)
+		if err == nil {
+			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
+				name = strings.TrimSpace(name)
+				if name != "" && !configServices[name] {
+					orphans = append(orphans, name)
+				}
+			}
+		}
+	}
+
+	if len(orphans) > 0 {
+		fmt.Printf("\nWarning: %d orphaned services detected on server (not in ssd.yaml):\n", len(orphans))
+		for _, name := range orphans {
+			fmt.Printf("  - %s\n", name)
+		}
+		fmt.Println("\nRun \"ssd prune\" to remove them.")
+	}
+}
+
+func runPrune(args []string) {
+	if wantsHelp(args) {
+		printPruneHelp()
+		return
+	}
+
+	dryRun := false
+	for _, arg := range args {
+		if arg == "--dry-run" {
+			dryRun = true
+		}
+	}
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	services := rootCfg.ListServices()
+	if len(services) == 0 {
+		fmt.Println("Error: no services defined in ssd.yaml")
+		os.Exit(1)
+	}
+
+	// Get first service config for server connection
+	cfg, err := rootCfg.GetService(services[0])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := runtime.New(rootCfg.Runtime, cfg)
+
+	// Detect orphaned services based on runtime
+	var orphans []string
+	configServices := make(map[string]bool, len(services))
+	for _, s := range services {
+		configServices[s] = true
+	}
+
+	switch rootCfg.Runtime {
+	case "k3s":
+		namespace := filepath.Base(cfg.Stack)
+		cmd := fmt.Sprintf("k3s kubectl get deployments -n %s -l managed-by=ssd -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}'",
+			shellescape.Quote(namespace))
+		output, err := client.SSH(context.Background(), cmd)
+		if err == nil {
+			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
+				name = strings.TrimSpace(name)
+				if name != "" && !configServices[name] {
+					orphans = append(orphans, name)
+				}
+			}
+		}
+	default: // compose
+		stackPath := cfg.StackPath()
+		cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Service}}' 2>/dev/null",
+			shellescape.Quote(stackPath))
+		output, err := client.SSH(context.Background(), cmd)
+		if err == nil {
+			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
+				name = strings.TrimSpace(name)
+				if name != "" && !configServices[name] {
+					orphans = append(orphans, name)
+				}
+			}
+		}
+	}
+
+	if len(orphans) == 0 {
+		fmt.Println("No orphaned services found.")
+		return
+	}
+
+	fmt.Printf("Orphaned services (%d):\n", len(orphans))
+	for _, name := range orphans {
+		fmt.Printf("  - %s\n", name)
+	}
+
+	if dryRun {
+		fmt.Println("\nDry run: no changes made.")
+		return
+	}
+
+	fmt.Println("\nRemoving orphaned services...")
+	ctx := context.Background()
+
+	for _, name := range orphans {
+		fmt.Printf("  Removing %s...\n", name)
+		switch rootCfg.Runtime {
+		case "k3s":
+			namespace := filepath.Base(cfg.Stack)
+			cmd := fmt.Sprintf("k3s kubectl delete deployment,service,ingress -n %s -l app=%s",
+				shellescape.Quote(namespace),
+				shellescape.Quote(name))
+			if _, err := client.SSH(ctx, cmd); err != nil {
+				fmt.Printf("    Warning: failed to remove %s: %v\n", name, err)
+			}
+		default: // compose
+			stackPath := cfg.StackPath()
+			cmd := fmt.Sprintf("cd %s && docker compose rm -sf %s",
+				shellescape.Quote(stackPath),
+				shellescape.Quote(name))
+			if _, err := client.SSH(ctx, cmd); err != nil {
+				fmt.Printf("    Warning: failed to remove %s: %v\n", name, err)
+			}
+		}
+
+		// Remove env file
+		envPath := filepath.Join(cfg.StackPath(), fmt.Sprintf("%s.env", name))
+		rmCmd := fmt.Sprintf("rm -f %s", shellescape.Quote(envPath))
+		_, _ = client.SSH(ctx, rmCmd)
+	}
+
+	fmt.Println("\nPrune completed.")
+}
+
+func runSecret(args []string) {
+	if wantsHelp(args) || len(args) < 2 {
+		printSecretHelp()
+		if !wantsHelp(args) && len(args) < 2 {
+			os.Exit(1)
+		}
+		return
+	}
+
+	service := args[0]
+	action := args[1]
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if rootCfg.Runtime != "k3s" {
+		fmt.Println("Error: secrets require runtime: k3s. Use \"ssd env\" for compose runtime.")
+		os.Exit(1)
+	}
+
+	cfg, err := rootCfg.GetService(service)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := k3s.NewClient(cfg)
+
+	switch action {
+	case "set":
+		if len(args) < 3 {
+			fmt.Println("Usage: ssd secret <service> set KEY=VALUE")
+			os.Exit(1)
+		}
+		parts := strings.SplitN(args[2], "=", 2)
+		if len(parts) != 2 || parts[0] == "" {
+			fmt.Printf("Error: Invalid format. Expected KEY=VALUE, got: %s\n", args[2])
+			os.Exit(1)
+		}
+		if err := client.SetSecret(context.Background(), service, parts[0], parts[1]); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Set secret %s for service %s\n", parts[0], service)
+	case "list":
+		output, err := client.ListSecrets(context.Background(), service)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		if output == "" || strings.TrimSpace(output) == "" {
+			fmt.Println("No secrets set")
+			return
+		}
+		fmt.Print(output)
+	case "rm":
+		if len(args) < 3 {
+			fmt.Println("Usage: ssd secret <service> rm KEY")
+			os.Exit(1)
+		}
+		if err := client.RemoveSecret(context.Background(), service, args[2]); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Removed secret %s from service %s\n", args[2], service)
+	default:
+		fmt.Printf("Unknown action: %s\n", action)
+		fmt.Println("Usage: ssd secret <service> <set|list|rm> [...]")
+		os.Exit(1)
+	}
 }
 
 func runProvision(args []string) {
@@ -458,7 +722,7 @@ func runProvision(args []string) {
 		return
 	}
 
-	var server, email string
+	var server, email, rt string
 
 	// Parse flags
 	i := 0
@@ -478,19 +742,34 @@ func runProvision(args []string) {
 			}
 			email = args[i+1]
 			i += 2
+		case "--runtime":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --runtime requires a value")
+				os.Exit(1)
+			}
+			rt = args[i+1]
+			i += 2
 		default:
 			fmt.Printf("Error: Unknown flag: %s\n", args[i])
-			fmt.Println("Usage: ssd provision [--server SERVER] [--email EMAIL]")
+			fmt.Println("Usage: ssd provision [--server SERVER] [--email EMAIL] [--runtime RUNTIME]")
 			os.Exit(1)
 		}
 	}
 
-	// If no server flag, try to get from config
-	if server == "" {
+	// Try to get server and runtime from config if not specified
+	if server == "" || rt == "" {
 		rootCfg, err := config.Load("")
-		if err == nil && rootCfg.Server != "" {
-			server = rootCfg.Server
+		if err == nil {
+			if server == "" && rootCfg.Server != "" {
+				server = rootCfg.Server
+			}
+			if rt == "" {
+				rt = rootCfg.Runtime
+			}
 		}
+	}
+	if rt == "" {
+		rt = "compose"
 	}
 
 	if server == "" {
@@ -515,10 +794,17 @@ func runProvision(args []string) {
 		}
 	}
 
-	fmt.Printf("Provisioning server %s with email %s...\n\n", server, email)
+	fmt.Printf("Provisioning server %s (runtime: %s) with email %s...\n\n", server, rt, email)
 
-	if err := provision.Provision(server, email); err != nil {
-		fmt.Printf("\nError: %v\n", err)
+	var provErr error
+	switch rt {
+	case "k3s":
+		provErr = provision.ProvisionK3s(server, email)
+	default:
+		provErr = provision.Provision(server, email)
+	}
+	if provErr != nil {
+		fmt.Printf("\nError: %v\n", provErr)
 		os.Exit(1)
 	}
 
@@ -531,7 +817,7 @@ func runProvisionCheck(args []string) {
 		return
 	}
 
-	var server string
+	var server, rt string
 
 	i := 0
 	for i < len(args) {
@@ -543,18 +829,33 @@ func runProvisionCheck(args []string) {
 			}
 			server = args[i+1]
 			i += 2
+		case "--runtime":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --runtime requires a value")
+				os.Exit(1)
+			}
+			rt = args[i+1]
+			i += 2
 		default:
 			fmt.Printf("Error: Unknown flag: %s\n", args[i])
-			fmt.Println("Usage: ssd provision check [--server SERVER]")
+			fmt.Println("Usage: ssd provision check [--server SERVER] [--runtime RUNTIME]")
 			os.Exit(1)
 		}
 	}
 
-	if server == "" {
+	if server == "" || rt == "" {
 		rootCfg, err := config.Load("")
-		if err == nil && rootCfg.Server != "" {
-			server = rootCfg.Server
+		if err == nil {
+			if server == "" && rootCfg.Server != "" {
+				server = rootCfg.Server
+			}
+			if rt == "" {
+				rt = rootCfg.Runtime
+			}
 		}
+	}
+	if rt == "" {
+		rt = "compose"
 	}
 
 	if server == "" {
@@ -563,9 +864,16 @@ func runProvisionCheck(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Checking server %s...\n\n", server)
+	fmt.Printf("Checking server %s (runtime: %s)...\n\n", server, rt)
 
-	results, err := provision.Check(server)
+	var results []provision.CheckResult
+	var err error
+	switch rt {
+	case "k3s":
+		results, err = provision.CheckK3s(server)
+	default:
+		results, err = provision.Check(server)
+	}
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -660,6 +968,13 @@ func runInit(args []string) {
 			}
 			opts.Port = port
 			i += 2
+		case "-r", "--runtime":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --runtime requires a value")
+				os.Exit(1)
+			}
+			opts.Runtime = args[i+1]
+			i += 2
 		case "-f", "--force":
 			opts.Force = true
 			i++
@@ -673,6 +988,12 @@ func runInit(args []string) {
 	// Interactive mode if no server specified
 	if opts.Server == "" {
 		reader := bufio.NewReader(os.Stdin)
+
+		if opts.Runtime == "" {
+			fmt.Print("Runtime (compose/k3s) [compose]: ")
+			rt, _ := reader.ReadString('\n')
+			opts.Runtime = strings.TrimSpace(rt)
+		}
 
 		fmt.Print("Server (SSH host): ")
 		server, _ := reader.ReadString('\n')
@@ -743,6 +1064,7 @@ Usage:
 
 Flags:
   -s, --server STRING             SSH host name (from ~/.ssh/config)
+  -r, --runtime STRING            Runtime: compose (default) or k3s
       --stack STRING              Stack path on server (default: /stacks/{service})
       --service STRING            Service name (default: app)
   -d, --domain STRING             Domain for Traefik routing
@@ -758,6 +1080,9 @@ Examples:
 
   # Minimal non-interactive
   ssd init -s myserver
+
+  # K3s runtime
+  ssd init -s myserver -r k3s
 
   # Full non-interactive
   ssd init -s myserver --stack /stacks/myapp -d myapp.example.com -p 3000
@@ -832,6 +1157,8 @@ Commands:
   logs [service] [-f]             View service logs
   config [service]                Show resolved configuration
   env <service> <set|list|rm>     Manage environment variables on the server
+  secret <service> <set|list|rm>  Manage K8s secrets (k3s runtime only)
+  prune                           Remove orphaned services from the server
   provision                       Provision server with Docker and Traefik
   provision check                 Verify server readiness for ssd
   version                         Show ssd version
@@ -1019,31 +1346,81 @@ Examples:
 `)
 }
 
-func printProvisionHelp() {
-	fmt.Print(`ssd provision - Provision a server with Docker and Traefik
+func printPruneHelp() {
+	fmt.Print(`ssd prune - Remove orphaned services from the server
 
 Usage:
-  ssd provision [flags]           Install Docker, Traefik, and dependencies
+  ssd prune                       Remove services on server not in ssd.yaml
+  ssd prune --dry-run             Show orphaned services without removing
+
+Compares services defined in ssd.yaml against what is deployed on the server.
+Any services found on the server but not in ssd.yaml are removed.
+
+Works with both compose and k3s runtimes.
+
+Examples:
+  ssd prune
+  ssd prune --dry-run
+`)
+}
+
+func printSecretHelp() {
+	fmt.Print(`ssd secret - Manage K8s secrets (k3s runtime only)
+
+Usage:
+  ssd secret <service> set KEY=VALUE  Set or update a secret
+  ssd secret <service> list           List all secrets
+  ssd secret <service> rm KEY         Remove a secret
+
+Secrets are stored as K8s Secrets and injected as environment variables
+into the container alongside ConfigMap env vars. Only available when
+runtime is set to k3s in ssd.yaml.
+
+For compose runtime, use 'ssd env' instead.
+
+Examples:
+  ssd secret api set DATABASE_URL=postgres://user:pass@host/db
+  ssd secret api list
+  ssd secret api rm OLD_KEY
+`)
+}
+
+func printProvisionHelp() {
+	fmt.Print(`ssd provision - Provision a server for ssd deployments
+
+Usage:
+  ssd provision [flags]           Install runtime dependencies
   ssd provision check [flags]     Verify server readiness for ssd
 
 Flags:
   --server STRING                 SSH host to provision (reads from ssd.yaml if omitted)
+  --runtime STRING                Runtime to provision: "compose" (default) or "k3s"
   --email STRING                  Email for Let's Encrypt certificates (prompted if omitted)
 
-Installs Docker, Docker Compose, docker-rollout plugin, and sets up Traefik
-as a reverse proxy with automatic HTTPS via Let's Encrypt. All steps are
-idempotent and safe to run multiple times.
+Compose runtime (default):
+  Installs Docker, Docker Compose, docker-rollout plugin, and sets up Traefik
+  as a reverse proxy with automatic HTTPS via Let's Encrypt.
+
+K3s runtime:
+  Installs K3s, nerdctl, buildkit (systemd service), and configures Traefik
+  ACME for automatic HTTPS. Nerdctl is configured to use K3s's containerd
+  socket with namespace k8s.io.
+
+All steps are idempotent and safe to run multiple times.
 
 Examples:
-  # Provision with flags
+  # Provision compose runtime (default)
   ssd provision --server myserver --email admin@example.com
 
-  # Provision using server from ssd.yaml (prompts for email)
+  # Provision K3s runtime
+  ssd provision --server myserver --runtime k3s --email admin@example.com
+
+  # Provision using ssd.yaml (reads runtime and server)
   ssd provision
 
   # Check if server is ready
   ssd provision check
-  ssd provision check --server myserver
+  ssd provision check --server myserver --runtime k3s
 `)
 }
 
@@ -1055,19 +1432,28 @@ Usage:
 
 Flags:
   --server STRING                 SSH host to check (reads from ssd.yaml if omitted)
+  --runtime STRING                Runtime to check: "compose" (default) or "k3s"
 
-Checks:
+Compose checks:
   Docker                          Docker engine is installed
   Docker Compose                  docker compose plugin is available
   docker-rollout                  Zero-downtime rollout plugin is installed
   traefik_web network             Docker network for Traefik routing exists
   Traefik                         Traefik reverse proxy is running
 
+K3s checks:
+  K3s                             K3s is installed and running
+  kubectl                         kubectl is available
+  nerdctl                         nerdctl is installed
+  buildkitd                       buildkitd systemd service is active
+  Traefik ingress                 Traefik ingress controller is running
+  Traefik ACME                    Let's Encrypt is configured
+
 Examples:
-  # Check server from ssd.yaml
+  # Check compose runtime (default)
   ssd provision check
 
-  # Check a specific server
-  ssd provision check --server myserver
+  # Check K3s runtime
+  ssd provision check --server myserver --runtime k3s
 `)
 }

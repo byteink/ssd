@@ -29,7 +29,7 @@ func (m *MockDeployer) GetCurrentVersion(ctx context.Context) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
-func (m *MockDeployer) ReadCompose(ctx context.Context) (string, error) {
+func (m *MockDeployer) ReadManifest(ctx context.Context) (string, error) {
 	args := m.Called()
 	return args.String(0), args.Error(1)
 }
@@ -49,7 +49,7 @@ func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version 
 	return args.Error(0)
 }
 
-func (m *MockDeployer) UpdateCompose(ctx context.Context, version int) error {
+func (m *MockDeployer) UpdateManifest(ctx context.Context, version int) error {
 	args := m.Called(version)
 	return args.Error(0)
 }
@@ -129,7 +129,7 @@ func TestDeploy_Success(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/ssd-build-123", nil)
 	mockClient.On("Rsync", mock.AnythingOfType("string"), "/tmp/ssd-build-123").Return(nil)
 	mockClient.On("BuildImage", "/tmp/ssd-build-123", 5).Return(nil)
-	mockClient.On("UpdateCompose", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/ssd-build-123").Return(nil)
 
@@ -149,7 +149,7 @@ func TestDeploy_FirstDeploy(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil) // Version 1
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -223,7 +223,7 @@ func TestDeploy_BuildError(t *testing.T) {
 	mockClient.AssertCalled(t, "Cleanup", "/tmp/build")
 }
 
-func TestDeploy_UpdateComposeError(t *testing.T) {
+func TestDeploy_UpdateManifestError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
@@ -232,7 +232,7 @@ func TestDeploy_UpdateComposeError(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(errors.New("permission denied"))
+	mockClient.On("UpdateManifest", 2).Return(errors.New("permission denied"))
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	err := DeployWithClient(cfg, mockClient, nil)
@@ -251,7 +251,7 @@ func TestDeploy_RestartError(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(errors.New("compose up failed"))
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -271,7 +271,7 @@ func TestDeploy_CleanupCalledEvenOnSuccess(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -303,7 +303,7 @@ func TestDeploy_VersionIncrement(t *testing.T) {
 			mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 			mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 			mockClient.On("BuildImage", "/tmp/build", tt.expectedVersion).Return(nil)
-			mockClient.On("UpdateCompose", tt.expectedVersion).Return(nil)
+			mockClient.On("UpdateManifest", tt.expectedVersion).Return(nil)
 			mockClient.On("RolloutService", "myapp").Return(nil)
 			mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -311,7 +311,7 @@ func TestDeploy_VersionIncrement(t *testing.T) {
 
 			require.NoError(t, err)
 			mockClient.AssertCalled(t, "BuildImage", "/tmp/build", tt.expectedVersion)
-			mockClient.AssertCalled(t, "UpdateCompose", tt.expectedVersion)
+			mockClient.AssertCalled(t, "UpdateManifest", tt.expectedVersion)
 		})
 	}
 }
@@ -326,7 +326,7 @@ func TestDeploy_CleanupErrorIgnored(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(errors.New("cleanup failed")) // Error here
 
@@ -347,7 +347,7 @@ func TestDeploy_UsesCorrectTempDir(t *testing.T) {
 	mockClient.On("MakeTempDir").Return(customTempDir, nil)
 	mockClient.On("Rsync", mock.Anything, customTempDir).Return(nil) // Must use custom dir
 	mockClient.On("BuildImage", customTempDir, 1).Return(nil)        // Must use custom dir
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", customTempDir).Return(nil) // Must clean up custom dir
 
@@ -478,7 +478,7 @@ func TestDeploy_WithLocking(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -593,7 +593,7 @@ func TestRollback_Success(t *testing.T) {
 
 	// Current version is 5, rollback to 4
 	mockClient.On("GetCurrentVersion").Return(5, nil)
-	mockClient.On("UpdateCompose", 4).Return(nil)
+	mockClient.On("UpdateManifest", 4).Return(nil)
 	mockClient.On("StartService", "myapp").Return(nil)
 
 	err := RollbackWithClient(cfg, mockClient, nil)
@@ -638,12 +638,12 @@ func TestRollback_CannotRollbackVersion1(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot rollback: no previous version")
 }
 
-func TestRollback_UpdateComposeError(t *testing.T) {
+func TestRollback_UpdateManifestError(t *testing.T) {
 	mockClient := new(MockDeployer)
 	cfg := newTestConfig()
 
 	mockClient.On("GetCurrentVersion").Return(5, nil)
-	mockClient.On("UpdateCompose", 4).Return(errors.New("permission denied"))
+	mockClient.On("UpdateManifest", 4).Return(errors.New("permission denied"))
 
 	err := RollbackWithClient(cfg, mockClient, nil)
 
@@ -656,7 +656,7 @@ func TestRollback_RestartError(t *testing.T) {
 	cfg := newTestConfig()
 
 	mockClient.On("GetCurrentVersion").Return(5, nil)
-	mockClient.On("UpdateCompose", 4).Return(nil)
+	mockClient.On("UpdateManifest", 4).Return(nil)
 	mockClient.On("StartService", "myapp").Return(errors.New("compose up failed"))
 
 	err := RollbackWithClient(cfg, mockClient, nil)
@@ -682,13 +682,13 @@ func TestRollback_VersionDecrement(t *testing.T) {
 			cfg := newTestConfig()
 
 			mockClient.On("GetCurrentVersion").Return(tt.currentVersion, nil)
-			mockClient.On("UpdateCompose", tt.expectedVersion).Return(nil)
+			mockClient.On("UpdateManifest", tt.expectedVersion).Return(nil)
 			mockClient.On("StartService", "myapp").Return(nil)
 
 			err := RollbackWithClient(cfg, mockClient, nil)
 
 			require.NoError(t, err)
-			mockClient.AssertCalled(t, "UpdateCompose", tt.expectedVersion)
+			mockClient.AssertCalled(t, "UpdateManifest", tt.expectedVersion)
 		})
 	}
 }
@@ -721,7 +721,7 @@ func TestRollback_PrebuiltService(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertNotCalled(t, "GetCurrentVersion")
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 	mockClient.AssertNotCalled(t, "StartService")
 }
 
@@ -742,7 +742,7 @@ func TestDeploy_AutoCreateStack_FirstDeploy(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -770,7 +770,7 @@ func TestDeploy_AutoCreateStack_SecondDeploySkipsCreation(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -881,7 +881,7 @@ func TestDeploy_AutoCreateStack_WithDomain(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -916,7 +916,7 @@ func TestDeploy_PrebuiltService_PullsImage(t *testing.T) {
 	mockClient.AssertCalled(t, "PullImage", "nginx:latest")
 	mockClient.AssertNotCalled(t, "Rsync")
 	mockClient.AssertNotCalled(t, "BuildImage")
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 }
 
 func TestDeploy_PrebuiltService_PullError(t *testing.T) {
@@ -940,7 +940,7 @@ func TestDeploy_PrebuiltService_PullError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to pull image")
 	mockClient.AssertCalled(t, "PullImage", "nginx:latest")
 	mockClient.AssertNotCalled(t, "BuildImage")
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 }
 
 func TestDeploy_BuiltService_BuildsImage(t *testing.T) {
@@ -959,7 +959,7 @@ func TestDeploy_BuiltService_BuildsImage(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -968,7 +968,7 @@ func TestDeploy_BuiltService_BuildsImage(t *testing.T) {
 	require.NoError(t, err)
 	mockClient.AssertCalled(t, "Rsync", mock.Anything, "/tmp/build")
 	mockClient.AssertCalled(t, "BuildImage", "/tmp/build", 1)
-	mockClient.AssertCalled(t, "UpdateCompose", 1)
+	mockClient.AssertCalled(t, "UpdateManifest", 1)
 	mockClient.AssertNotCalled(t, "PullImage")
 }
 
@@ -995,7 +995,7 @@ func TestDeploy_DependencyNotRunning_Started(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1026,7 +1026,7 @@ func TestDeploy_DependencyRunning_NotRestarted(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1062,7 +1062,7 @@ func TestDeploy_MultipleDependencies_AllHandled(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1145,7 +1145,7 @@ func TestDeploy_NoDependencies_SkipsDependencyChecks(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1192,7 +1192,7 @@ func TestDeploy_PrebuiltDependency_PullsImage(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1278,7 +1278,7 @@ func TestDeploy_CustomBuildDependency_NoPull(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1315,7 +1315,7 @@ func TestDeploy_IntegrationFirstDeployCreatesEverything(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1348,7 +1348,7 @@ func TestDeploy_IntegrationSecondDeploySkipsCreation(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1410,7 +1410,7 @@ func TestDeploy_IntegrationWithStoppedDependency(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1469,7 +1469,7 @@ func TestDeploy_IntegrationWithRunningDependency(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "web").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1508,7 +1508,7 @@ func TestDeploy_IntegrationPrebuiltServicePullsInsteadOfBuilds(t *testing.T) {
 	mockClient.AssertCalled(t, "PullImage", "nginx:alpine")
 	mockClient.AssertNotCalled(t, "Rsync")
 	mockClient.AssertNotCalled(t, "BuildImage")
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 }
 
 func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
@@ -1552,7 +1552,7 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 	})
 	mockClient.On("EnsureNetwork", mock.Anything).Return(nil)
 
-	// Normal deploy flow (AllServices triggers regeneration instead of UpdateCompose)
+	// Normal deploy flow (AllServices triggers regeneration instead of UpdateManifest)
 	mockClient.On("GetCurrentVersion").Return(0, nil)
 	mockClient.On("IsServiceRunning", "postgres").Return(false, nil)
 	mockClient.On("PullImage", "postgres:16").Return(nil)
@@ -1560,7 +1560,7 @@ func TestDeploy_AutoCreateStack_EnvFilesCreatedBeforeCreateStack(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("ReadCompose").Return("", nil)
+	mockClient.On("ReadManifest").Return("", nil)
 	mockClient.On("RolloutService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1629,8 +1629,8 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	// AllServices triggers compose regeneration instead of UpdateCompose
-	mockClient.On("ReadCompose").Return("", nil)
+	// AllServices triggers compose regeneration instead of UpdateManifest
+	mockClient.On("ReadManifest").Return("", nil)
 	mockClient.On("RolloutService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1639,7 +1639,7 @@ func TestDeploy_AutoCreateStack_UsesAllServices(t *testing.T) {
 	require.NoError(t, err)
 	// Verify env files created for ALL services via batch call
 	mockClient.AssertCalled(t, "CreateEnvFiles", []string{"api", "postgres"})
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 }
 
 func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
@@ -1656,7 +1656,7 @@ func TestDeploy_AutoCreateStack_FallsBackToSingleService(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
-	mockClient.On("UpdateCompose", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1683,7 +1683,7 @@ func TestDeploy_BuildOnly_SkipsStartAndDeps(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
-	mockClient.On("UpdateCompose", 3).Return(nil)
+	mockClient.On("UpdateManifest", 3).Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
 	opts := &Options{BuildOnly: true}
@@ -1734,7 +1734,7 @@ func TestDeploy_IntegrationSingleServiceOnlyTargetRestarted(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
-	mockClient.On("UpdateCompose", 6).Return(nil)
+	mockClient.On("UpdateManifest", 6).Return(nil)
 	mockClient.On("RolloutService", "api").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1783,7 +1783,7 @@ func TestDeploy_RegeneratesComposeWithAllServices(t *testing.T) {
 	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
 
 	// Regeneration: reads existing compose, generates new, writes
-	mockClient.On("ReadCompose").Return("services:\n  web:\n    image: ssd-myapp-web:2\n  db:\n    image: postgres:16\n", nil)
+	mockClient.On("ReadManifest").Return("services:\n  web:\n    image: ssd-myapp-web:2\n  db:\n    image: postgres:16\n", nil)
 	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
 	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
 		return strings.Contains(content, "web:") &&
@@ -1798,9 +1798,9 @@ func TestDeploy_RegeneratesComposeWithAllServices(t *testing.T) {
 	err := DeployWithClient(cfg, mockClient, opts)
 
 	require.NoError(t, err)
-	mockClient.AssertCalled(t, "ReadCompose")
+	mockClient.AssertCalled(t, "ReadManifest")
 	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
-	mockClient.AssertNotCalled(t, "UpdateCompose")
+	mockClient.AssertNotCalled(t, "UpdateManifest")
 }
 
 func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
@@ -1837,7 +1837,7 @@ func TestDeploy_RegeneratesCompose_PreservesOtherVersions(t *testing.T) {
 	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
 
 	// Existing compose has web at version 10
-	mockClient.On("ReadCompose").Return("services:\n  api:\n    image: ssd-myproject-api:5\n  web:\n    image: ssd-myproject-web:10\n", nil)
+	mockClient.On("ReadManifest").Return("services:\n  api:\n    image: ssd-myproject-api:5\n  web:\n    image: ssd-myproject-web:10\n", nil)
 	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
 	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
 		// api bumped to 6, web stays at 10
@@ -1867,7 +1867,7 @@ func TestDeploy_CopiesConfigFiles(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1903,7 +1903,7 @@ func TestDeploy_NoFiles_SkipsCopyFiles(t *testing.T) {
 	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
 	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
 	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
-	mockClient.On("UpdateCompose", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
 	mockClient.On("RolloutService", "myapp").Return(nil)
 	mockClient.On("Cleanup", "/tmp/build").Return(nil)
 
@@ -1911,4 +1911,422 @@ func TestDeploy_NoFiles_SkipsCopyFiles(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertNotCalled(t, "CopyFiles", mock.Anything)
+}
+
+// K3s runtime tests
+
+func newK3sTestConfig() *config.Config {
+	return &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+	}
+}
+
+func TestDeploy_K3s_Success(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(2, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
+	mockClient.On("UpdateManifest", 3).Return(nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestDeploy_K3s_FirstDeploy_GeneratesManifests(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+	cfg.Port = 3000
+	cfg.Domain = "example.com"
+
+	opts := &Options{
+		Runtime: "k3s",
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	// First deploy — stack doesn't exist
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFiles", []string{"web"}).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		// Must contain K8s manifests, not Docker Compose
+		return strings.Contains(content, "apiVersion:") &&
+			strings.Contains(content, "kind: Deployment") &&
+			strings.Contains(content, "kind: Service") &&
+			strings.Contains(content, "kind: Ingress")
+	})).Return(nil)
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("ReadManifest").Return("", nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+	// K3s must NOT create docker networks
+	mockClient.AssertNotCalled(t, "EnsureNetwork", "traefik_web")
+	mockClient.AssertNotCalled(t, "EnsureNetwork", mock.Anything)
+}
+
+func TestDeploy_K3s_FirstDeploy_NoDomain_NoIngress(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+	cfg.Port = 3000
+	cfg.Domain = "" // No domain
+
+	opts := &Options{
+		Runtime: "k3s",
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFiles", []string{"web"}).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		return strings.Contains(content, "kind: Deployment") &&
+			!strings.Contains(content, "kind: Ingress")
+	})).Return(nil)
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("ReadManifest").Return("", nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "EnsureNetwork", mock.Anything)
+}
+
+func TestDeploy_K3s_RegeneratesManifests_PreservesVersions(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./api",
+		Port:       8080,
+	}
+
+	webCfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myproject",
+		Dockerfile: "./Dockerfile",
+		Context:    "./web",
+		Port:       3000,
+	}
+
+	opts := &Options{
+		Runtime: "k3s",
+		AllServices: map[string]*config.Config{
+			"api": cfg,
+			"web": webCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 6).Return(nil)
+
+	// Existing manifests have web at version 10
+	mockClient.On("ReadManifest").Return("image: ssd-myproject-api:5\nimage: ssd-myproject-web:10\n", nil)
+	mockClient.On("CreateEnvFiles", mock.Anything).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		// api bumped to 6, web stays at 10; must be K8s manifests
+		return strings.Contains(content, "ssd-myproject-api:6") &&
+			strings.Contains(content, "ssd-myproject-web:10") &&
+			strings.Contains(content, "kind: Deployment")
+	})).Return(nil)
+
+	mockClient.On("RolloutService", "api").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "CreateStack", mock.Anything)
+	mockClient.AssertNotCalled(t, "UpdateManifest")
+}
+
+func TestDeploy_K3s_MultiService(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Port:       3000,
+		Domain:     "example.com",
+	}
+
+	dbCfg := &config.Config{
+		Name:   "db",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+		Port:   5432,
+	}
+
+	opts := &Options{
+		Runtime: "k3s",
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+			"db":  dbCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFiles", []string{"db", "web"}).Return(nil)
+	mockClient.On("CreateStack", mock.MatchedBy(func(content string) bool {
+		// Must contain both services as K8s resources
+		return strings.Contains(content, "kind: Deployment") &&
+			strings.Contains(content, "app: web") &&
+			strings.Contains(content, "app: db")
+	})).Return(nil)
+
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("ReadManifest").Return("", nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "EnsureNetwork", mock.Anything)
+}
+
+func TestDeploy_K3s_BuildOnly(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(2, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 3).Return(nil)
+	mockClient.On("UpdateManifest", 3).Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	opts := &Options{Runtime: "k3s", BuildOnly: true}
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "StartService")
+	mockClient.AssertNotCalled(t, "RolloutService")
+}
+
+func TestDeploy_K3s_PrebuiltImage(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "nginx:latest",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "nginx:latest").Return(nil)
+	mockClient.On("RolloutService", "nginx").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "PullImage", "nginx:latest")
+	mockClient.AssertNotCalled(t, "BuildImage")
+}
+
+func TestDeploy_K3s_RecreateStrategy(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+	cfg.Deploy = &config.DeployConfig{Strategy: "recreate"}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "StartService", "web")
+	mockClient.AssertNotCalled(t, "RolloutService")
+}
+
+// K3s rollback tests
+
+func TestRollback_K3s_Success(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(5, nil)
+	mockClient.On("UpdateManifest", 4).Return(nil)
+	mockClient.On("StartService", "web").Return(nil)
+
+	err := RollbackWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func TestRollback_K3s_CannotRollbackVersion1(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+
+	err := RollbackWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot rollback: no previous version")
+}
+
+func TestRollback_K3s_PrebuiltSkipped(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:   "nginx",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "nginx:latest",
+	}
+
+	err := RollbackWithClient(cfg, mockClient, &Options{Runtime: "k3s", Output: io.Discard})
+
+	require.NoError(t, err)
+	mockClient.AssertNotCalled(t, "GetCurrentVersion")
+}
+
+// Verify compose runtime unchanged — networks still created (default runtime)
+// Covered by TestDeploy_AutoCreateStack_WithDomain above.
+
+func TestDeploy_K3s_CreateStackError(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+	cfg.Port = 3000
+
+	opts := &Options{
+		Runtime: "k3s",
+		AllServices: map[string]*config.Config{
+			"web": cfg,
+		},
+	}
+
+	// Stack doesn't exist — triggers manifest generation
+	mockClient.On("StackExists").Return(false, nil)
+	mockClient.On("CreateEnvFiles", []string{"web"}).Return(nil)
+	mockClient.On("CreateStack", mock.AnythingOfType("string")).Return(errors.New("manifest validation failed"))
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create stack")
+	assert.Contains(t, err.Error(), "manifest validation failed")
+}
+
+func TestDeploy_K3s_WithDependencies(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := &config.Config{
+		Name:       "web",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Port:       3000,
+		DependsOn:  config.Dependencies{{Name: "db"}},
+	}
+
+	dbCfg := &config.Config{
+		Name:   "db",
+		Server: "testserver",
+		Stack:  "/stacks/myapp",
+		Image:  "postgres:16",
+		Port:   5432,
+	}
+
+	opts := &Options{
+		Runtime: "k3s",
+		Dependencies: map[string]*config.Config{
+			"db": dbCfg,
+		},
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+
+	// Dependency not running
+	mockClient.On("IsServiceRunning", "db").Return(false, nil)
+	mockClient.On("PullImage", "postgres:16").Return(nil)
+	mockClient.On("StartService", "db").Return(nil)
+
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, opts)
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "IsServiceRunning", "db")
+	mockClient.AssertCalled(t, "PullImage", "postgres:16")
+	mockClient.AssertCalled(t, "StartService", "db")
+}
+
+func TestDeploy_K3s_CopyFiles(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newK3sTestConfig()
+	cfg.Files = map[string]string{
+		"./config.yaml": "/app/config.yaml",
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("CopyFiles", cfg.Files).Return(nil)
+	mockClient.On("GetCurrentVersion").Return(1, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 2).Return(nil)
+	mockClient.On("UpdateManifest", 2).Return(nil)
+	mockClient.On("RolloutService", "web").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	err := DeployWithClient(cfg, mockClient, &Options{Runtime: "k3s"})
+
+	require.NoError(t, err)
+	mockClient.AssertCalled(t, "CopyFiles", cfg.Files)
 }

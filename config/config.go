@@ -116,6 +116,7 @@ type Config struct {
 
 // RootConfig represents the ssd.yaml file structure
 type RootConfig struct {
+	Runtime  string              `yaml:"runtime"`
 	Server   string              `yaml:"server"`
 	Stack    string              `yaml:"stack"`
 	Deploy   *DeployConfig       `yaml:"deploy"`
@@ -145,12 +146,23 @@ func LoadFromBytes(data []byte) (*RootConfig, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	if cfg.Runtime == "" {
+		cfg.Runtime = "compose"
+	}
+
 	return &cfg, nil
 }
 
 // GetService returns the configuration for a specific service
 // serviceName is required when Services map exists
 func (r *RootConfig) GetService(serviceName string) (*Config, error) {
+	if r.Runtime == "" {
+		r.Runtime = "compose"
+	}
+	if err := ValidateRuntime(r.Runtime); err != nil {
+		return nil, err
+	}
+
 	// Services map is required
 	if len(r.Services) == 0 {
 		return nil, fmt.Errorf("services: is required")
@@ -324,6 +336,16 @@ func validateConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// ValidateRuntime validates the runtime field
+func ValidateRuntime(runtime string) error {
+	switch runtime {
+	case "compose", "k3s":
+		return nil
+	default:
+		return fmt.Errorf("invalid runtime %q: must be compose or k3s", runtime)
+	}
 }
 
 // validateDeployStrategy validates the deploy strategy field
