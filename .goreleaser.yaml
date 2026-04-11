@@ -26,6 +26,9 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - src: skill/*
+        dst: skill
     format_overrides:
       - goos: windows
         format: zip
@@ -55,6 +58,7 @@ brews:
     license: MIT
     install: |
       bin.install "ssd"
+      (share/"ssd").install "skill"
     test: |
       system "#{bin}/ssd", "version"
 

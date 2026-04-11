@@ -58,7 +58,9 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── provision.go  # Server provisioning (Docker or K3s)
 ├── scaffold/
 │   └── scaffold.go   # ssd init command (generate ssd.yaml)
-└── SKILL.md          # Claude Code skill file (for end users)
+├── skill/
+│   └── SKILL.md      # Claude Code skill file (installed via ssd skill)
+└── .goreleaser.yaml  # Release config (bundles skill/ in brew install)
 ```
 
 ## Runtime
@@ -393,3 +395,11 @@ ssd provision check --runtime k3s     # Check K3s readiness
 **K3s provision**: Installs K3s, nerdctl + buildkit, configures nerdctl for K3s containerd socket (`/run/k3s/containerd/containerd.sock`, namespace `k8s.io`), installs buildkitd as systemd service, configures Traefik ACME via HelmChartConfig CRD.
 
 All steps are idempotent.
+
+### Skill
+```bash
+ssd skill                             # Interactive agent selection
+ssd skill --path <dir>                # Symlink skill dir to custom path
+```
+
+Symlinks the bundled skill directory into your coding agent's skills folder. After `brew install ssd`, the skill lives at `$(brew --prefix)/share/ssd/skill/`. The symlink ensures the skill auto-updates on `brew upgrade`.

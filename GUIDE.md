@@ -68,6 +68,7 @@ That's it. ssd will:
 | `ssd env <service> set K=V` | Set an environment variable |
 | `ssd env <service> list` | List environment variables |
 | `ssd env <service> rm KEY` | Remove an environment variable |
+| `ssd skill` | Install ssd skill for your coding agent |
 | `ssd version` | Print version |
 
 ---

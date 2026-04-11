@@ -413,27 +413,17 @@ make lint     # Run linter
 
 ## Claude Code Skill
 
-This repo includes a ready-made [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill file that lets Claude deploy and manage your services using `ssd` via the `/ssd` slash command.
+ssd ships with a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that lets Claude deploy and manage your services via the `/ssd` slash command.
 
 ### Setup
 
-Copy the skill file into your project's `.claude/skills/` directory:
-
 ```bash
-mkdir -p .claude/skills/ssd
-cp /path/to/ssd/SKILL.md .claude/skills/ssd/SKILL.md
+ssd skill
 ```
 
-Or with curl:
-
-```bash
-mkdir -p .claude/skills/ssd
-curl -sSL https://raw.githubusercontent.com/byteink/ssd/main/SKILL.md -o .claude/skills/ssd/SKILL.md
-```
+This symlinks the bundled skill directory into `~/.claude/skills/ssd`. The skill auto-updates whenever you run `brew upgrade ssd`.
 
 ### Usage
-
-Once installed, use the `/ssd` slash command in Claude Code:
 
 ```
 /ssd deploy web

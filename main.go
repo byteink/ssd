@@ -80,6 +80,8 @@ func main() {
 		runPrune(args)
 	case "init":
 		runInit(args)
+	case "skill":
+		runSkill(args)
 	case "provision":
 		runProvision(args)
 	case "help", "-h", "--help":
@@ -1114,6 +1116,113 @@ func runProvisionCheck(args []string) {
 	}
 }
 
+func skillDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Printf("Error: cannot resolve executable path: %v\n", err)
+		os.Exit(1)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		fmt.Printf("Error: cannot resolve symlinks: %v\n", err)
+		os.Exit(1)
+	}
+	return filepath.Join(filepath.Dir(exe), "..", "share", "ssd", "skill")
+}
+
+func runSkill(args []string) {
+	if wantsHelp(args) {
+		printSkillHelp()
+		return
+	}
+
+	var targetDir string
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--path":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --path requires a value")
+				os.Exit(1)
+			}
+			targetDir = args[i+1]
+			i += 2
+		default:
+			fmt.Printf("Error: unknown flag: %s\n", args[i])
+			os.Exit(1)
+		}
+	}
+
+	src := skillDir()
+
+	// Verify skill dir exists
+	if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
+		fmt.Printf("Error: skill directory not found at %s\n", src)
+		fmt.Println("This may happen if ssd was not installed via brew.")
+		os.Exit(1)
+	}
+
+	if targetDir == "" {
+		// Prompt user to pick agent
+		fmt.Println("Select your coding agent:")
+		fmt.Println("  1) Claude Code (~/.claude/skills/ssd)")
+		fmt.Println("  2) Custom path")
+		fmt.Print("Choice [1]: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		choice := strings.TrimSpace(input)
+
+		switch choice {
+		case "", "1":
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			targetDir = filepath.Join(home, ".claude", "skills", "ssd")
+		case "2":
+			fmt.Print("Enter path: ")
+			input, _ = reader.ReadString('\n')
+			targetDir = strings.TrimSpace(input)
+			if targetDir == "" {
+				fmt.Println("Error: path cannot be empty")
+				os.Exit(1)
+			}
+		default:
+			fmt.Println("Error: invalid choice")
+			os.Exit(1)
+		}
+	}
+
+	// Remove existing symlink or directory
+	if info, err := os.Lstat(targetDir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(targetDir); err != nil {
+				fmt.Printf("Error: failed to remove existing symlink: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Printf("Error: %s already exists and is not a symlink\n", targetDir)
+			os.Exit(1)
+		}
+	}
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(targetDir), 0755); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := os.Symlink(src, targetDir); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Linked %s -> %s\n", targetDir, src)
+}
+
 func runInit(args []string) {
 	if wantsHelp(args) {
 		printInitHelp()
@@ -1260,6 +1369,25 @@ func runInit(args []string) {
 	fmt.Println("  3. Run: ssd deploy app")
 }
 
+func printSkillHelp() {
+	fmt.Print(`ssd skill - Install the ssd skill for your coding agent
+
+Usage:
+  ssd skill                       Interactive mode (prompts for agent selection)
+  ssd skill --path <dir>          Symlink skill directory to a custom path
+
+Creates a symlink from your agent's skill directory to the ssd skill files.
+The skill auto-updates whenever ssd is upgraded.
+
+Supported agents:
+  Claude Code                     ~/.claude/skills/ssd
+
+Examples:
+  ssd skill
+  ssd skill --path ~/.claude/skills/ssd
+`)
+}
+
 func printInitHelp() {
 	fmt.Print(`ssd init - Create an ssd.yaml configuration file
 
@@ -1368,6 +1496,7 @@ Commands:
   prune                           Remove orphaned services from the server
   provision                       Provision server with Docker and Traefik
   provision check                 Verify server readiness for ssd
+  skill                           Install ssd skill for your coding agent
   version                         Show ssd version
   help                            Show this help
 
