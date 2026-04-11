@@ -57,7 +57,9 @@ That's it. ssd will:
 | Command | Description |
 |---|---|
 | `ssd init` | Create `ssd.yaml` (interactive or with flags) |
-| `ssd deploy [service]` | Build and deploy a service (or all if omitted) |
+| `ssd deploy\|up [service]` | Build and deploy a service (or all if omitted) |
+| `ssd down [service]` | Stop services (or all if omitted) |
+| `ssd rm [service]` | Permanently remove services (or entire stack) |
 | `ssd restart <service>` | Restart without rebuilding |
 | `ssd rollback <service>` | Roll back to the previous version |
 | `ssd status <service>` | Check container status |

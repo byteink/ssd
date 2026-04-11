@@ -56,8 +56,12 @@ func main() {
 	switch command {
 	case "version", "-v", "--version":
 		fmt.Printf("ssd version %s\n", version)
-	case "deploy":
+	case "deploy", "up":
 		runDeploy(args)
+	case "down":
+		runDown(args)
+	case "rm":
+		runRm(args)
 	case "restart":
 		runRestart(args)
 	case "rollback":
@@ -181,6 +185,207 @@ func runDeploy(args []string) {
 		fmt.Printf("\nError: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runDown(args []string) {
+	if wantsHelp(args) {
+		printDownHelp()
+		return
+	}
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var services []string
+	if len(args) == 0 {
+		services = rootCfg.ListServices()
+		sort.Strings(services)
+	} else {
+		services = []string{args[0]}
+	}
+
+	// Use first service to create client
+	cfg, err := rootCfg.GetService(services[0])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := runtime.New(rootCfg.Runtime, cfg)
+	ctx := context.Background()
+
+	for _, name := range services {
+		svcCfg, err := rootCfg.GetService(name)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Stopping %s...\n", svcCfg.Name)
+
+		switch rootCfg.Runtime {
+		case "k3s":
+			namespace := filepath.Base(svcCfg.Stack)
+			cmd := fmt.Sprintf("k3s kubectl scale deployment/%s -n %s --replicas=0",
+				shellescape.Quote(svcCfg.Name),
+				shellescape.Quote(namespace))
+			if _, err := client.SSH(ctx, cmd); err != nil {
+				fmt.Printf("Error stopping %s: %v\n", svcCfg.Name, err)
+				os.Exit(1)
+			}
+		default: // compose
+			cmd := fmt.Sprintf("cd %s && docker compose stop %s",
+				shellescape.Quote(svcCfg.StackPath()),
+				shellescape.Quote(svcCfg.Name))
+			if _, err := client.SSH(ctx, cmd); err != nil {
+				fmt.Printf("Error stopping %s: %v\n", svcCfg.Name, err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	if len(services) == 1 {
+		fmt.Printf("%s stopped.\n", services[0])
+	} else {
+		fmt.Println("All services stopped.")
+	}
+}
+
+func runRm(args []string) {
+	if wantsHelp(args) {
+		printRmHelp()
+		return
+	}
+
+	rootCfg, err := config.Load("")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var services []string
+	if len(args) == 0 {
+		services = rootCfg.ListServices()
+		sort.Strings(services)
+	} else {
+		services = []string{args[0]}
+	}
+
+	// Use first service for server info and client
+	cfg, err := rootCfg.GetService(services[0])
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := runtime.New(rootCfg.Runtime, cfg)
+	ctx := context.Background()
+
+	// Refuse to remove running services
+	var running []string
+	for _, name := range services {
+		ok, err := client.IsServiceRunning(ctx, name)
+		if err == nil && ok {
+			running = append(running, name)
+		}
+	}
+	if len(running) > 0 {
+		stackName := filepath.Base(cfg.Stack)
+		if len(running) == 1 {
+			fmt.Printf("Error: service '%s' is still running.\n", running[0])
+			fmt.Printf("Run 'ssd down %s' first.\n", running[0])
+		} else {
+			fmt.Printf("Error: %d services are still running in stack '%s':\n", len(running), stackName)
+			for _, name := range running {
+				fmt.Printf("  - %s\n", name)
+			}
+			fmt.Printf("Run 'ssd down' to stop all services first.\n")
+		}
+		os.Exit(1)
+	}
+
+	// Warning
+	if len(services) == 1 {
+		fmt.Printf("\nWARNING: This will permanently remove '%s' from %s.\n", services[0], cfg.Server)
+	} else {
+		fmt.Printf("\nWARNING: This will permanently remove the entire stack from %s:\n", cfg.Server)
+		for _, name := range services {
+			fmt.Printf("  - %s\n", name)
+		}
+	}
+	fmt.Printf("\nAll containers, env files, images, and related resources will be deleted.\n")
+	fmt.Printf("This action cannot be undone.\n")
+	fmt.Print("Continue? [y/N] ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	if strings.ToLower(strings.TrimSpace(input)) != "y" {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	for _, name := range services {
+		svcCfg, err := rootCfg.GetService(name)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		rmService(rootCfg, svcCfg, client, ctx)
+	}
+
+	// Remove stack directory if removing all services
+	if len(args) == 0 {
+		fmt.Printf("Removing stack directory %s...\n", cfg.StackPath())
+		cmd := fmt.Sprintf("rm -rf %s", shellescape.Quote(cfg.StackPath()))
+		_, _ = client.SSH(ctx, cmd)
+	}
+
+	if len(services) == 1 {
+		fmt.Printf("\n%s removed.\n", services[0])
+	} else {
+		fmt.Println("\nAll services removed.")
+	}
+}
+
+func rmService(rootCfg *config.RootConfig, cfg *config.Config, client remote.RemoteClient, ctx context.Context) {
+	fmt.Printf("Removing %s...\n", cfg.Name)
+
+	switch rootCfg.Runtime {
+	case "k3s":
+		namespace := filepath.Base(cfg.Stack)
+		cmd := fmt.Sprintf("k3s kubectl delete deployment,service,ingress,configmap -n %s -l app=%s --ignore-not-found",
+			shellescape.Quote(namespace),
+			shellescape.Quote(cfg.Name))
+		if _, err := client.SSH(ctx, cmd); err != nil {
+			fmt.Printf("  Warning: failed to delete resources: %v\n", err)
+		}
+		cmd = fmt.Sprintf("nerdctl --namespace k8s.io rmi %s 2>/dev/null || true",
+			shellescape.Quote(cfg.ImageName()))
+		_, _ = client.SSH(ctx, cmd)
+
+	default: // compose
+		cmd := fmt.Sprintf("cd %s && docker compose rm -sf %s",
+			shellescape.Quote(cfg.StackPath()),
+			shellescape.Quote(cfg.Name))
+		if _, err := client.SSH(ctx, cmd); err != nil {
+			fmt.Printf("  Warning: failed to remove container: %v\n", err)
+		}
+		cmd = fmt.Sprintf("docker rmi %s 2>/dev/null || true",
+			shellescape.Quote(cfg.ImageName()))
+		_, _ = client.SSH(ctx, cmd)
+	}
+
+	// Remove env file
+	envPath := filepath.Join(cfg.StackPath(), fmt.Sprintf("%s.env", cfg.Name))
+	rmCmd := fmt.Sprintf("rm -f %s", shellescape.Quote(envPath))
+	_, _ = client.SSH(ctx, rmCmd)
 }
 
 func deployService(rootCfg *config.RootConfig, serviceName string) error {
@@ -1150,7 +1355,9 @@ Usage:
 
 Commands:
   init                            Create ssd.yaml configuration file
-  deploy [service]                Build and deploy a service (or all services)
+  deploy|up [service]             Build and deploy a service (or all services)
+  down [service]                  Stop services (or all if omitted)
+  rm [service]                    Permanently remove services (or entire stack)
   restart [service]               Restart without rebuilding
   rollback [service]              Rollback to the previous version
   status [service]                Show container status
@@ -1172,6 +1379,8 @@ Learn more: https://github.com/byteink/ssd
 
 func printDeployHelp() {
 	fmt.Print(`ssd deploy - Build and deploy services
+
+Aliases: deploy, up
 
 Usage:
   ssd deploy                      Deploy all services defined in ssd.yaml
@@ -1226,6 +1435,46 @@ Examples:
       dockerfile: ./Dockerfile.worker
       deploy:
         strategy: recreate    # per-service override
+`)
+}
+
+func printDownHelp() {
+	fmt.Print(`ssd down - Stop running services
+
+Usage:
+  ssd down                        Stop all services
+  ssd down <service>              Stop a single service
+
+Compose: runs 'docker compose stop'.
+K3s: scales deployments to 0 replicas.
+
+The services can be started again with 'ssd up'.
+
+Examples:
+  ssd down web
+  ssd down
+`)
+}
+
+func printRmHelp() {
+	fmt.Print(`ssd rm - Permanently remove services from the server
+
+Usage:
+  ssd rm                          Remove all services and the stack directory
+  ssd rm <service>                Remove a single service
+
+Removes containers, env files, images, and all related resources.
+With no arguments, also deletes the stack directory.
+This action cannot be undone. Requires interactive confirmation.
+
+Compose: stops containers, removes them, deletes images and env files.
+K3s: deletes deployments, services, ingresses, configmaps, images, and env files.
+
+To redeploy after removal, run 'ssd up'.
+
+Examples:
+  ssd rm web
+  ssd rm
 `)
 }
 

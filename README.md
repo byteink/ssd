@@ -326,7 +326,9 @@ ssd init -s myserver          # Non-interactive with flags
 
 ### Deployment
 ```bash
-ssd deploy [service]          # Deploy service (or all if omitted)
+ssd deploy|up [service]       # Deploy service (or all if omitted)
+ssd down [service]            # Stop services (or all if omitted)
+ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
 ssd status <service>          # Check container status

@@ -9,7 +9,9 @@ argument-hint: "[command] [service] [args...]"
 ## Commands
 
 ```
-ssd deploy [service]          # Deploy all or one service (rsync, build, version bump, restart)
+ssd deploy|up [service]       # Deploy all or one service (rsync, build, version bump, restart)
+ssd down [service]            # Stop services (or all if omitted)
+ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
 ssd status <service>          # Container status
