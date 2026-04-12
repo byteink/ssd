@@ -390,7 +390,7 @@ ssd provision check --server myserver # Check a specific server
 ssd provision check --runtime k3s     # Check K3s readiness
 ```
 
-**Compose provision**: Installs Docker, Docker Compose, docker-rollout plugin, creates `traefik_web` network, starts Traefik with HTTPS via Let's Encrypt.
+**Compose provision**: Installs Docker, Docker Compose, docker-rollout plugin, creates `traefik_web` network, starts Traefik with HTTPS via Let's Encrypt. Traefik is deployed with `--ping=true` and a Docker healthcheck (`traefik healthcheck --ping`).
 
 **K3s provision**: Installs K3s, nerdctl + buildkit, configures nerdctl for K3s containerd socket (`/run/k3s/containerd/containerd.sock`, namespace `k8s.io`), installs buildkitd as systemd service, configures Traefik ACME via HelmChartConfig CRD.
 

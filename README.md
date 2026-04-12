@@ -367,7 +367,7 @@ ssd provision check --server myserver                 # Check a specific server
 Provisions the target server with:
 - Docker and Docker Compose installation
 - docker-rollout plugin for zero-downtime deploys
-- Traefik reverse proxy with automatic HTTPS (Let's Encrypt)
+- Traefik reverse proxy with automatic HTTPS (Let's Encrypt), `--ping` endpoint, and Docker healthcheck
 - `traefik_web` Docker network for service discovery
 
 All steps are idempotent and safe to run multiple times.

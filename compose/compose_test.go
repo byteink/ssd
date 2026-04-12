@@ -1136,150 +1136,114 @@ func TestGenerateTraefikCompose(t *testing.T) {
 	email := "admin@example.com"
 	result := GenerateTraefikCompose(email)
 
-	// Verify valid YAML
+	parsed := parseYAML(t, result)
+	traefikService := extractTraefikService(t, parsed)
+
+	checkTraefikImageAndRestart(t, traefikService)
+	checkTraefikPorts(t, traefikService)
+	checkTraefikCommand(t, traefikService, email)
+	checkTraefikVolumes(t, traefikService)
+	checkTraefikNetworks(t, traefikService, parsed)
+	checkTraefikHealthcheck(t, traefikService)
+}
+
+func parseYAML(t *testing.T, result string) map[string]interface{} {
+	t.Helper()
 	var parsed map[string]interface{}
 	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
 		t.Fatalf("Generated YAML is invalid: %v\nYAML:\n%s", err, result)
 	}
+	return parsed
+}
 
-	// Verify services section
+func extractTraefikService(t *testing.T, parsed map[string]interface{}) map[string]interface{} {
+	t.Helper()
 	servicesMap, ok := parsed["services"].(map[string]interface{})
 	if !ok {
 		t.Fatal("services section missing or not a map")
 	}
-
-	// Verify traefik service exists
 	traefikService, ok := servicesMap["traefik"].(map[string]interface{})
 	if !ok {
 		t.Fatal("traefik service missing")
 	}
+	return traefikService
+}
 
-	// Verify image
-	image, ok := traefikService["image"].(string)
+func checkTraefikImageAndRestart(t *testing.T, svc map[string]interface{}) {
+	t.Helper()
+	image, ok := svc["image"].(string)
 	if !ok {
 		t.Fatal("image missing or not a string")
 	}
 	if image != "traefik:3" {
 		t.Errorf("image = %q, want traefik:3", image)
 	}
-
-	// Verify restart policy
-	if restart := traefikService["restart"]; restart != "unless-stopped" {
+	if restart := svc["restart"]; restart != "unless-stopped" {
 		t.Errorf("restart = %v, want unless-stopped", restart)
 	}
+}
 
-	// Verify ports
-	ports, ok := traefikService["ports"].([]interface{})
+func checkTraefikPorts(t *testing.T, svc map[string]interface{}) {
+	t.Helper()
+	ports, ok := svc["ports"].([]interface{})
 	if !ok {
 		t.Fatal("ports missing or not an array")
 	}
 	if len(ports) != 2 {
 		t.Fatalf("ports count = %d, want 2", len(ports))
 	}
-
-	hasPort80 := false
-	hasPort443 := false
-	for _, p := range ports {
-		portStr, ok := p.(string)
-		if !ok {
-			continue
-		}
-		if portStr == "80:80" {
-			hasPort80 = true
-		}
-		if portStr == "443:443" {
-			hasPort443 = true
-		}
-	}
-	if !hasPort80 {
+	if !containsString(ports, "80:80") {
 		t.Error("port 80:80 missing")
 	}
-	if !hasPort443 {
+	if !containsString(ports, "443:443") {
 		t.Error("port 443:443 missing")
 	}
+}
 
-	// Verify command contains email
-	command, ok := traefikService["command"].([]interface{})
+func checkTraefikCommand(t *testing.T, svc map[string]interface{}, email string) {
+	t.Helper()
+	command, ok := svc["command"].([]interface{})
 	if !ok {
 		t.Fatal("command missing or not an array")
 	}
-
-	hasEmail := false
-	for _, cmd := range command {
-		cmdStr, ok := cmd.(string)
-		if !ok {
-			continue
-		}
-		if strings.Contains(cmdStr, email) {
-			hasEmail = true
-			break
-		}
-	}
-	if !hasEmail {
+	if !containsSubstring(command, email) {
 		t.Errorf("email %q not found in command", email)
 	}
-
-	// Verify certresolver is mentioned
-	hasCertResolver := false
-	for _, cmd := range command {
-		cmdStr, ok := cmd.(string)
-		if !ok {
-			continue
-		}
-		if strings.Contains(cmdStr, "letsencrypt") {
-			hasCertResolver = true
-			break
-		}
-	}
-	if !hasCertResolver {
+	if !containsSubstring(command, "letsencrypt") {
 		t.Error("certresolver 'letsencrypt' not found in command")
 	}
+	if !containsString(command, "--ping=true") {
+		t.Error("--ping=true missing from command (required for healthcheck)")
+	}
+}
 
-	// Verify volumes
-	volumes, ok := traefikService["volumes"].([]interface{})
+func checkTraefikVolumes(t *testing.T, svc map[string]interface{}) {
+	t.Helper()
+	volumes, ok := svc["volumes"].([]interface{})
 	if !ok {
 		t.Fatal("volumes missing or not an array")
 	}
-
-	hasDockerSocket := false
-	hasAcmeJson := false
-	for _, v := range volumes {
-		volStr, ok := v.(string)
-		if !ok {
-			continue
-		}
-		if volStr == "/var/run/docker.sock:/var/run/docker.sock:ro" {
-			hasDockerSocket = true
-		}
-		if strings.Contains(volStr, "acme.json") {
-			hasAcmeJson = true
-		}
-	}
-	if !hasDockerSocket {
+	if !containsString(volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 		t.Error("docker socket volume missing")
 	}
-	if !hasAcmeJson {
+	if !containsSubstring(volumes, "acme.json") {
 		t.Error("acme.json volume missing")
 	}
+}
 
-	// Verify networks
-	networks, ok := traefikService["networks"].([]interface{})
+func checkTraefikNetworks(t *testing.T, svc, parsed map[string]interface{}) {
+	t.Helper()
+	networks, ok := svc["networks"].([]interface{})
 	if !ok {
 		t.Fatal("networks missing or not an array")
 	}
-	if len(networks) != 1 {
-		t.Fatalf("networks count = %d, want 1", len(networks))
+	if len(networks) != 1 || networks[0] != "traefik_web" {
+		t.Errorf("networks = %v, want [traefik_web]", networks)
 	}
-	if networks[0] != "traefik_web" {
-		t.Errorf("network = %v, want traefik_web", networks[0])
-	}
-
-	// Verify top-level networks section
 	networksMap, ok := parsed["networks"].(map[string]interface{})
 	if !ok {
 		t.Fatal("networks section missing or not a map")
 	}
-
 	traefikNet, ok := networksMap["traefik_web"].(map[string]interface{})
 	if !ok {
 		t.Fatal("traefik_web network definition missing")
@@ -1287,7 +1251,51 @@ func TestGenerateTraefikCompose(t *testing.T) {
 	if traefikNet["external"] != true {
 		t.Error("traefik_web network should be external")
 	}
+}
 
+func checkTraefikHealthcheck(t *testing.T, svc map[string]interface{}) {
+	t.Helper()
+	healthcheck, ok := svc["healthcheck"].(map[string]interface{})
+	if !ok {
+		t.Fatal("healthcheck missing or not a map")
+	}
+	test, ok := healthcheck["test"].([]interface{})
+	if !ok {
+		t.Fatal("healthcheck test missing or not an array")
+	}
+	if len(test) < 2 || test[0] != "CMD" {
+		t.Errorf("healthcheck test format incorrect, got %v", test)
+	}
+	if !containsString(test, "traefik") || !containsString(test, "healthcheck") {
+		t.Errorf("healthcheck test does not invoke 'traefik healthcheck', got %v", test)
+	}
+	if healthcheck["interval"] != "30s" {
+		t.Errorf("healthcheck interval = %v, want 30s", healthcheck["interval"])
+	}
+	if healthcheck["timeout"] != "5s" {
+		t.Errorf("healthcheck timeout = %v, want 5s", healthcheck["timeout"])
+	}
+	if healthcheck["retries"] != 3 {
+		t.Errorf("healthcheck retries = %v, want 3", healthcheck["retries"])
+	}
+}
+
+func containsString(items []interface{}, target string) bool {
+	for _, item := range items {
+		if s, ok := item.(string); ok && s == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSubstring(items []interface{}, target string) bool {
+	for _, item := range items {
+		if s, ok := item.(string); ok && strings.Contains(s, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGenerateCompose_WithMultipleDomainsHTTPS(t *testing.T) {

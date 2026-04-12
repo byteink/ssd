@@ -344,6 +344,7 @@ func GenerateTraefikCompose(email string) string {
 					"443:443",
 				},
 				Command: []string{
+					"--ping=true",
 					"--api.dashboard=true",
 					"--providers.docker=true",
 					"--providers.docker.exposedbydefault=false",
@@ -358,6 +359,12 @@ func GenerateTraefikCompose(email string) string {
 				Volumes: []string{
 					"/var/run/docker.sock:/var/run/docker.sock:ro",
 					"/stacks/traefik/acme.json:/acme.json",
+				},
+				HealthCheck: &HealthCheck{
+					Test:     []string{"CMD", "traefik", "healthcheck", "--ping"},
+					Interval: "30s",
+					Timeout:  "5s",
+					Retries:  3,
 				},
 			},
 		},
