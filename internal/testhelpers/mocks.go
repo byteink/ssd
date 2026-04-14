@@ -130,6 +130,12 @@ func (m *MockRemoteClient) GetEnvFile(ctx context.Context, serviceName string) (
 	return args.String(0), args.Error(1)
 }
 
+// UploadEnvFile mocks uploading a local env file to the server
+func (m *MockRemoteClient) UploadEnvFile(ctx context.Context, serviceName, localPath string) error {
+	args := m.Called(serviceName, localPath)
+	return args.Error(0)
+}
+
 // SetEnvVar mocks setting environment variable
 func (m *MockRemoteClient) SetEnvVar(ctx context.Context, serviceName, key, value string) error {
 	args := m.Called(serviceName, key, value)

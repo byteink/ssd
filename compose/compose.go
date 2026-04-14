@@ -19,16 +19,24 @@ type ComposeFile struct {
 
 // Service represents a Docker Compose service definition
 type Service struct {
-	Image       string           `yaml:"image"`
-	Restart     string           `yaml:"restart"`
-	EnvFile     string           `yaml:"env_file,omitempty"`
-	Ports       []string         `yaml:"ports,omitempty"`
-	Command     []string         `yaml:"command,omitempty"`
-	Networks    []string         `yaml:"networks"`
-	Volumes     []string         `yaml:"volumes,omitempty"`
-	Labels      []string         `yaml:"labels,omitempty"`
+	Image       string            `yaml:"image"`
+	Restart     string            `yaml:"restart"`
+	EnvFile     string            `yaml:"env_file,omitempty"`
+	Ports       []string          `yaml:"ports,omitempty"`
+	Command     []string          `yaml:"command,omitempty"`
+	Networks    []string          `yaml:"networks"`
+	Volumes     []string          `yaml:"volumes,omitempty"`
+	Labels      []string          `yaml:"labels,omitempty"`
 	DependsOn   *ComposeDependsOn `yaml:"depends_on,omitempty"`
-	HealthCheck *HealthCheck     `yaml:"healthcheck,omitempty"`
+	HealthCheck *HealthCheck      `yaml:"healthcheck,omitempty"`
+	Deploy      *ComposeDeploy    `yaml:"deploy,omitempty"`
+}
+
+// ComposeDeploy is the generated `deploy:` block for Compose. Only emits
+// replicas when >1 (Compose honors `deploy.replicas` in non-swarm mode
+// only with `--compatibility`; documented in README.md).
+type ComposeDeploy struct {
+	Replicas int `yaml:"replicas"`
 }
 
 // ComposeDependsOn marshals as a simple list when no conditions are set,
@@ -170,6 +178,12 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 		// Add Traefik labels if domain is configured
 		if cfg.PrimaryDomain() != "" {
 			svc.Labels = generateTraefikLabels(project, name, cfg)
+		}
+
+		// Emit deploy.replicas only when explicitly set to >1; Compose v2
+		// honors this in non-swarm mode only with `docker compose --compatibility`.
+		if r := cfg.Replicas(); r > 1 {
+			svc.Deploy = &ComposeDeploy{Replicas: r}
 		}
 
 		compose.Services[name] = svc

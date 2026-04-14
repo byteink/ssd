@@ -694,3 +694,61 @@ func TestDeployServiceReturnsError(t *testing.T) {
 		t.Errorf("Expected 'not found' in error, got: %v", err)
 	}
 }
+
+func TestScaleCommand_K3s(t *testing.T) {
+	cfg := &config.Config{Name: "web", Stack: "/stacks/myapp"}
+	got := scaleCommand("k3s", cfg, 3)
+	want := "k3s kubectl scale deployment/web -n myapp --replicas=3"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestScaleCommand_Compose(t *testing.T) {
+	cfg := &config.Config{Name: "web", Stack: "/stacks/myapp"}
+	got := scaleCommand("compose", cfg, 4)
+	want := "cd /stacks/myapp && docker compose up -d --scale web=4 --no-recreate"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestScaleCommand_ZeroReplicas(t *testing.T) {
+	cfg := &config.Config{Name: "worker", Stack: "/stacks/myapp"}
+	got := scaleCommand("k3s", cfg, 0)
+	if !strings.Contains(got, "--replicas=0") {
+		t.Errorf("expected --replicas=0 in %q", got)
+	}
+}
+
+// TestMainDispatch_ScaleRegistered verifies the "scale" command routes through
+// printScaleHelp when -h is passed (end-to-end routing smoke test).
+func TestMainDispatch_ScaleRegistered(t *testing.T) {
+	// Redirect stdout to capture printScaleHelp output.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
+
+	oldArgs := os.Args
+	os.Args = []string{"ssd", "scale", "-h"}
+	defer func() { os.Args = oldArgs }()
+
+	done := make(chan struct{})
+	go func() {
+		main()
+		close(done)
+	}()
+	<-done
+	_ = w.Close()
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	out := string(buf[:n])
+	if !strings.Contains(out, "ssd scale - Live-scale a service") {
+		t.Errorf("expected scale help output, got: %s", out)
+	}
+}

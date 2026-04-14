@@ -858,3 +858,42 @@ func TestParseDurationSeconds_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateManifests_Replicas(t *testing.T) {
+	n := 3
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			Deploy: &config.DeployConfig{Strategy: "rollout", Replicas: &n},
+		},
+	}
+	result, err := GenerateManifests(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+	docs := parseMultiDoc(t, result)
+	dep := findDoc(docs, "Deployment", "web")
+	if dep == nil {
+		t.Fatal("deployment missing")
+	}
+	spec := dep["spec"].(map[string]interface{})
+	if spec["replicas"] != 3 {
+		t.Errorf("replicas = %v, want 3", spec["replicas"])
+	}
+}
+
+func TestGenerateManifests_ReplicasDefaultsToOne(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {Name: "web", Stack: "/stacks/myapp", Port: 80},
+	}
+	result, _ := GenerateManifests(services, "/stacks/myapp", map[string]int{"web": 1})
+	docs := parseMultiDoc(t, result)
+	dep := findDoc(docs, "Deployment", "web")
+	spec := dep["spec"].(map[string]interface{})
+	if spec["replicas"] != 1 {
+		t.Errorf("replicas = %v, want 1", spec["replicas"])
+	}
+}

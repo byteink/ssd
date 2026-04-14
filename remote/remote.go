@@ -36,6 +36,7 @@ type RemoteClient interface {
 	CreateEnvFile(ctx context.Context, serviceName string) error
 	CreateEnvFiles(ctx context.Context, serviceNames []string) error
 	GetEnvFile(ctx context.Context, serviceName string) (string, error)
+	UploadEnvFile(ctx context.Context, serviceName, localPath string) error
 	SetEnvVar(ctx context.Context, serviceName, key, value string) error
 	RemoveEnvVar(ctx context.Context, serviceName, key string) error
 	CreateStack(ctx context.Context, composeContent string) error
@@ -379,6 +380,25 @@ func (c *Client) CreateEnvFiles(ctx context.Context, serviceNames []string) erro
 		parts = append(parts, fmt.Sprintf("(test -f %s || install -m 600 /dev/null %s)", quoted, quoted))
 	}
 	_, err := c.SSH(ctx, strings.Join(parts, " && "))
+	return err
+}
+
+// UploadEnvFile replaces {serviceName}.env on the server with the content of localPath.
+// Written with mode 600. Empty files are accepted. Caller must have validated localPath
+// (see config.ValidateEnvFile) before invoking.
+func (c *Client) UploadEnvFile(ctx context.Context, serviceName, localPath string) error {
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to read env_file %s: %w", localPath, err)
+	}
+	stackDir := c.cfg.StackPath()
+	envPath := filepath.Join(stackDir, fmt.Sprintf("%s.env", serviceName))
+	encoded := base64.StdEncoding.EncodeToString(data)
+	cmd := fmt.Sprintf("mkdir -p %s && echo %s | base64 -d | install -m 600 /dev/stdin %s",
+		shellescape.Quote(stackDir),
+		shellescape.Quote(encoded),
+		shellescape.Quote(envPath))
+	_, err = c.SSH(ctx, cmd)
 	return err
 }
 

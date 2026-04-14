@@ -36,9 +36,10 @@ func GenerateManifests(services map[string]*config.Config, stack string, version
 	for name, cfg := range services {
 		version := versions[name]
 
-		// ConfigMap (empty — ssd manages env vars via .env files on disk,
-		// kubectl create configmap --from-env-file is used at deploy time;
-		// this resource ensures the ConfigMap exists so pods don't crash)
+		// ConfigMap placeholder — envFrom needs the resource to exist.
+		// The runtime populates it from {service}.env via
+		// `k3s kubectl create configmap ... --from-env-file=...` on every
+		// deploy before applying the manifest (see runtime/k3s/client.go).
 		cmDoc, err := marshalResource(configMapResource(name, namespace))
 		if err != nil {
 			return "", err
@@ -249,7 +250,7 @@ func deploymentResource(name, namespace, project string, cfg *config.Config, ver
 			},
 		},
 		"spec": map[string]interface{}{
-			"replicas": 1,
+			"replicas": cfg.Replicas(),
 			"strategy": map[string]interface{}{
 				"type": strategyType,
 			},

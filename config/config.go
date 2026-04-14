@@ -88,7 +88,8 @@ type HealthCheck struct {
 
 // DeployConfig holds deployment strategy options
 type DeployConfig struct {
-	Strategy string `yaml:"strategy"` // "rollout" (default) or "recreate"
+	Strategy string `yaml:"strategy"`           // "rollout" (default) or "recreate"
+	Replicas *int   `yaml:"replicas,omitempty"` // number of replicas (default: 1); nil means unset
 }
 
 // Config represents a single service configuration
@@ -111,6 +112,7 @@ type Config struct {
 	DependsOn   Dependencies      `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
 	Files       map[string]string `yaml:"files"`       // local_path: container_mount_path
+	EnvFile     string            `yaml:"env_file"`    // local path to .env file (relative to project root); overwrites {service}.env on deploy
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
 }
 
@@ -187,7 +189,11 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		cfg.Stack = r.Stack
 	}
 	if (cfg.Deploy == nil || cfg.Deploy.Strategy == "") && r.Deploy != nil && r.Deploy.Strategy != "" {
-		cfg.Deploy = &DeployConfig{Strategy: r.Deploy.Strategy}
+		if cfg.Deploy == nil {
+			cfg.Deploy = &DeployConfig{Strategy: r.Deploy.Strategy}
+		} else {
+			cfg.Deploy.Strategy = r.Deploy.Strategy
+		}
 	}
 
 	result, err := applyDefaults(&cfg, serviceName)
@@ -321,6 +327,10 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("invalid files: %w", err)
 	}
 
+	if err := ValidateEnvFile(cfg.EnvFile); err != nil {
+		return fmt.Errorf("invalid env_file: %w", err)
+	}
+
 	if err := ValidateHealthCheck(cfg.HealthCheck); err != nil {
 		return fmt.Errorf("invalid healthcheck: %w", err)
 	}
@@ -352,6 +362,9 @@ func ValidateRuntime(runtime string) error {
 func validateDeployStrategy(deploy *DeployConfig) error {
 	if deploy == nil {
 		return nil
+	}
+	if deploy.Replicas != nil && *deploy.Replicas < 0 {
+		return fmt.Errorf("invalid replicas %d: must be >= 0", *deploy.Replicas)
 	}
 	switch deploy.Strategy {
 	case "rollout", "recreate":
@@ -423,9 +436,11 @@ func applyDefaults(cfg *Config, serviceName string) (*Config, error) {
 		result.Port = 80
 	}
 
-	// Default deploy strategy: rollout
-	if result.Deploy == nil || result.Deploy.Strategy == "" {
+	// Default deploy strategy: rollout (preserve Replicas if already set)
+	if result.Deploy == nil {
 		result.Deploy = &DeployConfig{Strategy: "rollout"}
+	} else if result.Deploy.Strategy == "" {
+		result.Deploy.Strategy = "rollout"
 	}
 
 	return &result, nil
@@ -457,6 +472,14 @@ func (c *Config) DeployStrategy() string {
 		return "rollout"
 	}
 	return c.Deploy.Strategy
+}
+
+// Replicas returns the number of replicas for this service; 1 when unset.
+func (c *Config) Replicas() int {
+	if c.Deploy == nil || c.Deploy.Replicas == nil {
+		return 1
+	}
+	return *c.Deploy.Replicas
 }
 
 // UseHTTPS returns true if HTTPS should be used for this config
@@ -781,6 +804,37 @@ func validateFilePath(local, container, dangerousChars string) error {
 		if strings.ContainsRune(dangerousChars, r) {
 			return fmt.Errorf("container path contains shell metacharacter: %c", r)
 		}
+	}
+	return nil
+}
+
+// ValidateEnvFile validates the env_file field: must be an existing file (not a dir),
+// no path traversal, no shell metacharacters. Empty string is allowed (feature unused).
+// Existence is only checked for relative paths (the file must exist on disk at parse
+// time); for absolute paths we still block traversal but skip the existence check to
+// keep config parsing decoupled from runtime filesystem.
+func ValidateEnvFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	if len(path) > 4096 {
+		return fmt.Errorf("env_file path exceeds maximum length of 4096 characters")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("env_file path contains path traversal sequence (..)")
+	}
+	dangerousChars := ";|&$`(){}[]<>\\\"'*?"
+	for _, r := range path {
+		if strings.ContainsRune(dangerousChars, r) {
+			return fmt.Errorf("env_file path contains shell metacharacter: %c", r)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("env_file not found: %s", path)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("env_file must be a file, not a directory: %s", path)
 	}
 	return nil
 }

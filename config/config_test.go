@@ -2213,3 +2213,86 @@ func TestRootConfig_Runtime_EmptyDefaultsToCompose(t *testing.T) {
 func boolPtr(b bool) *bool {
 	return &b
 }
+
+func TestValidateEnvFile_Empty(t *testing.T) {
+	require.NoError(t, ValidateEnvFile(""))
+}
+
+func TestValidateEnvFile_Valid(t *testing.T) {
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, ".env")
+	require.NoError(t, os.WriteFile(p, []byte("FOO=bar\n"), 0600))
+	require.NoError(t, ValidateEnvFile(p))
+}
+
+func TestValidateEnvFile_Missing(t *testing.T) {
+	err := ValidateEnvFile("/tmp/ssd-definitely-missing-env-file")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestValidateEnvFile_RejectsDir(t *testing.T) {
+	err := ValidateEnvFile(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a file")
+}
+
+func TestValidateEnvFile_RejectsTraversal(t *testing.T) {
+	err := ValidateEnvFile("../../../etc/passwd")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "traversal")
+}
+
+func TestValidateEnvFile_RejectsShellMeta(t *testing.T) {
+	err := ValidateEnvFile("foo;rm -rf /")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shell metacharacter")
+}
+
+func TestLoadFromBytes_EnvFileField(t *testing.T) {
+	tmp := t.TempDir()
+	envPath := filepath.Join(tmp, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(""), 0600))
+
+	yaml := "server: srv\nservices:\n  web:\n    env_file: " + envPath + "\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, envPath, svc.EnvFile)
+}
+
+func TestLoadFromBytes_ReplicasField(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    deploy:\n      replicas: 3\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	require.NotNil(t, svc.Deploy)
+	require.NotNil(t, svc.Deploy.Replicas)
+	assert.Equal(t, 3, *svc.Deploy.Replicas)
+}
+
+func TestConfig_ReplicasDefault(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web: {}\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 1, svc.Replicas())
+}
+
+func TestConfig_ReplicasSet(t *testing.T) {
+	n := 5
+	svc := &Config{Deploy: &DeployConfig{Replicas: &n}}
+	assert.Equal(t, 5, svc.Replicas())
+}
+
+func TestConfig_ReplicasValidation_Negative(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    deploy:\n      replicas: -1\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	_, err = cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replicas")
+}

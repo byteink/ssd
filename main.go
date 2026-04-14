@@ -78,6 +78,8 @@ func main() {
 		runSecret(args)
 	case "prune":
 		runPrune(args)
+	case "scale":
+		runScale(args)
 	case "init":
 		runInit(args)
 	case "skill":
@@ -722,6 +724,53 @@ func detectOrphans(rootCfg *config.RootConfig, allServices map[string]*config.Co
 		}
 		fmt.Println("\nRun \"ssd prune\" to remove them.")
 	}
+}
+
+// scaleCommand builds the runtime-specific scale command for SSH execution.
+// Pure function for testability.
+func scaleCommand(rt string, cfg *config.Config, count int) string {
+	if rt == "k3s" {
+		namespace := filepath.Base(cfg.Stack)
+		return fmt.Sprintf("k3s kubectl scale deployment/%s -n %s --replicas=%d",
+			shellescape.Quote(cfg.Name),
+			shellescape.Quote(namespace),
+			count)
+	}
+	return fmt.Sprintf("cd %s && docker compose up -d --scale %s=%d --no-recreate",
+		shellescape.Quote(cfg.StackPath()),
+		shellescape.Quote(cfg.Name),
+		count)
+}
+
+// runScale performs a live scale of a service. Does NOT modify ssd.yaml
+// (matches the kubectl scale contract).
+func runScale(args []string) {
+	if wantsHelp(args) {
+		printScaleHelp()
+		return
+	}
+	if len(args) < 2 {
+		fmt.Println("Usage: ssd scale <service> <count>")
+		os.Exit(1)
+	}
+	serviceName := args[0]
+	count, err := strconv.Atoi(args[1])
+	if err != nil || count < 0 {
+		fmt.Printf("Error: invalid replica count %q (must be a non-negative integer)\n", args[1])
+		os.Exit(1)
+	}
+
+	rootCfg, cfg := loadConfig(serviceName)
+	client := runtime.New(rootCfg.Runtime, cfg)
+	ctx := context.Background()
+
+	cmd := scaleCommand(rootCfg.Runtime, cfg, count)
+
+	if _, err := client.SSH(ctx, cmd); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Scaled %s to %d replica(s)\n", cfg.Name, count)
 }
 
 func runPrune(args []string) {
@@ -1494,6 +1543,7 @@ Commands:
   env <service> <set|list|rm>     Manage environment variables on the server
   secret <service> <set|list|rm>  Manage K8s secrets (k3s runtime only)
   prune                           Remove orphaned services from the server
+  scale <service> <count>         Live-scale a service (does not edit ssd.yaml)
   provision                       Provision server with Docker and Traefik
   provision check                 Verify server readiness for ssd
   skill                           Install ssd skill for your coding agent
@@ -1721,6 +1771,33 @@ Examples:
 
   # Variables are available inside containers via env_file in compose.yaml
   # No restart needed after set/rm - run 'ssd restart <service>' to apply
+
+If 'env_file' is set in ssd.yaml for a service, it OVERWRITES any values
+set via 'ssd env set' on every deploy. To manage env vars via CLI only,
+remove 'env_file' from ssd.yaml first.
+`)
+}
+
+func printScaleHelp() {
+	fmt.Print(`ssd scale - Live-scale a service
+
+Usage:
+  ssd scale <service> <count>
+
+Scales a running service to the given replica count. Does NOT modify
+ssd.yaml (matches 'kubectl scale' semantics). To persist the change,
+edit 'deploy.replicas' in ssd.yaml.
+
+Runtime behavior:
+  k3s      k3s kubectl scale deployment/<service> --replicas=<count>
+  compose  docker compose up -d --scale <service>=<count> --no-recreate
+           (Compose honors scale natively; for scale >1 across restarts
+           also set deploy.replicas in ssd.yaml and deploy with
+           'docker compose --compatibility'.)
+
+Examples:
+  ssd scale web 3
+  ssd scale worker 0           # scale down to zero
 `)
 }
 

@@ -25,6 +25,7 @@ ssd secret <service> list     # List secrets (k3s only)
 ssd secret <service> rm KEY   # Remove secret (k3s only)
 ssd prune                     # Remove orphaned services from server
 ssd prune --dry-run           # Preview orphans without removing
+ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
 ssd init [-s host] [-r runtime] [-d domain] [-p port]  # Generate ssd.yaml
 ssd provision [--server S] [--email E] [--runtime R]    # Provision server
 ssd provision check [--server S] [--runtime R]          # Verify server readiness
@@ -56,6 +57,8 @@ services:
     port: 3000                # Container port, default 80
     ports: ["3000:3000"]      # Host:container port mappings (optional)
     depends_on: [db, redis]   # Or map with conditions (service_healthy, service_started)
+    env_file: ./.env          # Upload local .env to {stack}/{service}.env on every deploy (mode 600)
+                              # OVERWRITES values set via `ssd env set`. Remove to manage vars via CLI only.
     files:
       ./config.yaml: /app/config.yaml  # Local file -> container path (works with .gitignored files)
     volumes:
@@ -67,6 +70,7 @@ services:
       retries: 3
     deploy:
       strategy: recreate      # Per-service override
+      replicas: 3             # default 1 (compose: requires `docker compose --compatibility`)
 ```
 
 Root-level `server`, `stack`, and `deploy.strategy` are inherited by all services.

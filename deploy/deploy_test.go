@@ -84,6 +84,11 @@ func (m *MockDeployer) CreateEnvFiles(ctx context.Context, serviceNames []string
 	return args.Error(0)
 }
 
+func (m *MockDeployer) UploadEnvFile(ctx context.Context, serviceName, localPath string) error {
+	args := m.Called(serviceName, localPath)
+	return args.Error(0)
+}
+
 func (m *MockDeployer) IsServiceRunning(ctx context.Context, serviceName string) (bool, error) {
 	args := m.Called(serviceName)
 	return args.Bool(0), args.Error(1)
@@ -2329,4 +2334,50 @@ func TestDeploy_K3s_CopyFiles(t *testing.T) {
 
 	require.NoError(t, err)
 	mockClient.AssertCalled(t, "CopyFiles", cfg.Files)
+}
+
+func TestDeploy_EnvFile_UploadsBeforeStart(t *testing.T) {
+	tmp := t.TempDir()
+	envPath := filepath.Join(tmp, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte("FOO=bar\n"), 0600))
+
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	cfg.EnvFile = envPath
+
+	order := []string{}
+	record := func(name string) func(mock.Arguments) {
+		return func(mock.Arguments) { order = append(order, name) }
+	}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/b", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/b").Return(nil)
+	mockClient.On("BuildImage", "/tmp/b", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
+	mockClient.On("UploadEnvFile", "myapp", envPath).Return(nil).Run(record("upload"))
+	mockClient.On("RolloutService", "myapp").Return(nil).Run(record("rollout"))
+	mockClient.On("Cleanup", "/tmp/b").Return(nil)
+
+	require.NoError(t, DeployWithClient(cfg, mockClient, nil))
+	mockClient.AssertExpectations(t)
+	require.Equal(t, []string{"upload", "rollout"}, order, "env_file must upload before service start")
+}
+
+func TestDeploy_EnvFile_NotSet_NoUpload(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/b", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/b").Return(nil)
+	mockClient.On("BuildImage", "/tmp/b", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/b").Return(nil)
+
+	require.NoError(t, DeployWithClient(cfg, mockClient, nil))
+	mockClient.AssertNotCalled(t, "UploadEnvFile", mock.Anything, mock.Anything)
 }

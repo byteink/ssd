@@ -52,6 +52,7 @@ type Deployer interface {
 	CreateStack(ctx context.Context, content string) error
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFiles(ctx context.Context, serviceNames []string) error
+	UploadEnvFile(ctx context.Context, serviceName, localPath string) error
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
@@ -103,6 +104,23 @@ func manifestName(runtime string) string {
 		return "manifests.yaml"
 	}
 	return "compose.yaml"
+}
+
+// uploadEnvFiles pushes any service's env_file to {stack}/{service}.env on
+// the server. Overwrites any values set via `ssd env set`. Called on every
+// deploy before env files are consumed (by compose up or by the k3s
+// ConfigMap sync in StartService/RolloutService).
+func uploadEnvFiles(ctx context.Context, client Deployer, services map[string]*config.Config) error {
+	for _, name := range sortedKeys(services) {
+		svc := services[name]
+		if svc == nil || svc.EnvFile == "" {
+			continue
+		}
+		if err := client.UploadEnvFile(ctx, name, svc.EnvFile); err != nil {
+			return fmt.Errorf("failed to upload env_file for %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // DeployWithClient performs a deployment with a custom client
@@ -303,6 +321,16 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		if err := client.UpdateManifest(ctx, newVersion); err != nil {
 			return fmt.Errorf("failed to update %s: %w", manifest, err)
 		}
+	}
+
+	// Upload env_file (overwrites {service}.env on server). Runs before the
+	// service starts so compose/k3s read fresh values.
+	services := map[string]*config.Config{cfg.Name: cfg}
+	if opts != nil && len(opts.AllServices) > 0 {
+		services = opts.AllServices
+	}
+	if err := uploadEnvFiles(ctx, client, services); err != nil {
+		return err
 	}
 
 	// In BuildOnly mode, skip starting — caller will start all services at once

@@ -1877,3 +1877,45 @@ func TestGenerateCompose_WithFilesAndVolumes(t *testing.T) {
 		t.Error("named volume 'data' missing from top-level volumes")
 	}
 }
+
+func TestGenerateCompose_ReplicasOmittedWhenOne(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {Name: "web", Stack: "/stacks/myapp", Port: 80},
+	}
+	out, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "replicas:") {
+		t.Errorf("expected no replicas key when default (1); got:\n%s", out)
+	}
+}
+
+func TestGenerateCompose_ReplicasEmittedWhenSet(t *testing.T) {
+	n := 4
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			Deploy: &config.DeployConfig{Replicas: &n},
+		},
+	}
+	out, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	svcs := parsed["services"].(map[string]interface{})
+	web := svcs["web"].(map[string]interface{})
+	deploy, ok := web["deploy"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected deploy block; got: %v", web)
+	}
+	if deploy["replicas"] != 4 {
+		t.Errorf("replicas = %v, want 4", deploy["replicas"])
+	}
+}

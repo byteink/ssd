@@ -28,6 +28,16 @@ func NewClient(cfg *config.Config) *Client {
 	}
 }
 
+// NewClientWithExecutor constructs a K3s client with a custom command executor.
+// Used in tests to intercept SSH invocations.
+func NewClientWithExecutor(cfg *config.Config, executor remote.CommandExecutor) *Client {
+	return &Client{
+		inner:     remote.NewClientWithExecutor(cfg, executor),
+		cfg:       cfg,
+		namespace: filepath.Base(cfg.Stack),
+	}
+}
+
 // SSH delegates to the inner client.
 func (c *Client) SSH(ctx context.Context, command string) (string, error) {
 	return c.inner.SSH(ctx, command)
@@ -71,6 +81,11 @@ func (c *Client) CreateEnvFiles(ctx context.Context, serviceNames []string) erro
 // GetEnvFile delegates to the inner client.
 func (c *Client) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
 	return c.inner.GetEnvFile(ctx, serviceName)
+}
+
+// UploadEnvFile delegates to the inner client.
+func (c *Client) UploadEnvFile(ctx context.Context, serviceName, localPath string) error {
+	return c.inner.UploadEnvFile(ctx, serviceName, localPath)
 }
 
 // SetEnvVar delegates to the inner client.
@@ -237,8 +252,28 @@ func (c *Client) IsServiceRunning(ctx context.Context, serviceName string) (bool
 	return strings.TrimSpace(output) != "", nil
 }
 
+// applyEnvConfigMap populates the {service}-env ConfigMap from the
+// {service}.env file in the stack directory. Must run before kubectl apply
+// so the Deployment's envFrom finds the up-to-date data. Empty env files
+// produce an empty ConfigMap (still valid).
+func (c *Client) applyEnvConfigMap(ctx context.Context, serviceName string) error {
+	envPath := filepath.Join(c.cfg.StackPath(), serviceName+".env")
+	cmd := fmt.Sprintf("k3s kubectl create configmap %s -n %s --from-env-file=%s --dry-run=client -o yaml | k3s kubectl apply -f -",
+		shellescape.Quote(serviceName+"-env"),
+		shellescape.Quote(c.namespace),
+		shellescape.Quote(envPath))
+	if _, err := c.SSH(ctx, cmd); err != nil {
+		return fmt.Errorf("failed to apply env configmap for %s: %w", serviceName, err)
+	}
+	return nil
+}
+
 // StartService applies manifests and force-restarts the deployment.
 func (c *Client) StartService(ctx context.Context, serviceName string) error {
+	if err := c.applyEnvConfigMap(ctx, serviceName); err != nil {
+		return err
+	}
+
 	manifestPath := filepath.Join(c.cfg.StackPath(), "manifests.yaml")
 
 	// Apply only resources matching this service label
@@ -263,6 +298,10 @@ func (c *Client) StartService(ctx context.Context, serviceName string) error {
 
 // RolloutService applies manifests and waits for rollout completion.
 func (c *Client) RolloutService(ctx context.Context, serviceName string) error {
+	if err := c.applyEnvConfigMap(ctx, serviceName); err != nil {
+		return err
+	}
+
 	manifestPath := filepath.Join(c.cfg.StackPath(), "manifests.yaml")
 
 	// Apply only resources matching this service label
@@ -283,6 +322,9 @@ func (c *Client) RolloutService(ctx context.Context, serviceName string) error {
 
 // RestartStack applies all manifests in the stack.
 func (c *Client) RestartStack(ctx context.Context) error {
+	if err := c.applyEnvConfigMap(ctx, c.cfg.Name); err != nil {
+		return err
+	}
 	manifestPath := filepath.Join(c.cfg.StackPath(), "manifests.yaml")
 	cmd := fmt.Sprintf("k3s kubectl apply -f %s", shellescape.Quote(manifestPath))
 	return c.SSHInteractive(ctx, cmd)

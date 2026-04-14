@@ -333,6 +333,32 @@ ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
 ssd status <service>          # Check container status
 ssd logs <service> [-f]       # View logs, -f to follow
+ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
+```
+
+### Replicas & scaling
+
+Set a persistent replica count in ssd.yaml:
+
+```yaml
+services:
+  web:
+    deploy:
+      replicas: 3    # default 1
+```
+
+- **k3s**: written to Deployment `spec.replicas` and applied on deploy.
+- **compose**: written to `services.<svc>.deploy.replicas`. Docker
+  Compose v2 honors this in non-swarm mode only when deploying with
+  `docker compose --compatibility`. ssd does NOT add this flag;
+  document it in your own deploy wrapper if you need >1 replica
+  persisted across restarts. For ephemeral scaling, use `ssd scale`.
+
+Live-scale without editing ssd.yaml (matches `kubectl scale`):
+
+```bash
+ssd scale web 3
+ssd scale worker 0    # scale down to zero
 ```
 
 **Deploy behavior:**
@@ -354,7 +380,20 @@ ssd env <service> list               # List all environment variables
 ssd env <service> rm KEY             # Remove environment variable
 ```
 
-**Note**: Environment variables are stored in `.env` file in the stack directory on the server.
+**Note**: Environment variables are stored in `{service}.env` files in the stack directory on the server. For k3s, they are synced into a `{service}-env` ConfigMap on every deploy.
+
+#### env_file (overwrite-on-deploy)
+
+```yaml
+services:
+  web:
+    env_file: ./.env    # local path, relative to project root
+```
+
+When `env_file` is set, the local file is uploaded to
+`{stack}/{service}.env` (mode 600) on every deploy. This **overwrites**
+any values set via `ssd env set`. To manage env vars via CLI only, remove
+`env_file` from ssd.yaml first.
 
 ### Server Provisioning
 ```bash
