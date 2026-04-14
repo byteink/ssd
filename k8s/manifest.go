@@ -36,15 +36,12 @@ func GenerateManifests(services map[string]*config.Config, stack string, version
 	for name, cfg := range services {
 		version := versions[name]
 
-		// ConfigMap placeholder — envFrom needs the resource to exist.
-		// The runtime populates it from {service}.env via
-		// `k3s kubectl create configmap ... --from-env-file=...` on every
-		// deploy before applying the manifest (see runtime/k3s/client.go).
-		cmDoc, err := marshalResource(configMapResource(name, namespace))
-		if err != nil {
-			return "", err
-		}
-		docs = append(docs, cmDoc)
+		// NOTE: the {service}-env ConfigMap is intentionally NOT emitted here.
+		// runtime/k3s/client.go applyEnvConfigMap manages it directly via
+		// `kubectl create configmap --from-env-file=... --dry-run=client | kubectl apply -f -`
+		// before this manifest is applied. Emitting an empty placeholder here
+		// would overwrite the populated data via the last-applied-configuration
+		// diff on every deploy.
 
 		// Deployment
 		dep, err := deploymentResource(name, namespace, project, cfg, version)
@@ -80,6 +77,16 @@ func GenerateManifests(services map[string]*config.Config, stack string, version
 				return "", err
 			}
 			docs = append(docs, ingressDoc)
+
+			// Redirect Middleware CRD — required when redirect_to is set so
+			// Traefik can resolve the annotation reference on the Ingress.
+			if cfg.RedirectTo != "" {
+				mwDoc, err := marshalResource(redirectMiddlewareResource(name, namespace, cfg))
+				if err != nil {
+					return "", err
+				}
+				docs = append(docs, mwDoc)
+			}
 		}
 	}
 
@@ -101,21 +108,6 @@ func namespaceResource(name string) map[string]interface{} {
 		"metadata": map[string]interface{}{
 			"name": name,
 			"labels": map[string]interface{}{
-				"managed-by": "ssd",
-			},
-		},
-	}
-}
-
-func configMapResource(name, namespace string) map[string]interface{} {
-	return map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
-			"name":      name + "-env",
-			"namespace": namespace,
-			"labels": map[string]interface{}{
-				"app":        name,
 				"managed-by": "ssd",
 			},
 		},
@@ -331,10 +323,12 @@ func ingressResource(name, namespace string, cfg *config.Config) map[string]inte
 		annotations["traefik.ingress.kubernetes.io/router.entrypoints"] = "web"
 	}
 
-	// Redirect middleware for redirect_to
+	// Redirect middleware for redirect_to.
+	// Traefik kubernetescrd format: <namespace>-<middleware-name>@kubernetescrd.
+	// The Middleware itself is named "{name}-redirect" in the same namespace
+	// (see redirectMiddlewareResource).
 	if cfg.RedirectTo != "" {
-		middlewareName := namespace + "-" + name + "-redirect"
-		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = namespace + "-" + middlewareName + "@kubernetescrd"
+		annotations["traefik.ingress.kubernetes.io/router.middlewares"] = namespace + "-" + name + "-redirect@kubernetescrd"
 	}
 
 	// Build rules
@@ -396,6 +390,41 @@ func ingressResource(name, namespace string, cfg *config.Config) map[string]inte
 			},
 		},
 		"spec": spec,
+	}
+}
+
+// redirectMiddlewareResource builds a Traefik Middleware CRD that
+// rewrites every non-primary domain to cfg.RedirectTo, preserving path
+// and query string. Caller must ensure cfg.RedirectTo != "".
+func redirectMiddlewareResource(name, namespace string, cfg *config.Config) map[string]interface{} {
+	var sources []string
+	for _, d := range allDomains(cfg) {
+		if d == cfg.RedirectTo {
+			continue
+		}
+		sources = append(sources, strings.ReplaceAll(d, ".", "\\."))
+	}
+	regex := "^https?://(" + strings.Join(sources, "|") + ")/(.*)"
+	replacement := "https://" + cfg.RedirectTo + "/${2}"
+
+	return map[string]interface{}{
+		"apiVersion": "traefik.io/v1alpha1",
+		"kind":       "Middleware",
+		"metadata": map[string]interface{}{
+			"name":      name + "-redirect",
+			"namespace": namespace,
+			"labels": map[string]interface{}{
+				"app":        name,
+				"managed-by": "ssd",
+			},
+		},
+		"spec": map[string]interface{}{
+			"redirectRegex": map[string]interface{}{
+				"regex":       regex,
+				"replacement": replacement,
+				"permanent":   false,
+			},
+		},
 	}
 }
 

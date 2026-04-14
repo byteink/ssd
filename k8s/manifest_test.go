@@ -128,21 +128,12 @@ func TestGenerateManifests_SingleService(t *testing.T) {
 		t.Errorf("configMapRef name = %v, want web-env", cmRef["name"])
 	}
 
-	// Check ConfigMap exists (referenced by Deployment envFrom)
-	cm := findDoc(docs, "ConfigMap", "web-env")
-	if cm == nil {
-		t.Fatal("ConfigMap resource missing")
-	}
-	cmMeta := cm["metadata"].(map[string]interface{})
-	if cmMeta["namespace"] != "myapp" {
-		t.Errorf("ConfigMap namespace = %v, want myapp", cmMeta["namespace"])
-	}
-	cmLabels := cmMeta["labels"].(map[string]interface{})
-	if cmLabels["app"] != "web" {
-		t.Errorf("ConfigMap label app = %v, want web", cmLabels["app"])
-	}
-	if cmLabels["managed-by"] != "ssd" {
-		t.Errorf("ConfigMap label managed-by = %v, want ssd", cmLabels["managed-by"])
+	// ConfigMap is intentionally NOT emitted by GenerateManifests.
+	// runtime/k3s/client.go applyEnvConfigMap manages it directly via
+	// `kubectl create configmap --from-env-file=... | kubectl apply -f -`
+	// to avoid an empty placeholder wiping the populated data.
+	if cm := findDoc(docs, "ConfigMap", "web-env"); cm != nil {
+		t.Error("ConfigMap should not be emitted; runtime applyEnvConfigMap owns it")
 	}
 
 	// Check Service exists
@@ -762,8 +753,64 @@ func TestGenerateManifests_WithRedirectTo(t *testing.T) {
 		t.Fatal("redirect middleware annotation missing")
 	}
 	middlewareStr := middleware.(string)
-	if !strings.Contains(middlewareStr, "redirect") {
-		t.Errorf("middleware annotation = %v, want to contain 'redirect'", middlewareStr)
+	// Traefik kubernetescrd format: <namespace>-<middleware-name>@kubernetescrd.
+	// Middleware name is "{svc}-redirect" in the same namespace; the annotation
+	// must reference it exactly as "{ns}-{svc}-redirect@kubernetescrd".
+	wantAnnotation := "myapp-web-redirect@kubernetescrd"
+	if middlewareStr != wantAnnotation {
+		t.Errorf("middleware annotation = %q, want %q", middlewareStr, wantAnnotation)
+	}
+
+	// Middleware CRD must be emitted so Traefik can resolve the reference.
+	mw := findDoc(docs, "Middleware", "web-redirect")
+	if mw == nil {
+		t.Fatal("Middleware CRD missing for redirect_to")
+	}
+	if mw["apiVersion"] != "traefik.io/v1alpha1" {
+		t.Errorf("middleware apiVersion = %v, want traefik.io/v1alpha1", mw["apiVersion"])
+	}
+	mwMeta := mw["metadata"].(map[string]interface{})
+	if mwMeta["namespace"] != "myapp" {
+		t.Errorf("middleware namespace = %v, want myapp", mwMeta["namespace"])
+	}
+	mwSpec := mw["spec"].(map[string]interface{})
+	rr, ok := mwSpec["redirectRegex"].(map[string]interface{})
+	if !ok {
+		t.Fatal("middleware spec.redirectRegex missing")
+	}
+	regex, _ := rr["regex"].(string)
+	// Regex must match all non-primary domains (www.example.com here).
+	if !strings.Contains(regex, "www\\.example\\.com") {
+		t.Errorf("regex = %q, expected to match www.example.com", regex)
+	}
+	// Primary domain must NOT be in the source regex (otherwise it loops).
+	if strings.Contains(regex, "(example\\.com") || strings.Contains(regex, "|example\\.com") {
+		t.Errorf("regex = %q, must not redirect the primary domain", regex)
+	}
+	replacement, _ := rr["replacement"].(string)
+	if !strings.Contains(replacement, "example.com") {
+		t.Errorf("replacement = %q, expected to target example.com", replacement)
+	}
+}
+
+func TestGenerateManifests_RedirectTo_NoMiddlewareWhenAbsent(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:    "web",
+			Server:  "myserver",
+			Stack:   "/stacks/myapp",
+			Domains: []string{"example.com", "www.example.com"},
+			Port:    3000,
+		},
+	}
+
+	result, err := GenerateManifests(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+	docs := parseMultiDoc(t, result)
+	if mw := findDoc(docs, "Middleware", "web-redirect"); mw != nil {
+		t.Error("Middleware should not be emitted when redirect_to is unset")
 	}
 }
 

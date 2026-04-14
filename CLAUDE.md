@@ -298,6 +298,7 @@ Common redirect use cases:
 Notes:
 - `redirect_to` is optional - omit it to serve all domains without redirects
 - When `redirect_to` is set, all other domains redirect to it with 302 temporary redirect (flexible, not cached)
+- k3s: a Traefik `Middleware` CRD (`kind: Middleware`, `apiVersion: traefik.io/v1alpha1`) named `{service}-redirect` is emitted in the same namespace and referenced by the Ingress via `traefik.ingress.kubernetes.io/router.middlewares: {namespace}-{service}-redirect@kubernetescrd`
 - `redirect_to` must be one of the domains in the `domains` array
 - Redirects preserve path and query parameters
 - Works with both HTTPS and HTTP
@@ -346,8 +347,11 @@ directory), no `..` traversal, no shell metacharacters.
 Works identically for both runtimes:
 - **compose**: `compose.yaml` already points at `./{service}.env` via
   `env_file:` — the fresh content takes effect on container start.
-- **k3s**: the bug-fixed `applyEnvConfigMap` step reads the uploaded
-  file and syncs it into the `{service}-env` ConfigMap.
+- **k3s**: the `applyEnvConfigMap` step reads the uploaded file and
+  syncs it into the `{service}-env` ConfigMap. The ConfigMap is owned
+  exclusively by this step — it is intentionally NOT emitted in
+  `manifests.yaml` to avoid an empty placeholder wiping the populated
+  data via the last-applied-configuration diff on every deploy.
 
 To manage env vars via CLI only, remove `env_file` from ssd.yaml.
 
