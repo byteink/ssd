@@ -5,6 +5,15 @@ package cleanup
 
 import "sort"
 
+// NewCleaner returns an ImageCleaner for the given runtime.
+// "compose" → docker, "k3s" → nerdctl/buildctl.
+func NewCleaner(runtime string, ssh SSHRunner) ImageCleaner {
+	if runtime == "k3s" {
+		return NewK3sCleaner(ssh)
+	}
+	return NewComposeCleaner(ssh)
+}
+
 // Tag describes a single image tag on the server.
 // Numeric is the parsed integer version when the tag matches ssd's scheme
 // (e.g. "ssd-foo-web:57" → Numeric=57). Raw holds the original tag string

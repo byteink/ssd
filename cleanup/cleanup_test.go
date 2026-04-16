@@ -72,6 +72,19 @@ func TestSelectOldTags_DuplicatesNormalized(t *testing.T) {
 	assert.Equal(t, []int{3}, numeric(old))
 }
 
+func TestNewCleaner_SelectsByRuntime(t *testing.T) {
+	_, composeOK := NewCleaner("compose", nil).(*ComposeCleaner)
+	assert.True(t, composeOK, "compose runtime must return *ComposeCleaner")
+
+	_, k3sOK := NewCleaner("k3s", nil).(*K3sCleaner)
+	assert.True(t, k3sOK, "k3s runtime must return *K3sCleaner")
+
+	// Unknown runtime falls back to compose (least-surprise, matches
+	// config default).
+	_, fallback := NewCleaner("unknown", nil).(*ComposeCleaner)
+	assert.True(t, fallback, "unknown runtime must fall back to compose")
+}
+
 func numeric(ts []Tag) []int {
 	out := make([]int, 0, len(ts))
 	for _, t := range ts {
