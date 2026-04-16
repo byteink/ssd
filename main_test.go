@@ -752,3 +752,79 @@ func TestMainDispatch_ScaleRegistered(t *testing.T) {
 		t.Errorf("expected scale help output, got: %s", out)
 	}
 }
+
+// --- ssd prune flag parsing ---
+
+func TestParsePruneFlags_Defaults(t *testing.T) {
+	got, err := parsePruneFlags(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No flags = orphan-service-only mode (current behavior).
+	want := pruneFlags{orphans: true}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParsePruneFlags_Images(t *testing.T) {
+	got, err := parsePruneFlags([]string{"--images"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := pruneFlags{images: true}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParsePruneFlags_AllExpandsEverything(t *testing.T) {
+	got, err := parsePruneFlags([]string{"--all"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := pruneFlags{orphans: true, images: true, buildCache: true, dangling: true}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParsePruneFlags_MultipleCombined(t *testing.T) {
+	got, err := parsePruneFlags([]string{"--images", "--build-cache", "--dry-run"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := pruneFlags{images: true, buildCache: true, dryRun: true}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParsePruneFlags_KeepOverride(t *testing.T) {
+	got, err := parsePruneFlags([]string{"--images", "--keep", "5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.keep == nil || *got.keep != 5 {
+		t.Errorf("expected keep=5, got %+v", got.keep)
+	}
+}
+
+func TestParsePruneFlags_KeepRequiresValue(t *testing.T) {
+	if _, err := parsePruneFlags([]string{"--images", "--keep"}); err == nil {
+		t.Fatal("expected error when --keep has no value")
+	}
+}
+
+func TestParsePruneFlags_KeepRejectsNegative(t *testing.T) {
+	if _, err := parsePruneFlags([]string{"--keep", "-1"}); err == nil {
+		t.Fatal("expected error when --keep is negative")
+	}
+}
+
+func TestParsePruneFlags_UnknownFlag(t *testing.T) {
+	if _, err := parsePruneFlags([]string{"--bogus"}); err == nil {
+		t.Fatal("expected error for unknown flag")
+	}
+}
+

@@ -805,17 +805,74 @@ func runScale(args []string) {
 	fmt.Printf("Scaled %s to %d replica(s)\n", cfg.Name, count)
 }
 
+// pruneFlags captures the parsed state of `ssd prune` options.
+// Zero value is invalid — use parsePruneFlags.
+type pruneFlags struct {
+	orphans    bool
+	images     bool
+	buildCache bool
+	dangling   bool
+	dryRun     bool
+	keep       *int // override per-service retention when set
+}
+
+// parsePruneFlags parses the flag list for `ssd prune`.
+// No args → orphan-only mode (preserves the historical behavior).
+// --all expands to orphans + images + build-cache + dangling.
+// --keep requires a non-negative integer.
+func parsePruneFlags(args []string) (pruneFlags, error) {
+	var f pruneFlags
+	anySelector := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dry-run":
+			f.dryRun = true
+		case "--images":
+			f.images = true
+			anySelector = true
+		case "--build-cache":
+			f.buildCache = true
+			anySelector = true
+		case "--dangling":
+			f.dangling = true
+			anySelector = true
+		case "--all":
+			f.orphans = true
+			f.images = true
+			f.buildCache = true
+			f.dangling = true
+			anySelector = true
+		case "--keep":
+			if i+1 >= len(args) {
+				return pruneFlags{}, fmt.Errorf("--keep requires a value")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 {
+				return pruneFlags{}, fmt.Errorf("--keep must be a non-negative integer, got %q", args[i+1])
+			}
+			f.keep = &n
+			i++
+		default:
+			return pruneFlags{}, fmt.Errorf("unknown flag: %s", args[i])
+		}
+	}
+	// No selector flags means "default": orphan services only.
+	if !anySelector {
+		f.orphans = true
+	}
+	return f, nil
+}
+
 func runPrune(args []string) {
 	if wantsHelp(args) {
 		printPruneHelp()
 		return
 	}
 
-	dryRun := false
-	for _, arg := range args {
-		if arg == "--dry-run" {
-			dryRun = true
-		}
+	flags, err := parsePruneFlags(args)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	rootCfg, err := config.Load("")
@@ -838,20 +895,38 @@ func runPrune(args []string) {
 	}
 
 	client := runtime.New(rootCfg.Runtime, cfg)
+	ctx := context.Background()
 
-	// Detect orphaned services based on runtime
-	var orphans []string
+	if flags.orphans {
+		pruneOrphans(ctx, rootCfg, cfg, services, client, flags.dryRun)
+	}
+	if flags.images {
+		pruneImages(ctx, rootCfg, services, flags.keep, flags.dryRun)
+	}
+	if flags.buildCache {
+		pruneBuildCache(ctx, rootCfg.Runtime, client, flags.dryRun)
+	}
+	if flags.dangling {
+		pruneDangling(ctx, rootCfg.Runtime, client, flags.dryRun)
+	}
+}
+
+// pruneOrphans removes services running on the server that no longer
+// exist in ssd.yaml. Extracted from runPrune unchanged to keep behavior
+// identical for the no-flag case.
+func pruneOrphans(ctx context.Context, rootCfg *config.RootConfig, cfg *config.Config, services []string, client remote.RemoteClient, dryRun bool) {
 	configServices := make(map[string]bool, len(services))
 	for _, s := range services {
 		configServices[s] = true
 	}
 
+	var orphans []string
 	switch rootCfg.Runtime {
 	case "k3s":
 		namespace := filepath.Base(cfg.Stack)
 		cmd := fmt.Sprintf("k3s kubectl get deployments -n %s -l managed-by=ssd -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}'",
 			shellescape.Quote(namespace))
-		output, err := client.SSH(context.Background(), cmd)
+		output, err := client.SSH(ctx, cmd)
 		if err == nil {
 			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
 				name = strings.TrimSpace(name)
@@ -864,7 +939,7 @@ func runPrune(args []string) {
 		stackPath := cfg.StackPath()
 		cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Service}}' 2>/dev/null",
 			shellescape.Quote(stackPath))
-		output, err := client.SSH(context.Background(), cmd)
+		output, err := client.SSH(ctx, cmd)
 		if err == nil {
 			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
 				name = strings.TrimSpace(name)
@@ -876,22 +951,18 @@ func runPrune(args []string) {
 	}
 
 	if len(orphans) == 0 {
-		fmt.Println("No orphaned services found.")
+		fmt.Println("Orphans: none.")
 		return
 	}
 
-	fmt.Printf("Orphaned services (%d):\n", len(orphans))
+	fmt.Printf("Orphans (%d):\n", len(orphans))
 	for _, name := range orphans {
 		fmt.Printf("  - %s\n", name)
 	}
-
 	if dryRun {
-		fmt.Println("\nDry run: no changes made.")
+		fmt.Println("(dry run — no changes made)")
 		return
 	}
-
-	fmt.Println("\nRemoving orphaned services...")
-	ctx := context.Background()
 
 	for _, name := range orphans {
 		fmt.Printf("  Removing %s...\n", name)
@@ -919,8 +990,93 @@ func runPrune(args []string) {
 		rmCmd := fmt.Sprintf("rm -f %s", shellescape.Quote(envPath))
 		_, _ = client.SSH(ctx, rmCmd)
 	}
+	fmt.Printf("Orphans: removed %d.\n", len(orphans))
+}
 
-	fmt.Println("\nPrune completed.")
+// pruneImages removes old image tags per service, honoring retention
+// config and the --keep override. Always iterates all services in
+// ssd.yaml in sorted order for deterministic output.
+func pruneImages(ctx context.Context, rootCfg *config.RootConfig, services []string, keepOverride *int, dryRun bool) {
+	sort.Strings(services)
+	total := 0
+	for _, name := range services {
+		cfg, err := rootCfg.GetService(name)
+		if err != nil {
+			fmt.Printf("  Warning: skip %s: %v\n", name, err)
+			continue
+		}
+		if cfg.IsPrebuilt() {
+			continue
+		}
+
+		keep := cfg.RetainTags()
+		if keepOverride != nil {
+			keep = *keepOverride
+		}
+		if keep <= 0 {
+			continue
+		}
+
+		svcClient := runtime.New(rootCfg.Runtime, cfg)
+		cleaner := cleanup.NewCleaner(rootCfg.Runtime, svcClient)
+		tags, err := cleaner.ListTags(ctx, cfg.ImageName())
+		if err != nil {
+			fmt.Printf("  Warning: %s: list tags failed: %v\n", name, err)
+			continue
+		}
+		running, _ := svcClient.GetCurrentVersion(ctx)
+		old := cleanup.SelectOldTags(tags, keep, running)
+		if len(old) == 0 {
+			continue
+		}
+
+		fmt.Printf("Images %s (keep=%d, running=%d): %d old tag(s)\n", name, keep, running, len(old))
+		for _, t := range old {
+			ref := fmt.Sprintf("%s:%d", cfg.ImageName(), t.Numeric)
+			fmt.Printf("  - %s\n", ref)
+			if dryRun {
+				continue
+			}
+			if err := cleaner.RemoveImage(ctx, ref); err != nil {
+				fmt.Printf("    Warning: %v\n", err)
+				continue
+			}
+			total++
+		}
+	}
+
+	if dryRun {
+		return
+	}
+	fmt.Printf("Images: removed %d tag(s).\n", total)
+}
+
+// pruneBuildCache invokes the runtime's build cache prune command.
+func pruneBuildCache(ctx context.Context, rt string, client remote.RemoteClient, dryRun bool) {
+	if dryRun {
+		fmt.Println("Build cache: would prune entries older than 168h (dry run).")
+		return
+	}
+	cleaner := cleanup.NewCleaner(rt, client)
+	if err := cleaner.PruneBuildCache(ctx); err != nil {
+		fmt.Printf("Build cache: warning: %v\n", err)
+		return
+	}
+	fmt.Println("Build cache: pruned entries older than 168h.")
+}
+
+// pruneDangling removes unreferenced images from the runtime store.
+func pruneDangling(ctx context.Context, rt string, client remote.RemoteClient, dryRun bool) {
+	if dryRun {
+		fmt.Println("Dangling: would remove unreferenced images (dry run).")
+		return
+	}
+	cleaner := cleanup.NewCleaner(rt, client)
+	if err := cleaner.PruneDangling(ctx); err != nil {
+		fmt.Printf("Dangling: warning: %v\n", err)
+		return
+	}
+	fmt.Println("Dangling: removed.")
 }
 
 func runSecret(args []string) {
@@ -1834,20 +1990,47 @@ Examples:
 }
 
 func printPruneHelp() {
-	fmt.Print(`ssd prune - Remove orphaned services from the server
+	fmt.Print(`ssd prune - Reclaim disk space on the server
 
 Usage:
-  ssd prune                       Remove services on server not in ssd.yaml
-  ssd prune --dry-run             Show orphaned services without removing
+  ssd prune                       Remove services on server not in ssd.yaml (default)
+  ssd prune --images              Remove old image tags beyond per-service retention
+  ssd prune --build-cache         Remove build cache entries older than 168h
+  ssd prune --dangling            Remove unreferenced (dangling) images
+  ssd prune --all                 All of the above (orphans + images + build-cache + dangling)
+  ssd prune --keep N              Override per-service retention for --images/--all
+  ssd prune --dry-run             Preview candidates without removing
+  ssd prune --images --dry-run    Combine flags freely
 
-Compares services defined in ssd.yaml against what is deployed on the server.
-Any services found on the server but not in ssd.yaml are removed.
+With no flags, prunes orphans only (preserves historical behavior).
 
-Works with both compose and k3s runtimes.
+Retention (for --images):
+  Default is 2 (current + rollback target) per service.
+  Configure in ssd.yaml:
+
+    cleanup:
+      retention: 3          # root default
+    services:
+      web:
+        cleanup:
+          retention: 5      # per-service override
+
+  retention: 0 disables auto cleanup on deploy but --images still removes
+  tags when explicitly invoked with --keep N.
+
+Build cache prunes entries not touched for 168h (7 days). This is
+opt-in only — never runs automatically on deploy.
+
+Compose vs k3s:
+  compose  docker builder prune / docker image prune / docker rmi
+  k3s      sudo buildctl prune / nerdctl image prune / nerdctl rmi
+           (buildkitd.sock is root-owned, so build-cache prune needs sudo)
 
 Examples:
   ssd prune
-  ssd prune --dry-run
+  ssd prune --images --dry-run
+  ssd prune --images --keep 3
+  ssd prune --all
 `)
 }
 
