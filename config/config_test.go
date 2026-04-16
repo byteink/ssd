@@ -2296,3 +2296,77 @@ func TestConfig_ReplicasValidation_Negative(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "replicas")
 }
+
+// --- cleanup.retention ---
+
+func TestConfig_RetainTagsDefault(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web: {}\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 2, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsExplicit(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    cleanup:\n      retention: 5\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 5, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsZeroDisables(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    cleanup:\n      retention: 0\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 0, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsOneValid(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    cleanup:\n      retention: 1\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 1, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsNegativeRejected(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    cleanup:\n      retention: -1\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	_, err = cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retention")
+}
+
+func TestConfig_RetainTagsRootInheritance(t *testing.T) {
+	yaml := "server: srv\ncleanup:\n  retention: 4\nservices:\n  web: {}\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 4, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsServiceOverride(t *testing.T) {
+	yaml := "server: srv\ncleanup:\n  retention: 4\nservices:\n  web:\n    cleanup:\n      retention: 7\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 7, svc.RetainTags())
+}
+
+func TestConfig_RetainTagsServiceZeroOverridesRoot(t *testing.T) {
+	yaml := "server: srv\ncleanup:\n  retention: 4\nservices:\n  web:\n    cleanup:\n      retention: 0\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, 0, svc.RetainTags())
+}

@@ -92,6 +92,13 @@ type DeployConfig struct {
 	Replicas *int   `yaml:"replicas,omitempty"` // number of replicas (default: 1); nil means unset
 }
 
+// CleanupConfig holds post-deploy image retention options.
+// Retention is a pointer so we can distinguish "unset" (inherit/default 2)
+// from "explicitly 0" (disable auto cleanup).
+type CleanupConfig struct {
+	Retention *int `yaml:"retention,omitempty"`
+}
+
 // Config represents a single service configuration
 type Config struct {
 	Name        string            `yaml:"name"`
@@ -114,6 +121,7 @@ type Config struct {
 	Files       map[string]string `yaml:"files"`       // local_path: container_mount_path
 	EnvFile     string            `yaml:"env_file"`    // local path to .env file (relative to project root); overwrites {service}.env on deploy
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
+	Cleanup     *CleanupConfig    `yaml:"cleanup"`     // post-deploy image tag retention; inherits from root
 }
 
 // RootConfig represents the ssd.yaml file structure
@@ -122,6 +130,7 @@ type RootConfig struct {
 	Server   string              `yaml:"server"`
 	Stack    string              `yaml:"stack"`
 	Deploy   *DeployConfig       `yaml:"deploy"`
+	Cleanup  *CleanupConfig      `yaml:"cleanup"`
 	Services map[string]*Config `yaml:"services"`
 }
 
@@ -193,6 +202,14 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 			cfg.Deploy = &DeployConfig{Strategy: r.Deploy.Strategy}
 		} else {
 			cfg.Deploy.Strategy = r.Deploy.Strategy
+		}
+	}
+	// Cleanup inheritance: service value wins when set (including 0),
+	// otherwise inherit from root. nil at both levels means default.
+	if cfg.Cleanup == nil || cfg.Cleanup.Retention == nil {
+		if r.Cleanup != nil && r.Cleanup.Retention != nil {
+			inherited := *r.Cleanup.Retention
+			cfg.Cleanup = &CleanupConfig{Retention: &inherited}
 		}
 	}
 
@@ -345,6 +362,23 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
+	if err := validateCleanup(cfg.Cleanup); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateCleanup validates the cleanup retention field.
+// Negative values are rejected. 0 is valid (disables auto cleanup).
+// Minimum retention is 1 (no rollback safety) — callers get what they ask for.
+func validateCleanup(c *CleanupConfig) error {
+	if c == nil || c.Retention == nil {
+		return nil
+	}
+	if *c.Retention < 0 {
+		return fmt.Errorf("invalid cleanup retention %d: must be >= 0 (0 disables)", *c.Retention)
+	}
 	return nil
 }
 
@@ -480,6 +514,16 @@ func (c *Config) Replicas() int {
 		return 1
 	}
 	return *c.Deploy.Replicas
+}
+
+// RetainTags returns the number of image tags to keep on the server after
+// a successful deploy. Defaults to 2 (current + rollback target) when unset.
+// 0 disables auto cleanup on deploy.
+func (c *Config) RetainTags() int {
+	if c.Cleanup == nil || c.Cleanup.Retention == nil {
+		return 2
+	}
+	return *c.Cleanup.Retention
 }
 
 // UseHTTPS returns true if HTTPS should be used for this config
