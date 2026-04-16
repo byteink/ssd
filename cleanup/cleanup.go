@@ -3,7 +3,45 @@
 // delegated to an ImageCleaner interface implemented per runtime.
 package cleanup
 
-import "sort"
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+)
+
+// PruneOldTags lists tags for the given image, picks old ones per the
+// retention and running version, and removes them via the cleaner.
+//
+// Semantics:
+//   - retention == 0 → no-op (auto cleanup disabled)
+//   - ListTags errors propagate to the caller (something real is wrong)
+//   - RemoveImage errors per tag are logged and swallowed — cleanup is
+//     best-effort. Common cause: image still referenced by a running pod
+//     (docker/nerdctl will refuse). That is the desired behavior.
+//
+// Returns the list of refs that were *attempted* to be removed.
+func PruneOldTags(ctx context.Context, c ImageCleaner, imageName string, retention, running int) ([]string, error) {
+	if retention <= 0 {
+		return nil, nil
+	}
+
+	tags, err := c.ListTags(ctx, imageName)
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+
+	old := SelectOldTags(tags, retention, running)
+	attempted := make([]string, 0, len(old))
+	for _, t := range old {
+		ref := fmt.Sprintf("%s:%d", imageName, t.Numeric)
+		attempted = append(attempted, ref)
+		if err := c.RemoveImage(ctx, ref); err != nil {
+			log.Printf("cleanup: failed to remove %s: %v", ref, err)
+		}
+	}
+	return attempted, nil
+}
 
 // NewCleaner returns an ImageCleaner for the given runtime.
 // "compose" → docker, "k3s" → nerdctl/buildctl.

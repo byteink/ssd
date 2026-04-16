@@ -12,6 +12,7 @@ import (
 
 	"al.essio.dev/pkg/shellescape"
 
+	"github.com/byteink/ssd/cleanup"
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/deploy"
 	"github.com/byteink/ssd/provision"
@@ -38,8 +39,26 @@ func deployServiceBuildOnly(rootCfg *config.RootConfig, serviceName string, allS
 		BuildOnly:   true,
 		Runtime:     rootCfg.Runtime,
 	}
+	// BuildOnly deploys don't start services, so no tag cleanup here —
+	// the full-deploy pass that follows will handle cleanup per service.
 
 	return deploy.DeployWithClient(cfg, client, opts)
+}
+
+// tagCleanerFor returns a deploy.TagCleaner backed by the real runtime
+// cleanup implementation. Returns nil when the client doesn't expose SSH
+// (shouldn't happen for compose/k3s clients, but keeps the contract safe).
+func tagCleanerFor(rt string, client remote.RemoteClient) deploy.TagCleaner {
+	return &deployTagCleaner{cleaner: cleanup.NewCleaner(rt, client)}
+}
+
+type deployTagCleaner struct {
+	cleaner cleanup.ImageCleaner
+}
+
+func (d *deployTagCleaner) PruneOldTags(ctx context.Context, image string, retention, running int) error {
+	_, err := cleanup.PruneOldTags(ctx, d.cleaner, image, retention, running)
+	return err
 }
 
 var version = "dev"
@@ -159,6 +178,7 @@ func runDeploy(args []string) {
 		// Deploy each service using its configured strategy
 		fmt.Println("\n==> Starting all services...")
 		client := runtime.New(rootCfg.Runtime, allServices[services[0]])
+		tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
 		for _, name := range services {
 			cfg := allServices[name]
 			strategy := cfg.DeployStrategy()
@@ -173,6 +193,17 @@ func runDeploy(args []string) {
 				if err := client.StartService(context.Background(), name); err != nil {
 					fmt.Printf("\nError starting %s: %v\n", name, err)
 					os.Exit(1)
+				}
+			}
+
+			// Post-deploy image cleanup per service (warn-only).
+			// Use a per-service client so GetCurrentVersion parses the
+			// correct image tag from the manifest.
+			if !cfg.IsPrebuilt() && cfg.RetainTags() > 0 {
+				svcClient := runtime.New(rootCfg.Runtime, cfg)
+				version, _ := svcClient.GetCurrentVersion(context.Background())
+				if err := tagCleaner.PruneOldTags(context.Background(), cfg.ImageName(), cfg.RetainTags(), version); err != nil {
+					fmt.Printf("    Warning: image cleanup failed for %s: %v\n", name, err)
 				}
 			}
 		}
@@ -434,6 +465,7 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 		Dependencies: depConfigs,
 		AllServices:  allServices,
 		Runtime:      rootCfg.Runtime,
+		TagCleaner:   tagCleanerFor(rootCfg.Runtime, client),
 	}
 
 	return deploy.DeployWithClient(cfg, client, opts)

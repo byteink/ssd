@@ -75,6 +75,13 @@ func parseServiceVersions(content, stack string, services map[string]*config.Con
 	return versions
 }
 
+// TagCleaner is the narrow surface DeployWithClient needs for post-deploy
+// image tag cleanup. The full cleanup.ImageCleaner interface is wider; we
+// only consume the orchestration entry point here to keep test seams small.
+type TagCleaner interface {
+	PruneOldTags(ctx context.Context, image string, retention, running int) error
+}
+
 // Options holds configuration for the deployment
 type Options struct {
 	// Output is where to write progress messages (defaults to os.Stdout)
@@ -88,6 +95,11 @@ type Options struct {
 	BuildOnly bool
 	// Runtime is the deployment runtime ("compose" or "k3s")
 	Runtime string
+	// TagCleaner, if set, is invoked after a successful rollout to prune
+	// old image tags per cfg.RetainTags(). Failures are warn-only; a deploy
+	// never fails because cleanup failed. Pre-built images and BuildOnly
+	// mode skip the hook entirely.
+	TagCleaner TagCleaner
 }
 
 // generateManifest calls the appropriate manifest generator based on runtime.
@@ -348,6 +360,15 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 	default:
 		if err := client.StartService(ctx, cfg.Name); err != nil {
 			return fmt.Errorf("failed to start service: %w", err)
+		}
+	}
+
+	// Post-deploy image tag cleanup. Warn-only: never fails the deploy.
+	// Skipped for pre-built images (no ssd-managed tags) and when
+	// retention == 0 (opt-out).
+	if opts != nil && opts.TagCleaner != nil && !cfg.IsPrebuilt() && cfg.RetainTags() > 0 {
+		if err := opts.TagCleaner.PruneOldTags(ctx, cfg.ImageName(), cfg.RetainTags(), newVersion); err != nil {
+			logf(output, "Warning: image cleanup failed: %v\n", err)
 		}
 	}
 

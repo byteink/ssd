@@ -321,6 +321,113 @@ func TestDeploy_VersionIncrement(t *testing.T) {
 	}
 }
 
+// --- image tag cleanup hook ---
+
+// fakeTagCleaner records PruneOldTags invocations from the deploy hook.
+// Matches the cleanup.ImageCleaner surface without importing the real
+// cleanup package here — keeps the test decoupled and the mock tiny.
+type fakeTagCleaner struct {
+	calls []fakeTagCleanerCall
+	err   error
+}
+
+type fakeTagCleanerCall struct {
+	image   string
+	keep    int
+	running int
+}
+
+func (f *fakeTagCleaner) PruneOldTags(_ context.Context, image string, keep, running int) error {
+	f.calls = append(f.calls, fakeTagCleanerCall{image, keep, running})
+	return f.err
+}
+
+func TestDeploy_InvokesTagCleanupAfterRollout(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	keep := 2
+	cfg.Cleanup = &config.CleanupConfig{Retention: &keep}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	tagCleaner := &fakeTagCleaner{}
+	err := DeployWithClient(cfg, mockClient, &Options{TagCleaner: tagCleaner})
+
+	require.NoError(t, err)
+	require.Len(t, tagCleaner.calls, 1)
+	assert.Equal(t, fakeTagCleanerCall{image: cfg.ImageName(), keep: 2, running: 5}, tagCleaner.calls[0])
+}
+
+func TestDeploy_TagCleanupDisabledWhenRetentionZero(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	keep := 0
+	cfg.Cleanup = &config.CleanupConfig{Retention: &keep}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	tagCleaner := &fakeTagCleaner{}
+	err := DeployWithClient(cfg, mockClient, &Options{TagCleaner: tagCleaner})
+
+	require.NoError(t, err)
+	assert.Empty(t, tagCleaner.calls, "retention=0 must disable tag cleanup")
+}
+
+func TestDeploy_TagCleanupErrorIsWarnOnly(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	// default retention=2 via RetainTags()
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(4, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 5).Return(nil)
+	mockClient.On("UpdateManifest", 5).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	tagCleaner := &fakeTagCleaner{err: errors.New("ssh down")}
+	err := DeployWithClient(cfg, mockClient, &Options{TagCleaner: tagCleaner})
+
+	require.NoError(t, err, "tag cleanup failures must not fail the deploy")
+	require.Len(t, tagCleaner.calls, 1)
+}
+
+func TestDeploy_TagCleanupSkippedForPrebuiltImage(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	cfg.Image = "nginx:latest" // pre-built; ssd doesn't manage tags
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("PullImage", "nginx:latest").Return(nil)
+	mockClient.On("UpdateManifest", mock.Anything).Maybe().Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	tagCleaner := &fakeTagCleaner{}
+	err := DeployWithClient(cfg, mockClient, &Options{TagCleaner: tagCleaner})
+
+	require.NoError(t, err)
+	assert.Empty(t, tagCleaner.calls, "pre-built images have no ssd-managed tags to prune")
+}
+
 func TestDeploy_CleanupErrorIgnored(t *testing.T) {
 	// Cleanup errors should not fail the deployment
 	mockClient := new(MockDeployer)
