@@ -413,6 +413,40 @@ All steps are idempotent and safe to run multiple times.
 
 `provision check` verifies that Docker, Docker Compose, docker-rollout, the traefik_web network, and Traefik are all present and running.
 
+### Disk cleanup
+
+ssd reclaims disk space on the server in two ways: automatically on deploy (tag retention, per-service) and manually via `ssd prune` (orphans, images, build cache, dangling).
+
+**Per-deploy tag retention:**
+
+```yaml
+cleanup:
+  retention: 2              # keep last N image tags (root default, applied to all services)
+
+services:
+  web:
+    cleanup:
+      retention: 5          # per-service override
+```
+
+- Default retention is **2** (current + rollback target).
+- Minimum is **1**; `0` disables auto cleanup on deploy.
+- Per-deploy cleanup is **warn-only** — it never fails a deploy.
+
+**Manual prune:**
+
+```bash
+ssd prune                  # Remove orphaned services (default, preserved)
+ssd prune --images         # Remove old image tags beyond per-service retention
+ssd prune --build-cache    # Prune build cache entries older than 168h
+ssd prune --dangling       # Remove unreferenced images
+ssd prune --all            # All of the above
+ssd prune --keep N         # Override retention for --images/--all
+ssd prune --dry-run        # Preview, combinable with any flag
+```
+
+Build cache pruning is opt-in only — never runs automatically on deploy. Threshold is 168h (7 days).
+
 ### Other
 ```bash
 ssd version              # Show version

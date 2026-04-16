@@ -23,8 +23,13 @@ ssd env <service> rm KEY      # Remove env var
 ssd secret <service> set K=V  # Set K8s secret (k3s only)
 ssd secret <service> list     # List secrets (k3s only)
 ssd secret <service> rm KEY   # Remove secret (k3s only)
-ssd prune                     # Remove orphaned services from server
-ssd prune --dry-run           # Preview orphans without removing
+ssd prune                     # Remove orphaned services (default)
+ssd prune --images            # Remove old image tags beyond retention
+ssd prune --build-cache       # Prune build cache older than 168h
+ssd prune --dangling          # Remove unreferenced images
+ssd prune --all               # All of the above
+ssd prune --keep N            # Override retention for --images/--all
+ssd prune --dry-run           # Preview, combinable with any flag
 ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
 ssd init [-s host] [-r runtime] [-d domain] [-p port]  # Generate ssd.yaml
 ssd provision [--server S] [--email E] [--runtime R]    # Provision server

@@ -68,6 +68,8 @@ That's it. ssd will:
 | `ssd env <service> set K=V` | Set an environment variable |
 | `ssd env <service> list` | List environment variables |
 | `ssd env <service> rm KEY` | Remove an environment variable |
+| `ssd prune` | Remove orphaned services (default); add `--images`, `--build-cache`, `--dangling`, `--all` to reclaim more |
+| `ssd scale <service> <n>` | Live-scale without editing `ssd.yaml` |
 | `ssd skill` | Install ssd skill for your coding agent |
 | `ssd version` | Print version |
 
@@ -171,6 +173,9 @@ When `image` is set, ssd pulls it instead of building.
 |---|---|
 | `server` | SSH host name (from `~/.ssh/config`) |
 | `stack` | Default stack directory on server |
+| `runtime` | `compose` (default) or `k3s` |
+| `deploy.strategy` | `rollout` (default) or `recreate` |
+| `cleanup.retention` | Default image tag retention (default: `2`; `0` disables) |
 
 ### Service-level
 
@@ -188,6 +193,7 @@ When `image` is set, ssd pulls it instead of building.
 | `depends_on` | — | Service dependencies (list or map with conditions) |
 | `volumes` | — | Named volumes (`name: mount_path`) |
 | `healthcheck` | — | Health check (cmd, interval, timeout, retries) |
+| `cleanup.retention` | inherited | Per-service override for image tag retention |
 
 ---
 
@@ -243,3 +249,15 @@ ssd logs app -f
 ssd env app set DATABASE_URL=postgres://...
 ssd deploy app   # redeploy to pick it up
 ```
+
+**Reclaim disk space:**
+```bash
+ssd prune --dry-run --all   # preview everything that would be removed
+ssd prune --images          # drop old tags per service (keep current + rollback)
+ssd prune --build-cache     # reclaim buildkit/docker cache older than 7 days
+ssd prune --all             # orphans + images + build cache + dangling
+```
+
+Per-service retention is configurable in `ssd.yaml` under `cleanup.retention`
+(default: `2`). ssd auto-prunes old tags after each successful deploy; it
+never fails a deploy on cleanup failure.

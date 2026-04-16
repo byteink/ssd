@@ -431,11 +431,44 @@ K8s Secrets are injected as env vars alongside ConfigMap vars. Only available wi
 
 ### Prune
 ```bash
-ssd prune                             # Remove orphaned services from server
-ssd prune --dry-run                   # Preview without removing
+ssd prune                             # Remove orphaned services from server (default)
+ssd prune --images                    # Remove old image tags beyond per-service retention
+ssd prune --build-cache               # Prune build cache entries older than 168h
+ssd prune --dangling                  # Remove unreferenced (dangling) images
+ssd prune --all                       # Everything above
+ssd prune --keep N                    # Override per-service retention for --images/--all
+ssd prune --dry-run                   # Preview, combinable with any flag
 ```
 
-Compares ssd.yaml services against what's deployed on the server. Removes orphans. Works with both runtimes. Deploy-all (`ssd deploy`) warns about orphans after deployment.
+No-flag `ssd prune` prunes orphans only (historical behavior preserved).
+Compares ssd.yaml services against what's deployed; removes any not in config. Works with both runtimes. Deploy-all (`ssd deploy`) warns about orphans after deployment.
+
+Runtime-specific commands:
+- **compose**: `docker rmi`, `docker builder prune -af --filter until=168h`, `docker image prune -f`
+- **k3s**: `nerdctl --namespace k8s.io rmi`, `sudo buildctl --addr unix:///run/buildkit/buildkitd.sock prune --keep-duration 168h`, `nerdctl --namespace k8s.io image prune -f`
+
+Build cache pruning is **opt-in only** — never runs automatically on deploy.
+
+### Cleanup / retention
+
+```yaml
+cleanup:
+  retention: 2              # keep last N image tags per service (root default)
+
+services:
+  web:
+    cleanup:
+      retention: 5          # per-service override
+```
+
+- Default retention: **2** (current + rollback target)
+- Minimum: **1** — negative values rejected
+- `0` disables auto cleanup on deploy (explicit opt-out)
+- Service-level value wins over root (even when 0)
+
+After every successful deploy, ssd prunes image tags older than the configured retention for that service. Tag cleanup is **warn-only** — it never fails a deploy. Pre-built images (`image:` field) are never pruned — ssd doesn't manage those tags.
+
+Build cache threshold is hard-coded to **168h** (7 days). Recent cache stays warm; only cold layers are reclaimed.
 
 ### Provision
 ```bash

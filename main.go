@@ -1730,7 +1730,7 @@ Commands:
   config [service]                Show resolved configuration
   env <service> <set|list|rm>     Manage environment variables on the server
   secret <service> <set|list|rm>  Manage K8s secrets (k3s runtime only)
-  prune                           Remove orphaned services from the server
+  prune [flags]                   Reclaim disk: orphans, images, build cache, dangling
   scale <service> <count>         Live-scale a service (does not edit ssd.yaml)
   provision                       Provision server with Docker and Traefik
   provision check                 Verify server readiness for ssd
