@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: '1.24'
+  # Track the toolchain pinned in go.mod. Bumping go.mod (e.g. via deps
+  # that require a newer language version) means bumping this too.
+  GO_VERSION: '1.25'
 
 jobs:
   unit-tests:
@@ -48,9 +50,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          # v2.x is required to load configs that target Go 1.25+.
+          # Pin to a known-good minor — bump deliberately, not silently.
+          version: v2.12.1
 
   build:
     name: Build
