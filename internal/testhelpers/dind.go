@@ -8,7 +8,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/docker/go-connections/nat"
+	networktypes "github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -17,7 +17,7 @@ import (
 type DinDContainer struct {
 	container testcontainers.Container
 	host      string
-	port      nat.Port
+	port      networktypes.Port
 }
 
 // StartDinDContainer initializes and starts a Docker-in-Docker container
@@ -105,7 +105,7 @@ func (d *DinDContainer) Host() string {
 }
 
 // Port returns the mapped port of the DinD container
-func (d *DinDContainer) Port() nat.Port {
+func (d *DinDContainer) Port() networktypes.Port {
 	return d.port
 }
 
