@@ -31,14 +31,52 @@ ssd prune --all               # All of the above
 ssd prune --keep N            # Override retention for --images/--all
 ssd prune --dry-run           # Preview, combinable with any flag
 ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
-ssd init [-s host] [-r runtime] [-d domain] [-p port]  # Generate ssd.yaml
+ssd init [-s host] [-r runtime] [-d domain] [-p port]  # Generate config (.ssd/ssd.yaml on fresh projects)
+ssd migrate                   # Move legacy ./ssd.yaml into .ssd/ssd.yaml
 ssd provision [--server S] [--email E] [--runtime R]    # Provision server
 ssd provision check [--server S] [--runtime R]          # Verify server readiness
 ```
 
+### Global flags (every command)
+
+```
+--config <path>               # Explicit config file path
+-e, --env <name>              # Apply overlay .ssd/ssd.<name>.yaml on top of base (deep-merge)
+```
+
+## Config layout
+
+ssd resolves its config in this order (first match wins):
+
+1. `--config <path>` — explicit override
+2. `.ssd/ssd.yaml` — preferred layout, keeps repo root clean
+3. `./ssd.yaml` — legacy, kept for back-compat
+
+`ssd init` writes to `.ssd/ssd.yaml` and creates `.ssd/.gitignore`
+(`.cache/`) on fresh projects. Existing projects with `./ssd.yaml`
+keep using that path until the user runs `ssd migrate`.
+
+When `--config` is not given, ssd warns on stderr if the project is
+still on the legacy layout, or if both files exist.
+
+### Environment overlays
+
+Drop sibling files alongside the base config and select with `--env`:
+
+```
+.ssd/
+├── ssd.yaml          # base / shared
+├── ssd.dev.yaml      # ssd deploy -e dev
+└── ssd.prod.yaml     # ssd deploy -e prod
+```
+
+Overlays are deep-merged onto the base — only the keys you set in
+the overlay override, everything else inherits.
+
 ## Config (ssd.yaml)
 
-Read `ssd.yaml` in the project root before running commands. Key structure:
+Read the resolved config (`.ssd/ssd.yaml` or `./ssd.yaml`) before
+running commands. Key structure:
 
 ```yaml
 runtime: k3s                  # "compose" (default) or "k3s"
@@ -83,9 +121,10 @@ Traefik is only included when a service has `domain` or `domains` set. Services 
 
 ## Workflow
 
-1. Read `ssd.yaml` to understand what services exist and their config
+1. Read the resolved config (`.ssd/ssd.yaml` first, falling back to `./ssd.yaml`) to understand what services exist
 2. Run the appropriate `ssd` command
 3. If deploying, confirm which service(s) unless the user was specific
 4. Check output for errors; on failure suggest `ssd logs <service> -f`
+5. If you see the "using legacy ./ssd.yaml" warning, suggest `ssd migrate` to the user
 
 If `$ARGUMENTS` is provided, run: `ssd $ARGUMENTS`
