@@ -100,17 +100,61 @@ func Generate(opts Options) string {
 // artifacts (manifests, build metadata) never land in version control.
 const gitignoreContent = ".cache/\n"
 
+// configFileName is the basename used by both layouts:
+// legacy ./ssd.yaml and modern .ssd/ssd.yaml.
+const configFileName = "ssd.yaml"
+
+// configDirName is the per-project ssd directory under the repo root.
+const configDirName = ".ssd"
+
+// MigrateLegacy moves dir/ssd.yaml into dir/.ssd/ssd.yaml and seeds
+// dir/.ssd/.gitignore. Returns the new path on success.
+//
+// Refuses to overwrite an existing .ssd/ssd.yaml — the caller should
+// resolve the conflict (delete one or merge by hand) before retrying.
+// Refuses when there is no legacy file to migrate.
+func MigrateLegacy(dir string) (string, error) {
+	legacy := filepath.Join(dir, configFileName)
+	if _, err := os.Stat(legacy); errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("no legacy %s to migrate", legacy)
+	} else if err != nil {
+		return "", fmt.Errorf("failed to stat %s: %w", legacy, err)
+	}
+
+	target := filepath.Join(dir, configDirName, configFileName)
+	if _, err := os.Stat(target); err == nil {
+		return "", fmt.Errorf("%s already exists; remove one of the two files and retry", target)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return "", fmt.Errorf("failed to create %s directory: %w", configDirName, err)
+	}
+
+	if err := os.Rename(legacy, target); err != nil {
+		return "", fmt.Errorf("failed to move config: %w", err)
+	}
+
+	ignorePath := filepath.Join(dir, configDirName, ".gitignore")
+	if _, err := os.Stat(ignorePath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(ignorePath, []byte(gitignoreContent), 0644); err != nil {
+			return target, fmt.Errorf("config moved to %s, but failed to write .gitignore: %w", target, err)
+		}
+	}
+
+	return target, nil
+}
+
 // TargetPath returns the path init will write to in dir.
 //
 // Preferred: <dir>/.ssd/ssd.yaml (new layout, keeps repo root clean).
 // Legacy:    <dir>/ssd.yaml when it already exists, to avoid surprising
 //            existing projects with a new .ssd/ directory.
 func TargetPath(dir string) string {
-	legacy := filepath.Join(dir, "ssd.yaml")
+	legacy := filepath.Join(dir, configFileName)
 	if _, err := os.Stat(legacy); err == nil {
 		return legacy
 	}
-	return filepath.Join(dir, ".ssd", "ssd.yaml")
+	return filepath.Join(dir, configDirName, configFileName)
 }
 
 // WriteFile writes the generated ssd config to dir using the layout
@@ -133,7 +177,7 @@ func WriteFile(dir string, opts Options) error {
 	// Drop a .gitignore inside .ssd/ so generated artifacts under .cache/
 	// stay out of version control. Idempotent: skipped when the file
 	// already exists. Only relevant for the new layout.
-	if filepath.Base(parent) == ".ssd" {
+	if filepath.Base(parent) == configDirName {
 		ignorePath := filepath.Join(parent, ".gitignore")
 		if _, err := os.Stat(ignorePath); errors.Is(err, os.ErrNotExist) {
 			if err := os.WriteFile(ignorePath, []byte(gitignoreContent), 0644); err != nil {

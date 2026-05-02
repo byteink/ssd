@@ -240,6 +240,34 @@ func Resolve(configPath, env string) (*RootConfig, string, error) {
 	return cfg, configPath, nil
 }
 
+// Layout describes which config files exist in the working directory.
+// Used to decide whether to nudge the user toward the modern layout.
+type Layout struct {
+	HasModern bool // .ssd/ssd.yaml exists
+	HasLegacy bool // ./ssd.yaml exists
+}
+
+// IsLegacyOnly returns true when the project only has the legacy
+// ssd.yaml at the repo root and has not been migrated yet.
+func (l Layout) IsLegacyOnly() bool { return l.HasLegacy && !l.HasModern }
+
+// HasBoth returns true when both files exist — typically the result
+// of a half-finished migration that left the legacy file behind.
+func (l Layout) HasBoth() bool { return l.HasLegacy && l.HasModern }
+
+// DetectLayout inspects the current working directory and reports
+// which of the two layouts are present.
+func DetectLayout() Layout {
+	var l Layout
+	if _, err := os.Stat(".ssd/ssd.yaml"); err == nil {
+		l.HasModern = true
+	}
+	if _, err := os.Stat("ssd.yaml"); err == nil {
+		l.HasLegacy = true
+	}
+	return l
+}
+
 // CacheDir returns the local cache directory for ssd-generated artifacts
 // (manifests, build metadata, etc.) given the resolved config path.
 //

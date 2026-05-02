@@ -92,6 +92,10 @@ Fresh `ssd init` writes to `.ssd/ssd.yaml` and adds `.ssd/.gitignore`
 so generated artifacts under `.ssd/.cache/` stay out of version
 control. Existing projects with `./ssd.yaml` are left alone.
 
+If you're still on the legacy layout, `ssd migrate` moves your
+`./ssd.yaml` into `.ssd/ssd.yaml` and seeds the `.gitignore`. Until
+you migrate, every command prints a one-line warning to stderr.
+
 ### Environment overlays
 
 For multiple environments, drop sibling files next to the base config:

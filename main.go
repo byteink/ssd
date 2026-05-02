@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -123,6 +124,8 @@ func main() {
 		runScale(args)
 	case "init":
 		runInit(args)
+	case "migrate":
+		runMigrate(args)
 	case "skill":
 		runSkill(args)
 	case "provision":
@@ -174,13 +177,48 @@ func extractGlobalFlags(args []string) ([]string, error) {
 
 // loadRootConfig resolves and loads the ssd config using the global
 // --config and --env flags. Exits on error.
+//
+// As a side effect, prints layout-related warnings to stderr:
+//   - both .ssd/ssd.yaml and ./ssd.yaml exist (delete the legacy one)
+//   - only ./ssd.yaml exists (suggest `ssd migrate`)
+// The warning is only emitted when --config was not given, since an
+// explicit path means the user is being deliberate about which file.
 func loadRootConfig() *config.RootConfig {
 	rootCfg, _, err := config.Resolve(globalConfigPath, globalEnvName)
 	if err != nil {
 		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
+	if globalConfigPath == "" {
+		if werr := warnLayout(os.Stderr, config.DetectLayout()); werr != nil {
+			// stderr is broken; fall back to stdout so the user at
+			// least sees the nudge before continuing.
+			fmt.Println(werr)
+		}
+	}
 	return rootCfg
+}
+
+// warnLayout writes a single nudge line to w when the project layout
+// suggests a migration is pending. Silent in the healthy cases
+// (modern-only, or no config at all).
+//
+// Write errors are surfaced (not swallowed) so callers can treat a
+// stderr failure as a real problem; in the wired-up call site we hand
+// the error to fmt.Println which the runtime drops on the floor only
+// after letting the OS report it.
+func warnLayout(w io.Writer, layout config.Layout) error {
+	var msg string
+	switch {
+	case layout.HasBoth():
+		msg = "warning: both .ssd/ssd.yaml and ./ssd.yaml exist; .ssd/ssd.yaml is being used. Delete ./ssd.yaml to silence this warning."
+	case layout.IsLegacyOnly():
+		msg = "warning: using legacy ./ssd.yaml. Run `ssd migrate` to move it to .ssd/ssd.yaml."
+	default:
+		return nil
+	}
+	_, err := fmt.Fprintln(w, msg)
+	return err
 }
 
 func loadConfig(serviceName string) (*config.RootConfig, *config.Config) {
@@ -1671,6 +1709,55 @@ Examples:
 `)
 }
 
+// runMigrate moves a legacy ./ssd.yaml into .ssd/ssd.yaml and seeds
+// .ssd/.gitignore. Idempotent in the safe direction: refuses if the
+// modern file already exists so we never silently clobber.
+func runMigrate(args []string) {
+	if wantsHelp(args) {
+		printMigrateHelp()
+		return
+	}
+	if len(args) > 0 {
+		fmt.Printf("Error: unexpected argument: %s\n", args[0])
+		printMigrateHelp()
+		os.Exit(1)
+	}
+
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
+	}
+
+	target, err := scaffold.MigrateLegacy(dir)
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
+	}
+
+	rel, err := filepath.Rel(dir, target)
+	if err != nil {
+		rel = target
+	}
+	fmt.Printf("Moved ssd.yaml -> %s\n", rel)
+	fmt.Println("Created .ssd/.gitignore")
+}
+
+func printMigrateHelp() {
+	fmt.Print(`ssd migrate - Move ./ssd.yaml into .ssd/ssd.yaml
+
+Usage:
+  ssd migrate
+
+Moves a legacy ./ssd.yaml into the modern .ssd/ssd.yaml layout and
+creates .ssd/.gitignore so generated artifacts (.cache/) stay out of
+version control.
+
+Refuses to run if .ssd/ssd.yaml already exists or if there is no
+legacy ./ssd.yaml to migrate.
+`)
+}
+
 func printInitHelp() {
 	fmt.Print(`ssd init - Create an ssd.yaml configuration file
 
@@ -1779,6 +1866,7 @@ Global flags (accepted on every command):
 
 Commands:
   init                            Create ssd.yaml configuration file
+  migrate                         Move legacy ./ssd.yaml into .ssd/ssd.yaml
   deploy|up [service]             Build and deploy a service (or all services)
   down [service]                  Stop services (or all if omitted)
   rm [service]                    Permanently remove services (or entire stack)

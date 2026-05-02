@@ -356,3 +356,105 @@ func TestWriteFile(t *testing.T) {
 		}
 	})
 }
+
+func TestMigrateLegacy(t *testing.T) {
+	t.Run("moves ssd.yaml into .ssd and writes gitignore", func(t *testing.T) {
+		dir := t.TempDir()
+		legacy := filepath.Join(dir, "ssd.yaml")
+		body := []byte("server: legacy\nservices:\n  app: {}\n")
+		if err := os.WriteFile(legacy, body, 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		target, err := MigrateLegacy(dir)
+		if err != nil {
+			t.Fatalf("MigrateLegacy() error = %v", err)
+		}
+		want := filepath.Join(dir, ".ssd", "ssd.yaml")
+		if target != want {
+			t.Errorf("target = %q, want %q", target, want)
+		}
+
+		moved, err := os.ReadFile(want)
+		if err != nil {
+			t.Fatalf("failed to read migrated file: %v", err)
+		}
+		if string(moved) != string(body) {
+			t.Errorf("migrated content mismatch: %q vs %q", moved, body)
+		}
+
+		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+			t.Error("legacy ssd.yaml should be gone")
+		}
+
+		ignore, err := os.ReadFile(filepath.Join(dir, ".ssd", ".gitignore"))
+		if err != nil {
+			t.Fatalf("failed to read .gitignore: %v", err)
+		}
+		if string(ignore) != gitignoreContent {
+			t.Errorf(".gitignore = %q, want %q", ignore, gitignoreContent)
+		}
+	})
+
+	t.Run("errors when no legacy file", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := MigrateLegacy(dir)
+		if err == nil {
+			t.Fatal("expected error for missing legacy file")
+		}
+	})
+
+	t.Run("errors when modern file already exists", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".ssd"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("server: legacy\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".ssd", "ssd.yaml"), []byte("server: modern\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := MigrateLegacy(dir)
+		if err == nil {
+			t.Fatal("expected error when modern file already exists")
+		}
+
+		// Both files must remain untouched.
+		legacyContent, _ := os.ReadFile(filepath.Join(dir, "ssd.yaml"))
+		if string(legacyContent) != "server: legacy\n" {
+			t.Errorf("legacy file was modified: %q", legacyContent)
+		}
+		modernContent, _ := os.ReadFile(filepath.Join(dir, ".ssd", "ssd.yaml"))
+		if string(modernContent) != "server: modern\n" {
+			t.Errorf("modern file was modified: %q", modernContent)
+		}
+	})
+
+	t.Run("preserves existing .gitignore", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".ssd"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		existing := []byte("# custom\nfoo/\n")
+		if err := os.WriteFile(filepath.Join(dir, ".ssd", ".gitignore"), existing, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("server: x\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := MigrateLegacy(dir); err != nil {
+			t.Fatalf("MigrateLegacy() error = %v", err)
+		}
+
+		got, err := os.ReadFile(filepath.Join(dir, ".ssd", ".gitignore"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(existing) {
+			t.Errorf(".gitignore was overwritten: %q, want %q", got, existing)
+		}
+	})
+}

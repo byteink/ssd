@@ -166,6 +166,19 @@ Accepted on every command (stripped before per-command parsers run):
 - `--config <path>` — explicit config file path
 - `--env <name>` / `-e <name>` — overlay name to apply
 
+### Layout warnings and migration
+
+When `--config` is not given, ssd prints a single nudge line to
+stderr based on `config.DetectLayout()`:
+
+- only `./ssd.yaml` exists → "using legacy ./ssd.yaml. Run `ssd migrate`…"
+- both files exist → "both …exist; .ssd/ssd.yaml is being used. Delete ./ssd.yaml…"
+
+`ssd migrate` moves `./ssd.yaml` into `.ssd/ssd.yaml` and seeds
+`.ssd/.gitignore` (`.cache/`). Refuses to run when `.ssd/ssd.yaml`
+already exists or there is no legacy file — the user must reconcile
+manually so we never silently clobber a config.
+
 ## ssd.yaml Patterns
 
 ### K3s runtime

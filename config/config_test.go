@@ -173,6 +173,56 @@ func TestEnvConfigPath(t *testing.T) {
 	}
 }
 
+func TestDetectLayout(t *testing.T) {
+	t.Run("modern only", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".ssd"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".ssd", "ssd.yaml"), []byte("server: x\n"), 0644))
+		chdir(t, dir)
+
+		got := DetectLayout()
+		assert.True(t, got.HasModern)
+		assert.False(t, got.HasLegacy)
+		assert.False(t, got.IsLegacyOnly())
+		assert.False(t, got.HasBoth())
+	})
+
+	t.Run("legacy only", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("server: x\n"), 0644))
+		chdir(t, dir)
+
+		got := DetectLayout()
+		assert.False(t, got.HasModern)
+		assert.True(t, got.HasLegacy)
+		assert.True(t, got.IsLegacyOnly())
+		assert.False(t, got.HasBoth())
+	})
+
+	t.Run("both", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".ssd"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".ssd", "ssd.yaml"), []byte("server: x\n"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("server: y\n"), 0644))
+		chdir(t, dir)
+
+		got := DetectLayout()
+		assert.True(t, got.HasModern)
+		assert.True(t, got.HasLegacy)
+		assert.False(t, got.IsLegacyOnly())
+		assert.True(t, got.HasBoth())
+	})
+
+	t.Run("neither", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+
+		got := DetectLayout()
+		assert.False(t, got.HasModern)
+		assert.False(t, got.HasLegacy)
+	})
+}
+
 func TestCacheDir(t *testing.T) {
 	tests := []struct {
 		path, want string
