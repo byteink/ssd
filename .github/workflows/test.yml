@@ -9,7 +9,7 @@ on:
 env:
   # Track the toolchain pinned in go.mod. Bumping go.mod (e.g. via deps
   # that require a newer language version) means bumping this too.
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.26'
 
 jobs:
   unit-tests:
