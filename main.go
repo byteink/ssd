@@ -63,6 +63,19 @@ func (d *deployTagCleaner) PruneOldTags(ctx context.Context, image string, reten
 
 var version = "dev"
 
+// errorFmt is the standard fmt.Printf format for printing an error to
+// stdout before os.Exit(1). Centralised so the wording is consistent.
+const errorFmt = "Error: %v\n"
+
+// Global flags: --config and --env/-e are accepted on every command and
+// stripped from args before the command-specific parser sees them. They
+// only apply to commands that load ssd.yaml; runtime-only commands (init,
+// skill, version, help) ignore them.
+var (
+	globalConfigPath string
+	globalEnvName    string
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -71,6 +84,15 @@ func main() {
 
 	command := os.Args[1]
 	args := os.Args[2:]
+
+	// Strip global flags from args so existing per-command parsers stay
+	// untouched. Errors are reported to the user and abort the run.
+	cleaned, err := extractGlobalFlags(args)
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
+	}
+	args = cleaned
 
 	switch command {
 	case "version", "-v", "--version":
@@ -114,16 +136,59 @@ func main() {
 	}
 }
 
-func loadConfig(serviceName string) (*config.RootConfig, *config.Config) {
-	rootCfg, err := config.Load("")
+// extractGlobalFlags peels --config <path>, --config=<path>, --env <name>,
+// --env=<name>, and -e <name> out of args. Recognised on every command;
+// commands that don't load ssd.yaml simply ignore the resolved values.
+// Stops at "--" to leave pass-through args alone (e.g. logs follow flags).
+func extractGlobalFlags(args []string) ([]string, error) {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			return out, nil
+		}
+		switch {
+		case a == "--config":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --config requires a value")
+			}
+			globalConfigPath = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--config="):
+			globalConfigPath = strings.TrimPrefix(a, "--config=")
+		case a == "--env" || a == "-e":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag %s requires a value", a)
+			}
+			globalEnvName = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--env="):
+			globalEnvName = strings.TrimPrefix(a, "--env=")
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// loadRootConfig resolves and loads the ssd config using the global
+// --config and --env flags. Exits on error.
+func loadRootConfig() *config.RootConfig {
+	rootCfg, _, err := config.Resolve(globalConfigPath, globalEnvName)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
+	return rootCfg
+}
+
+func loadConfig(serviceName string) (*config.RootConfig, *config.Config) {
+	rootCfg := loadRootConfig()
 
 	cfg, err := rootCfg.GetService(serviceName)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		if !rootCfg.IsSingleService() {
 			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
 		}
@@ -139,11 +204,7 @@ func runDeploy(args []string) {
 		return
 	}
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	// No args: deploy all services
 	if len(args) == 0 {
@@ -228,11 +289,7 @@ func runDown(args []string) {
 		return
 	}
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	var services []string
 	if len(args) == 0 {
@@ -245,7 +302,7 @@ func runDown(args []string) {
 	// Use first service to create client
 	cfg, err := rootCfg.GetService(services[0])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -255,7 +312,7 @@ func runDown(args []string) {
 	for _, name := range services {
 		svcCfg, err := rootCfg.GetService(name)
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
 
@@ -295,11 +352,7 @@ func runRm(args []string) {
 		return
 	}
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	var services []string
 	if len(args) == 0 {
@@ -312,7 +365,7 @@ func runRm(args []string) {
 	// Use first service for server info and client
 	cfg, err := rootCfg.GetService(services[0])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -358,7 +411,7 @@ func runRm(args []string) {
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 	if strings.ToLower(strings.TrimSpace(input)) != "y" {
@@ -369,7 +422,7 @@ func runRm(args []string) {
 	for _, name := range services {
 		svcCfg, err := rootCfg.GetService(name)
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
 		rmService(rootCfg, svcCfg, client, ctx)
@@ -533,7 +586,7 @@ func runStatus(args []string) {
 
 	status, err := client.GetContainerStatus(context.Background())
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -566,7 +619,7 @@ func runLogs(args []string) {
 	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.GetLogs(context.Background(), follow, tail); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 }
@@ -582,11 +635,7 @@ func runConfig(args []string) {
 		serviceName = args[0]
 	}
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	// If multi-service and no service specified, show all
 	if !rootCfg.IsSingleService() && serviceName == "" {
@@ -601,7 +650,7 @@ func runConfig(args []string) {
 
 	cfg, err := rootCfg.GetService(serviceName)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -659,7 +708,7 @@ func runEnvSet(service string, args []string) {
 	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.SetEnvVar(context.Background(), service, key, value); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -672,7 +721,7 @@ func runEnvList(service string, args []string) {
 
 	content, err := client.GetEnvFile(context.Background(), service)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -696,7 +745,7 @@ func runEnvRm(service string, args []string) {
 	client := runtime.New(rootCfg.Runtime, cfg)
 
 	if err := client.RemoveEnvVar(context.Background(), service, key); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -799,7 +848,7 @@ func runScale(args []string) {
 	cmd := scaleCommand(rootCfg.Runtime, cfg, count)
 
 	if _, err := client.SSH(ctx, cmd); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 	fmt.Printf("Scaled %s to %d replica(s)\n", cfg.Name, count)
@@ -871,15 +920,11 @@ func runPrune(args []string) {
 
 	flags, err := parsePruneFlags(args)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	services := rootCfg.ListServices()
 	if len(services) == 0 {
@@ -890,7 +935,7 @@ func runPrune(args []string) {
 	// Get first service config for server connection
 	cfg, err := rootCfg.GetService(services[0])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -1091,11 +1136,7 @@ func runSecret(args []string) {
 	service := args[0]
 	action := args[1]
 
-	rootCfg, err := config.Load("")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	rootCfg := loadRootConfig()
 
 	if rootCfg.Runtime != "k3s" {
 		fmt.Println("Error: secrets require runtime: k3s. Use \"ssd env\" for compose runtime.")
@@ -1104,7 +1145,7 @@ func runSecret(args []string) {
 
 	cfg, err := rootCfg.GetService(service)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -1122,14 +1163,14 @@ func runSecret(args []string) {
 			os.Exit(1)
 		}
 		if err := client.SetSecret(context.Background(), service, parts[0], parts[1]); err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
 		fmt.Printf("Set secret %s for service %s\n", parts[0], service)
 	case "list":
 		output, err := client.ListSecrets(context.Background(), service)
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
 		if output == "" || strings.TrimSpace(output) == "" {
@@ -1143,7 +1184,7 @@ func runSecret(args []string) {
 			os.Exit(1)
 		}
 		if err := client.RemoveSecret(context.Background(), service, args[2]); err != nil {
-			fmt.Printf("Error: %v\n", err)
+			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
 		fmt.Printf("Removed secret %s from service %s\n", args[2], service)
@@ -1202,7 +1243,7 @@ func runProvision(args []string) {
 
 	// Try to get server and runtime from config if not specified
 	if server == "" || rt == "" {
-		rootCfg, err := config.Load("")
+		rootCfg, _, err := config.Resolve(globalConfigPath, globalEnvName)
 		if err == nil {
 			if server == "" && rootCfg.Server != "" {
 				server = rootCfg.Server
@@ -1288,7 +1329,7 @@ func runProvisionCheck(args []string) {
 	}
 
 	if server == "" || rt == "" {
-		rootCfg, err := config.Load("")
+		rootCfg, _, err := config.Resolve(globalConfigPath, globalEnvName)
 		if err == nil {
 			if server == "" && rootCfg.Server != "" {
 				server = rootCfg.Server
@@ -1319,7 +1360,7 @@ func runProvisionCheck(args []string) {
 		results, err = provision.Check(server)
 	}
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -1415,7 +1456,7 @@ func runSkill(args []string) {
 		case "", "1":
 			home, err := os.UserHomeDir()
 			if err != nil {
-				fmt.Printf("Error: %v\n", err)
+				fmt.Printf(errorFmt, err)
 				os.Exit(1)
 			}
 			targetDir = filepath.Join(home, ".claude", "skills", "ssd")
@@ -1448,12 +1489,12 @@ func runSkill(args []string) {
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(targetDir), 0755); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
 	if err := os.Symlink(src, targetDir); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
@@ -1581,27 +1622,32 @@ func runInit(args []string) {
 
 	// Validate
 	if err := scaffold.Validate(opts); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
 	// Get current directory
 	dir, err := os.Getwd()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
 	// Write file
+	target := scaffold.TargetPath(dir)
 	if err := scaffold.WriteFile(dir, opts); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Created ssd.yaml")
+	rel, err := filepath.Rel(dir, target)
+	if err != nil {
+		rel = target
+	}
+	fmt.Printf("Created %s\n", rel)
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Edit ssd.yaml to configure your service")
+	fmt.Printf("  1. Edit %s to configure your service\n", rel)
 	fmt.Println("  2. Ensure you have a Dockerfile in your project")
 	fmt.Println("  3. Run: ssd deploy app")
 }
@@ -1632,6 +1678,13 @@ Usage:
   ssd init                        Interactive mode (prompts for each field)
   ssd init [flags]                Non-interactive mode
 
+Output layout:
+  Fresh project:                  .ssd/ssd.yaml (preferred, repo-clean)
+  Project with existing ssd.yaml: ssd.yaml (legacy, kept as-is)
+
+A .gitignore is created in .ssd/ to keep generated artifacts (.cache/)
+out of version control.
+
 Flags:
   -s, --server STRING             SSH host name (from ~/.ssh/config)
   -r, --runtime STRING            Runtime: compose (default) or k3s
@@ -1640,7 +1693,7 @@ Flags:
   -d, --domain STRING             Domain for Traefik routing
       --path STRING               Path prefix for routing (e.g., /api)
   -p, --port INT                  Container port
-  -f, --force                     Overwrite existing ssd.yaml
+  -f, --force                     Overwrite existing config file
 
 If no flags are provided, runs in interactive mode and prompts for each field.
 
@@ -1716,7 +1769,13 @@ builds/pulls Docker images, generates compose.yaml, and starts services.
 No agent, no daemon, no CI required. Just SSH and Docker.
 
 Usage:
-  ssd <command> [arguments]
+  ssd <command> [arguments] [global flags]
+
+Global flags (accepted on every command):
+      --config PATH               Path to ssd config file (default: .ssd/ssd.yaml,
+                                  falls back to ./ssd.yaml for legacy projects)
+  -e, --env NAME                  Apply env overlay .ssd/ssd.<NAME>.yaml on top
+                                  of the base config (deep-merge)
 
 Commands:
   init                            Create ssd.yaml configuration file

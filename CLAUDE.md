@@ -116,6 +116,56 @@ Deploy-all (`ssd deploy` with no args) builds all images first, then deploys eac
 - **K3s manifests**: Single `manifests.yaml` in stack dir, all K8s resources separated by `---`
 - **K3s builds**: `nerdctl --namespace k8s.io build` (images land directly in K3s containerd)
 
+## Config Layout
+
+ssd resolves its config in this order (first match wins):
+
+1. `--config <path>` — explicit override, no fallback
+2. `.ssd/ssd.yaml` — preferred layout, keeps repo root clean
+3. `ssd.yaml` — legacy layout, kept for back-compat
+
+`ssd init` writes to `.ssd/ssd.yaml` and creates `.ssd/.gitignore`
+(content: `.cache/`) on a fresh project. If `./ssd.yaml` already
+exists, init keeps writing to that legacy path so existing projects
+are not silently restructured.
+
+### Environment overlays (`--env` / `-e`)
+
+Optional sibling files alongside the base config provide per-env
+overrides:
+
+```
+.ssd/
+├── ssd.yaml          # base
+├── ssd.dev.yaml      # ssd deploy --env dev
+└── ssd.prod.yaml     # ssd deploy -e prod
+```
+
+The overlay is deep-merged onto the base at the YAML node level —
+mappings recurse, scalars/sequences in the overlay replace the base.
+A missing overlay file when `--env` is set is an error (typo guard).
+
+### Generated artifacts
+
+ssd writes generated/temporary files (build metadata, future k8s
+runtime manifests, etc.) under a per-project cache directory, never
+in the repo root or alongside the configs:
+
+- `.ssd/.cache/` — when using the new layout
+- `.ssd-cache/`  — when using the legacy `./ssd.yaml`
+
+Today the compose and k3s runtimes don't materialise local artifacts
+(manifests live on the server), so the cache dir is reserved for the
+upcoming `runtime: k8s`. The path is exposed via
+`config.CacheDir(configPath)`.
+
+### Global flags
+
+Accepted on every command (stripped before per-command parsers run):
+
+- `--config <path>` — explicit config file path
+- `--env <name>` / `-e <name>` — overlay name to apply
+
 ## ssd.yaml Patterns
 
 ### K3s runtime

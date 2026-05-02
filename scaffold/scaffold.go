@@ -96,14 +96,49 @@ func Generate(opts Options) string {
 	return sb.String()
 }
 
-// WriteFile writes the generated ssd.yaml to the specified directory
-func WriteFile(dir string, opts Options) error {
-	filePath := filepath.Join(dir, "ssd.yaml")
+// gitignoreContent is written into .ssd/.gitignore on init so generated
+// artifacts (manifests, build metadata) never land in version control.
+const gitignoreContent = ".cache/\n"
 
-	// Check if file exists
-	if _, err := os.Stat(filePath); err == nil {
-		if !opts.Force {
-			return errors.New("ssd.yaml already exists")
+// TargetPath returns the path init will write to in dir.
+//
+// Preferred: <dir>/.ssd/ssd.yaml (new layout, keeps repo root clean).
+// Legacy:    <dir>/ssd.yaml when it already exists, to avoid surprising
+//            existing projects with a new .ssd/ directory.
+func TargetPath(dir string) string {
+	legacy := filepath.Join(dir, "ssd.yaml")
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return filepath.Join(dir, ".ssd", "ssd.yaml")
+}
+
+// WriteFile writes the generated ssd config to dir using the layout
+// chosen by TargetPath. Creates .ssd/ and .ssd/.gitignore as needed.
+//
+// When the chosen target already exists, returns an error unless
+// opts.Force is set.
+func WriteFile(dir string, opts Options) error {
+	filePath := TargetPath(dir)
+
+	if _, err := os.Stat(filePath); err == nil && !opts.Force {
+		return fmt.Errorf("%s already exists", filePath)
+	}
+
+	parent := filepath.Dir(filePath)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return fmt.Errorf("failed to create config dir: %w", err)
+	}
+
+	// Drop a .gitignore inside .ssd/ so generated artifacts under .cache/
+	// stay out of version control. Idempotent: skipped when the file
+	// already exists. Only relevant for the new layout.
+	if filepath.Base(parent) == ".ssd" {
+		ignorePath := filepath.Join(parent, ".gitignore")
+		if _, err := os.Stat(ignorePath); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(ignorePath, []byte(gitignoreContent), 0644); err != nil {
+				return fmt.Errorf("failed to write .gitignore: %w", err)
+			}
 		}
 	}
 

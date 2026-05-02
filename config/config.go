@@ -134,10 +134,20 @@ type RootConfig struct {
 	Services map[string]*Config `yaml:"services"`
 }
 
-// Load reads and parses ssd.yaml from the current directory or specified path
+// Load reads and parses an ssd config from disk.
+//
+// When path is empty, the loader searches in this order:
+//  1. .ssd/ssd.yaml (preferred layout, keeps repo root clean)
+//  2. ssd.yaml      (legacy layout, kept for back-compat)
+//
+// An explicit non-empty path is read verbatim with no fallback.
 func Load(path string) (*RootConfig, error) {
 	if path == "" {
-		path = "ssd.yaml"
+		resolved, err := DefaultConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		path = resolved
 	}
 
 	data, err := os.ReadFile(path)
@@ -146,6 +156,165 @@ func Load(path string) (*RootConfig, error) {
 	}
 
 	return LoadFromBytes(data)
+}
+
+// DefaultConfigPath returns the first existing ssd config path under the
+// current working directory, preferring .ssd/ssd.yaml over the legacy
+// ssd.yaml. Returns "ssd.yaml" when neither exists so callers get a
+// stable, predictable error message from the subsequent ReadFile.
+func DefaultConfigPath() (string, error) {
+	const (
+		preferred = ".ssd/ssd.yaml"
+		legacy    = "ssd.yaml"
+	)
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred, nil
+	}
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, nil
+	}
+	// Neither exists. Return preferred so the error names the new layout.
+	return preferred, nil
+}
+
+// EnvConfigPath returns the overlay config path for an environment name,
+// alongside the given base path. For base ".ssd/ssd.yaml" and env "prod"
+// the result is ".ssd/ssd.prod.yaml". Returns "" when env is empty.
+func EnvConfigPath(basePath, env string) string {
+	if env == "" {
+		return ""
+	}
+	dir := filepath.Dir(basePath)
+	base := filepath.Base(basePath)
+	ext := filepath.Ext(base) // ".yaml"
+	stem := strings.TrimSuffix(base, ext)
+	return filepath.Join(dir, fmt.Sprintf("%s.%s%s", stem, env, ext))
+}
+
+// Resolve loads the base config (and an optional environment overlay),
+// returning the merged RootConfig and the base path it was loaded from.
+//
+// configPath: explicit path or "" to auto-detect (see DefaultConfigPath).
+// env: environment name; when set, ".ssd/ssd.<env>.yaml" is deep-merged
+// onto the base. Missing overlay file is an error (explicit env requested
+// but not provided is almost certainly a typo).
+func Resolve(configPath, env string) (*RootConfig, string, error) {
+	if configPath == "" {
+		p, err := DefaultConfigPath()
+		if err != nil {
+			return nil, "", err
+		}
+		configPath = p
+	}
+
+	if env == "" {
+		base, err := Load(configPath)
+		if err != nil {
+			return nil, configPath, err
+		}
+		return base, configPath, nil
+	}
+
+	// With an overlay, merge at the YAML node level on the raw bytes —
+	// re-marshalling a parsed RootConfig would materialise zero-valued
+	// fields (e.g. domains: []) and break validation.
+	baseData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, configPath, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	overlayPath := EnvConfigPath(configPath, env)
+	overlayData, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return nil, configPath, fmt.Errorf("failed to read env overlay %q: %w", overlayPath, err)
+	}
+
+	merged, err := mergeRawYAML(baseData, overlayData)
+	if err != nil {
+		return nil, configPath, fmt.Errorf("failed to apply env overlay %q: %w", overlayPath, err)
+	}
+	cfg, err := LoadFromBytes(merged)
+	if err != nil {
+		return nil, configPath, fmt.Errorf("failed to apply env overlay %q: %w", overlayPath, err)
+	}
+	return cfg, configPath, nil
+}
+
+// CacheDir returns the local cache directory for ssd-generated artifacts
+// (manifests, build metadata, etc.) given the resolved config path.
+//
+// For .ssd/ssd.yaml      -> .ssd/.cache
+// For ssd.yaml (legacy)  -> .ssd-cache  (avoids cluttering repo root with
+//                                        an ambiguous ".cache" dir)
+//
+// Generated artifacts must always live under this directory and never in
+// the repo root or alongside the config files themselves.
+func CacheDir(configPath string) string {
+	dir := filepath.Dir(configPath)
+	if filepath.Base(dir) == ".ssd" {
+		return filepath.Join(dir, ".cache")
+	}
+	return filepath.Join(dir, ".ssd-cache")
+}
+
+// mergeRawYAML deep-merges overlay bytes onto base bytes at the YAML
+// AST level and returns the merged YAML as bytes. Working in raw YAML
+// avoids the round-trip through RootConfig that would materialise
+// zero-valued fields and break downstream validation.
+func mergeRawYAML(base, overlay []byte) ([]byte, error) {
+	var baseNode, overlayNode yaml.Node
+	if err := yaml.Unmarshal(base, &baseNode); err != nil {
+		return nil, fmt.Errorf("failed to parse base: %w", err)
+	}
+	if err := yaml.Unmarshal(overlay, &overlayNode); err != nil {
+		return nil, fmt.Errorf("failed to parse overlay: %w", err)
+	}
+	merged := mergeNodes(&baseNode, &overlayNode)
+	return yaml.Marshal(merged)
+}
+
+// mergeNodes deep-merges overlay onto base at the YAML AST level.
+// - Documents: merge the inner content.
+// - Mapping: keys present in both are merged recursively; overlay-only
+//   keys are appended; base-only keys are kept.
+// - Scalar/Sequence: overlay replaces base.
+// Returns the merged node (may be base, mutated, or overlay).
+func mergeNodes(base, overlay *yaml.Node) *yaml.Node {
+	if base == nil || base.Kind == 0 {
+		return overlay
+	}
+	if overlay == nil || overlay.Kind == 0 {
+		return base
+	}
+	if base.Kind == yaml.DocumentNode && overlay.Kind == yaml.DocumentNode {
+		if len(base.Content) == 1 && len(overlay.Content) == 1 {
+			base.Content[0] = mergeNodes(base.Content[0], overlay.Content[0])
+		}
+		return base
+	}
+	if base.Kind != yaml.MappingNode || overlay.Kind != yaml.MappingNode {
+		return overlay
+	}
+	for i := 0; i < len(overlay.Content); i += 2 {
+		oKey := overlay.Content[i]
+		oVal := overlay.Content[i+1]
+		idx := mappingIndex(base, oKey.Value)
+		if idx < 0 {
+			base.Content = append(base.Content, oKey, oVal)
+			continue
+		}
+		base.Content[idx+1] = mergeNodes(base.Content[idx+1], oVal)
+	}
+	return base
+}
+
+func mappingIndex(node *yaml.Node, key string) int {
+	for i := 0; i < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return i
+		}
+	}
+	return -1
 }
 
 // LoadFromBytes parses raw YAML bytes into RootConfig

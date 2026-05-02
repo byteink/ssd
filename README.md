@@ -80,6 +80,39 @@ ssd deploy app
 
 ## Configuration
 
+### Layout
+
+ssd looks up its config in this order:
+
+1. `--config <path>` (explicit override)
+2. `.ssd/ssd.yaml` (preferred — keeps the repo root clean)
+3. `ssd.yaml` (legacy — kept for back-compat with existing projects)
+
+Fresh `ssd init` writes to `.ssd/ssd.yaml` and adds `.ssd/.gitignore`
+so generated artifacts under `.ssd/.cache/` stay out of version
+control. Existing projects with `./ssd.yaml` are left alone.
+
+### Environment overlays
+
+For multiple environments, drop sibling files next to the base config:
+
+```
+.ssd/
+├── ssd.yaml          # base / shared
+├── ssd.dev.yaml      # dev overlay
+└── ssd.prod.yaml     # prod overlay
+```
+
+Apply with `--env`:
+
+```bash
+ssd deploy --env prod
+ssd deploy -e dev
+```
+
+Overlays are deep-merged onto the base — only the keys you set in the
+overlay are overridden, everything else inherits.
+
 ### Minimal (single service):
 ```yaml
 # ssd.yaml

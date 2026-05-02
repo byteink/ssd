@@ -256,77 +256,103 @@ func TestWriteFile(t *testing.T) {
 	// Create temp directory
 	tmpDir := t.TempDir()
 
-	t.Run("creates ssd.yaml", func(t *testing.T) {
+	t.Run("creates .ssd/ssd.yaml in fresh dir", func(t *testing.T) {
 		dir := filepath.Join(tmpDir, "test1")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
 
 		opts := Options{Server: "myserver"}
-		err := WriteFile(dir, opts)
-		if err != nil {
+		if err := WriteFile(dir, opts); err != nil {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 
-		// Verify file exists
-		content, err := os.ReadFile(filepath.Join(dir, "ssd.yaml"))
+		content, err := os.ReadFile(filepath.Join(dir, ".ssd", "ssd.yaml"))
 		if err != nil {
-			t.Fatalf("failed to read ssd.yaml: %v", err)
+			t.Fatalf("failed to read .ssd/ssd.yaml: %v", err)
+		}
+		if string(content) != Generate(opts) {
+			t.Errorf("file content =\n%s\nwant:\n%s", string(content), Generate(opts))
 		}
 
-		expected := Generate(opts)
-		if string(content) != expected {
-			t.Errorf("file content =\n%s\nwant:\n%s", string(content), expected)
+		ignore, err := os.ReadFile(filepath.Join(dir, ".ssd", ".gitignore"))
+		if err != nil {
+			t.Fatalf("failed to read .ssd/.gitignore: %v", err)
+		}
+		if string(ignore) != gitignoreContent {
+			t.Errorf(".gitignore content = %q, want %q", string(ignore), gitignoreContent)
 		}
 	})
 
-	t.Run("fails if file exists", func(t *testing.T) {
-		dir := filepath.Join(tmpDir, "test2")
+	t.Run("writes to legacy ssd.yaml when it already exists", func(t *testing.T) {
+		dir := filepath.Join(tmpDir, "test-legacy")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
+		legacy := filepath.Join(dir, "ssd.yaml")
+		if err := os.WriteFile(legacy, []byte("existing"), 0644); err != nil {
+			t.Fatal(err)
+		}
 
-		// Create existing file
-		if err := os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("existing"), 0644); err != nil {
+		opts := Options{Server: "newserver", Force: true}
+		if err := WriteFile(dir, opts); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		content, err := os.ReadFile(legacy)
+		if err != nil {
+			t.Fatalf("failed to read legacy ssd.yaml: %v", err)
+		}
+		if string(content) != Generate(opts) {
+			t.Errorf("legacy ssd.yaml not overwritten")
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".ssd")); !os.IsNotExist(err) {
+			t.Errorf(".ssd/ should not be created when legacy file exists")
+		}
+	})
+
+	t.Run("fails if target file exists", func(t *testing.T) {
+		dir := filepath.Join(tmpDir, "test2")
+		if err := os.MkdirAll(filepath.Join(dir, ".ssd"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(dir, ".ssd", "ssd.yaml")
+		if err := os.WriteFile(target, []byte("existing"), 0644); err != nil {
 			t.Fatal(err)
 		}
 
 		opts := Options{Server: "myserver"}
 		err := WriteFile(dir, opts)
 		if err == nil {
-			t.Error("WriteFile() should fail when file exists")
+			t.Fatal("WriteFile() should fail when file exists")
 		}
-		if err.Error() != "ssd.yaml already exists" {
-			t.Errorf("WriteFile() error = %q, want 'ssd.yaml already exists'", err.Error())
+		want := target + " already exists"
+		if err.Error() != want {
+			t.Errorf("WriteFile() error = %q, want %q", err.Error(), want)
 		}
 	})
 
 	t.Run("force overwrites existing file", func(t *testing.T) {
 		dir := filepath.Join(tmpDir, "test3")
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, ".ssd"), 0755); err != nil {
 			t.Fatal(err)
 		}
-
-		// Create existing file
-		if err := os.WriteFile(filepath.Join(dir, "ssd.yaml"), []byte("existing"), 0644); err != nil {
+		target := filepath.Join(dir, ".ssd", "ssd.yaml")
+		if err := os.WriteFile(target, []byte("existing"), 0644); err != nil {
 			t.Fatal(err)
 		}
 
 		opts := Options{Server: "newserver", Force: true}
-		err := WriteFile(dir, opts)
-		if err != nil {
+		if err := WriteFile(dir, opts); err != nil {
 			t.Fatalf("WriteFile() with force error = %v", err)
 		}
 
-		// Verify content was overwritten
-		content, err := os.ReadFile(filepath.Join(dir, "ssd.yaml"))
+		content, err := os.ReadFile(target)
 		if err != nil {
-			t.Fatalf("failed to read ssd.yaml: %v", err)
+			t.Fatalf("failed to read .ssd/ssd.yaml: %v", err)
 		}
-
-		expected := Generate(opts)
-		if string(content) != expected {
-			t.Errorf("file content =\n%s\nwant:\n%s", string(content), expected)
+		if string(content) != Generate(opts) {
+			t.Errorf("file content =\n%s\nwant:\n%s", string(content), Generate(opts))
 		}
 	})
 }

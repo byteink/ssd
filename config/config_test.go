@@ -84,6 +84,127 @@ func TestLoad_DefaultPath(t *testing.T) {
 	assert.Contains(t, cfg.Services, "tempapp")
 }
 
+// TestLoad_PrefersDotSsdLayout: when both .ssd/ssd.yaml and ssd.yaml
+// exist, the new layout wins. This is the back-compat-safe direction:
+// projects that have migrated stop reading the old file even if it
+// lingers in the working tree.
+func TestLoad_PrefersDotSsdLayout(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".ssd"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.yaml"),
+		[]byte("server: new-layout\nservices:\n  app: {}\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "ssd.yaml"),
+		[]byte("server: legacy\nservices:\n  app: {}\n"), 0644))
+
+	chdir(t, tmpDir)
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "new-layout", cfg.Server)
+}
+
+// TestLoad_LegacyFallback: a project with only ssd.yaml at the root
+// keeps working without any code change on the user's side.
+func TestLoad_LegacyFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "ssd.yaml"),
+		[]byte("server: legacy\nservices:\n  app: {}\n"), 0644))
+
+	chdir(t, tmpDir)
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "legacy", cfg.Server)
+}
+
+func TestResolve_AppliesEnvOverlay(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".ssd"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.yaml"), []byte(
+		"server: base\n"+
+			"services:\n"+
+			"  web:\n"+
+			"    name: web\n"+
+			"    port: 3000\n"+
+			"  api:\n"+
+			"    name: api\n"+
+			"    port: 8080\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.prod.yaml"), []byte(
+		"server: prod-server\n"+
+			"services:\n"+
+			"  web:\n"+
+			"    port: 8000\n"), 0644))
+
+	chdir(t, tmpDir)
+	cfg, basePath, err := Resolve("", "prod")
+	require.NoError(t, err)
+	assert.Equal(t, ".ssd/ssd.yaml", basePath)
+	assert.Equal(t, "prod-server", cfg.Server, "overlay scalar should win")
+	assert.Equal(t, 8000, cfg.Services["web"].Port, "overlay deep-merges into web")
+	assert.Equal(t, 8080, cfg.Services["api"].Port, "untouched service preserved")
+	assert.Equal(t, "web", cfg.Services["web"].Name, "base name preserved when overlay omits it")
+}
+
+func TestResolve_MissingOverlayIsAnError(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".ssd"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.yaml"),
+		[]byte("server: base\nservices:\n  web: {}\n"), 0644))
+
+	chdir(t, tmpDir)
+	_, _, err := Resolve("", "staging")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ssd.staging.yaml")
+}
+
+func TestEnvConfigPath(t *testing.T) {
+	tests := []struct {
+		base, env, want string
+	}{
+		{".ssd/ssd.yaml", "prod", ".ssd/ssd.prod.yaml"},
+		{".ssd/ssd.yaml", "dev", ".ssd/ssd.dev.yaml"},
+		{"ssd.yaml", "prod", "ssd.prod.yaml"},
+		{"custom/dir/ssd.yaml", "qa", "custom/dir/ssd.qa.yaml"},
+		{".ssd/ssd.yaml", "", ""},
+	}
+	for _, tt := range tests {
+		got := EnvConfigPath(tt.base, tt.env)
+		if got != tt.want {
+			t.Errorf("EnvConfigPath(%q, %q) = %q, want %q", tt.base, tt.env, got, tt.want)
+		}
+	}
+}
+
+func TestCacheDir(t *testing.T) {
+	tests := []struct {
+		path, want string
+	}{
+		{".ssd/ssd.yaml", ".ssd/.cache"},
+		{"ssd.yaml", ".ssd-cache"},
+		{"foo/bar/.ssd/ssd.yaml", "foo/bar/.ssd/.cache"},
+		{"foo/bar/ssd.yaml", "foo/bar/.ssd-cache"},
+	}
+	for _, tt := range tests {
+		got := CacheDir(tt.path)
+		if got != tt.want {
+			t.Errorf("CacheDir(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+// chdir is a small test helper that changes into dir and restores the
+// original cwd on cleanup. Centralised so tests don't repeat the
+// boilerplate.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Logf("failed to restore working directory: %v", err)
+		}
+	})
+}
+
 func TestRootConfig_GetService_WithService(t *testing.T) {
 	cfg := &RootConfig{
 		Server: "myserver",

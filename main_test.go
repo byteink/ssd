@@ -828,3 +828,114 @@ func TestParsePruneFlags_UnknownFlag(t *testing.T) {
 	}
 }
 
+// TestExtractGlobalFlags exercises the global --config / --env / -e
+// stripper that runs before any per-command parser. The package-level
+// state it writes into is reset between subtests so cases stay
+// independent.
+func TestExtractGlobalFlags(t *testing.T) {
+	tests := []struct {
+		name       string
+		in         []string
+		wantConfig string
+		wantEnv    string
+		wantOut    []string
+		wantErr    bool
+	}{
+		{
+			name:    "no flags",
+			in:      []string{"deploy", "web"},
+			wantOut: []string{"deploy", "web"},
+		},
+		{
+			name:       "--config space form",
+			in:         []string{"--config", "alt/ssd.yaml", "deploy"},
+			wantConfig: "alt/ssd.yaml",
+			wantOut:    []string{"deploy"},
+		},
+		{
+			name:       "--config equals form",
+			in:         []string{"--config=alt/ssd.yaml", "deploy"},
+			wantConfig: "alt/ssd.yaml",
+			wantOut:    []string{"deploy"},
+		},
+		{
+			name:    "--env space form",
+			in:      []string{"--env", "prod"},
+			wantEnv: "prod",
+			wantOut: []string{},
+		},
+		{
+			name:    "-e space form",
+			in:      []string{"-e", "dev", "deploy"},
+			wantEnv: "dev",
+			wantOut: []string{"deploy"},
+		},
+		{
+			name:    "--env equals form",
+			in:      []string{"--env=qa"},
+			wantEnv: "qa",
+			wantOut: []string{},
+		},
+		{
+			name:       "both flags interleaved with args",
+			in:         []string{"deploy", "--env", "prod", "web", "--config=alt.yaml"},
+			wantConfig: "alt.yaml",
+			wantEnv:    "prod",
+			wantOut:    []string{"deploy", "web"},
+		},
+		{
+			name:    "double-dash stops parsing",
+			in:      []string{"logs", "--", "--env", "prod"},
+			wantOut: []string{"logs", "--", "--env", "prod"},
+		},
+		{
+			name:    "missing --config value",
+			in:      []string{"--config"},
+			wantErr: true,
+		},
+		{
+			name:    "missing --env value",
+			in:      []string{"--env"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			globalConfigPath = ""
+			globalEnvName = ""
+			out, err := extractGlobalFlags(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if globalConfigPath != tt.wantConfig {
+				t.Errorf("globalConfigPath = %q, want %q", globalConfigPath, tt.wantConfig)
+			}
+			if globalEnvName != tt.wantEnv {
+				t.Errorf("globalEnvName = %q, want %q", globalEnvName, tt.wantEnv)
+			}
+			if !equalSlices(out, tt.wantOut) {
+				t.Errorf("out = %v, want %v", out, tt.wantOut)
+			}
+		})
+	}
+}
+
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
