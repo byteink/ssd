@@ -78,12 +78,18 @@ func (d Dependencies) HasConditions() bool {
 	return false
 }
 
-// HealthCheck represents Docker healthcheck configuration
+// HealthCheck represents Docker healthcheck configuration.
+//
+// Use Cmd for a shell-evaluated probe (rendered as ["CMD","sh","-c",cmd]).
+// Use Exec for a direct exec probe (rendered as ["CMD",exec...]). Exec is
+// required for scratch and other images that ship no shell. Exactly one
+// of Cmd or Exec must be set.
 type HealthCheck struct {
-	Cmd      string `yaml:"cmd"`
-	Interval string `yaml:"interval"`
-	Timeout  string `yaml:"timeout"`
-	Retries  int    `yaml:"retries"`
+	Cmd      string   `yaml:"cmd,omitempty"`
+	Exec     []string `yaml:"exec,omitempty"`
+	Interval string   `yaml:"interval"`
+	Timeout  string   `yaml:"timeout"`
+	Retries  int      `yaml:"retries"`
 }
 
 // DeployConfig holds deployment strategy options
@@ -1086,8 +1092,22 @@ func ValidateHealthCheck(hc *HealthCheck) error {
 		return nil
 	}
 
-	if hc.Cmd == "" {
-		return fmt.Errorf("healthcheck cmd cannot be empty")
+	// Exactly one of cmd/exec must be set. Both empty leaves no probe; both
+	// set is ambiguous and would silently favour one form over the other.
+	hasCmd := hc.Cmd != ""
+	hasExec := len(hc.Exec) > 0
+	if !hasCmd && !hasExec {
+		return fmt.Errorf("healthcheck requires either cmd or exec")
+	}
+	if hasCmd && hasExec {
+		return fmt.Errorf("healthcheck cannot set both cmd and exec; pick one")
+	}
+	if hasExec {
+		for i, arg := range hc.Exec {
+			if arg == "" {
+				return fmt.Errorf("healthcheck exec[%d] cannot be empty", i)
+			}
+		}
 	}
 
 	// Validate interval format if set

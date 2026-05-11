@@ -1351,9 +1351,29 @@ func TestValidateHealthCheck(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "empty cmd",
+			name:    "neither cmd nor exec",
+			hc:      &HealthCheck{},
+			wantErr: true,
+		},
+		{
+			name: "both cmd and exec set",
 			hc: &HealthCheck{
-				Cmd: "",
+				Cmd:  "exit 0",
+				Exec: []string{"/probe"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid exec",
+			hc: &HealthCheck{
+				Exec: []string{"/probe", "--strict"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "exec with empty arg",
+			hc: &HealthCheck{
+				Exec: []string{"/probe", ""},
 			},
 			wantErr: true,
 		},

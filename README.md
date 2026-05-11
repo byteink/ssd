@@ -334,8 +334,9 @@ services:
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
 - `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files
-- `healthcheck`: Health check configuration
-  - `cmd`: Health check command
+- `healthcheck`: Health check configuration (exactly one of `cmd` / `exec`)
+  - `cmd`: Shell command, rendered as `["CMD","sh","-c",cmd]`
+  - `exec`: Array form, rendered as `["CMD",arg0,arg1,...]`. Use for scratch images with no shell.
   - `interval`: Check interval (e.g., `30s`)
   - `timeout`: Command timeout (e.g., `10s`)
   - `retries`: Number of retries before unhealthy

@@ -165,10 +165,19 @@ func GenerateCompose(services map[string]*config.Config, stack string, versions 
 			svc.DependsOn = &ComposeDependsOn{Deps: cfg.DependsOn}
 		}
 
-		// Add healthcheck if configured
+		// Add healthcheck if configured. Two forms:
+		//   - cmd  -> ["CMD","sh","-c",cmd]   shell-evaluated, classic form
+		//   - exec -> ["CMD",exec...]         direct exec, needed for scratch
+		// Validation guarantees exactly one is set.
 		if cfg.HealthCheck != nil {
+			var test []string
+			if len(cfg.HealthCheck.Exec) > 0 {
+				test = append([]string{"CMD"}, cfg.HealthCheck.Exec...)
+			} else {
+				test = []string{"CMD", "sh", "-c", cfg.HealthCheck.Cmd}
+			}
 			svc.HealthCheck = &HealthCheck{
-				Test:     []string{"CMD", "sh", "-c", cfg.HealthCheck.Cmd},
+				Test:     test,
 				Interval: cfg.HealthCheck.Interval,
 				Timeout:  cfg.HealthCheck.Timeout,
 				Retries:  cfg.HealthCheck.Retries,

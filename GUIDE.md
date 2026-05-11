@@ -192,7 +192,7 @@ When `image` is set, ssd pulls it instead of building.
 | `port` | `80` | Container port |
 | `depends_on` | — | Service dependencies (list or map with conditions) |
 | `volumes` | — | Named volumes (`name: mount_path`) |
-| `healthcheck` | — | Health check (cmd, interval, timeout, retries) |
+| `healthcheck` | — | Health check (one of `cmd`/`exec`, plus interval, timeout, retries) |
 | `cleanup.retention` | inherited | Per-service override for image tag retention |
 
 ---

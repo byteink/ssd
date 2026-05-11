@@ -510,6 +510,50 @@ func TestGenerateCompose_WithHealthCheck(t *testing.T) {
 	}
 }
 
+func TestGenerateCompose_WithExecHealthCheck(t *testing.T) {
+	// Direct exec form: scratch images (no shell) need this. Renders to
+	// ["CMD", arg0, arg1, ...] with no sh -c wrap.
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   3000,
+			HealthCheck: &config.HealthCheck{
+				Exec:     []string{"/probe", "--strict"},
+				Interval: "30s",
+				Timeout:  "5s",
+				Retries:  3,
+			},
+		},
+	}
+
+	result, err := GenerateCompose(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateCompose failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("Generated YAML is invalid: %v", err)
+	}
+
+	healthcheck := parsed["services"].(map[string]interface{})["web"].(map[string]interface{})["healthcheck"].(map[string]interface{})
+	test, ok := healthcheck["test"].([]interface{})
+	if !ok {
+		t.Fatal("healthcheck test missing or not an array")
+	}
+	want := []string{"CMD", "/probe", "--strict"}
+	if len(test) != len(want) {
+		t.Fatalf("test length = %d, want %d (got %v)", len(test), len(want), test)
+	}
+	for i, w := range want {
+		if test[i] != w {
+			t.Errorf("test[%d] = %v, want %q", i, test[i], w)
+		}
+	}
+}
+
 func TestGenerateCompose_WithoutHealthCheck(t *testing.T) {
 	services := map[string]*config.Config{
 		"web": {
