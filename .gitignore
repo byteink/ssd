@@ -1,5 +1,6 @@
 # Binaries
 ssd
+verify_interface
 *.exe
 *.exe~
 *.dll

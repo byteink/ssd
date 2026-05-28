@@ -14,6 +14,7 @@ import (
 	"al.essio.dev/pkg/shellescape"
 
 	"github.com/byteink/ssd/cleanup"
+	"github.com/byteink/ssd/completion"
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/deploy"
 	"github.com/byteink/ssd/provision"
@@ -86,6 +87,17 @@ func main() {
 	command := os.Args[1]
 	args := os.Args[2:]
 
+	// __complete is the hidden helper invoked by shell completion
+	// scripts. It must not load ssd.yaml eagerly nor parse global
+	// flags through the normal path: the user is mid-type and any
+	// error message would clobber their terminal. Handle it before
+	// extractGlobalFlags so a typo on the line being completed (e.g.
+	// a half-written --config) doesn't kill the completion call.
+	if command == "__complete" {
+		runComplete(args)
+		return
+	}
+
 	// Strip global flags from args so existing per-command parsers stay
 	// untouched. Errors are reported to the user and abort the run.
 	cleaned, err := extractGlobalFlags(args)
@@ -130,6 +142,8 @@ func main() {
 		runSkill(args)
 	case "provision":
 		runProvision(args)
+	case "completion":
+		runCompletion(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -1758,6 +1772,139 @@ legacy ./ssd.yaml to migrate.
 `)
 }
 
+// runCompletion implements `ssd completion` — installs (or prints)
+// the shell completion script for the user's shell.
+func runCompletion(args []string) {
+	if wantsHelp(args) {
+		printCompletionHelp()
+		return
+	}
+	if len(args) == 0 {
+		printCompletionHelp()
+		return
+	}
+
+	sub := args[0]
+	rest := args[1:]
+
+	switch sub {
+	case "bash", "zsh", "fish":
+		printCompletionScript(sub)
+	case "install":
+		runCompletionInstall(rest)
+	default:
+		fmt.Printf("Error: unknown completion subcommand: %s\n", sub)
+		printCompletionHelp()
+		os.Exit(1)
+	}
+}
+
+func printCompletionScript(shell string) {
+	script, err := completion.Script(shell)
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
+	}
+	fmt.Print(script)
+}
+
+func runCompletionInstall(args []string) {
+	shell := parseShellFlag(args)
+	if shell == "" {
+		shell = completion.DetectShell()
+	}
+	if shell == "" {
+		fmt.Println("Error: cannot auto-detect shell; pass --shell bash|zsh|fish")
+		os.Exit(1)
+	}
+	path, err := completion.Install(shell)
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed %s completion: %s\n", shell, path)
+	if hint := completion.ActivationHint(shell, path); hint != "" {
+		fmt.Println(hint)
+	}
+}
+
+// parseShellFlag extracts the value of --shell from args. Exits on
+// malformed input or unknown arguments. Returns "" when --shell was
+// not provided.
+func parseShellFlag(args []string) string {
+	var shell string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--shell":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --shell requires a value")
+				os.Exit(1)
+			}
+			shell = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--shell="):
+			shell = strings.TrimPrefix(a, "--shell=")
+		default:
+			fmt.Printf("Error: unknown argument: %s\n", a)
+			os.Exit(1)
+		}
+	}
+	return shell
+}
+
+// runComplete implements the hidden `ssd __complete` helper invoked
+// by the shell completion scripts on every TAB. args holds the tokens
+// the user has already typed (excluding the binary name and the
+// partial word at the cursor). It must never exit non-zero — that
+// would surface as a beep / error in the user's shell.
+func runComplete(args []string) {
+	services := completionServices()
+	completion.Complete(args, services)
+}
+
+// completionServices returns the list of services defined in
+// ssd.yaml, honoring --config / --env if they appear in args. Any
+// load error collapses to an empty list: completion is best-effort,
+// never noisy.
+func completionServices() []string {
+	// Reuse extractGlobalFlags to honor --config / --env that the
+	// user already typed on the line being completed.
+	if _, err := extractGlobalFlags(os.Args[2:]); err != nil {
+		return nil
+	}
+	rootCfg, _, err := config.Resolve(globalConfigPath, globalEnvName)
+	if err != nil {
+		return nil
+	}
+	return rootCfg.ListServices()
+}
+
+func printCompletionHelp() {
+	fmt.Print(`ssd completion - Generate shell completion script
+
+Usage:
+  ssd completion install [--shell bash|zsh|fish]
+  ssd completion bash|zsh|fish
+
+Subcommands:
+  install                         Write the completion script to the conventional
+                                  per-user location for the detected shell.
+                                  Pass --shell to override auto-detection.
+  bash|zsh|fish                   Print the completion script to stdout.
+
+Install locations:
+  bash    ~/.local/share/bash-completion/completions/ssd
+  zsh     ~/.zsh/completions/_ssd        (add the dir to fpath in .zshrc)
+  fish    ~/.config/fish/completions/ssd.fish
+
+Examples:
+  ssd completion install                  # auto-detect from $SHELL
+  ssd completion install --shell zsh
+  ssd completion bash > /etc/bash_completion.d/ssd
+`)
+}
+
 func printInitHelp() {
 	fmt.Print(`ssd init - Create an ssd.yaml configuration file
 
@@ -1882,6 +2029,7 @@ Commands:
   provision                       Provision server with Docker and Traefik
   provision check                 Verify server readiness for ssd
   skill                           Install ssd skill for your coding agent
+  completion                      Install or print shell completion (bash, zsh, fish)
   version                         Show ssd version
   help                            Show this help
 

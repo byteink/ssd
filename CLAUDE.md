@@ -58,6 +58,8 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── provision.go  # Server provisioning (Docker or K3s)
 ├── scaffold/
 │   └── scaffold.go   # ssd init command (generate ssd.yaml)
+├── completion/
+│   └── completion.go # Shell completion scripts + __complete dispatcher
 ├── skill/
 │   └── SKILL.md      # Claude Code skill file (installed via ssd skill)
 └── .goreleaser.yaml  # Release config (bundles skill/ in brew install)
@@ -557,3 +559,24 @@ ssd skill --path <dir>                # Symlink skill dir to custom path
 ```
 
 Symlinks the bundled skill directory into your coding agent's skills folder. After `brew install ssd`, the skill lives at `$(brew --prefix)/share/ssd/skill/`. The symlink ensures the skill auto-updates on `brew upgrade`.
+
+### Completion
+```bash
+ssd completion install                # auto-detects $SHELL
+ssd completion install --shell zsh    # override detection
+ssd completion bash|zsh|fish          # print script to stdout
+```
+
+Installed paths:
+- bash → `~/.local/share/bash-completion/completions/ssd`
+- zsh  → `~/.zsh/completions/_ssd` (user must add the dir to `fpath` before `compinit`)
+- fish → `~/.config/fish/completions/ssd.fish` (auto-loaded)
+
+The scripts are intentionally thin shims that call the hidden helper
+`ssd __complete <prev-tokens>` on every TAB. The Go side
+(`completion/completion.go`) holds the single source of truth for the
+command layout and emits one candidate per line; the shell does
+prefix filtering. Dynamic completions sourced from ssd.yaml today:
+service names for `deploy/up/down/rm/restart/rollback/status/logs/config/scale/env/secret`.
+Honors global `--config` / `--env` so completion in a multi-env repo
+reflects the right overlay.

@@ -485,6 +485,23 @@ ssd prune --dry-run        # Preview, combinable with any flag
 
 Build cache pruning is opt-in only — never runs automatically on deploy. Threshold is 168h (7 days).
 
+### Shell completion
+```bash
+ssd completion install                  # auto-detect $SHELL (bash, zsh, fish)
+ssd completion install --shell zsh      # pick the shell explicitly
+ssd completion bash > /path/to/ssd      # print script to stdout
+```
+
+Installed paths:
+- bash: `~/.local/share/bash-completion/completions/ssd`
+- zsh:  `~/.zsh/completions/_ssd` (add the directory to `fpath` in `.zshrc`
+  before `compinit`)
+- fish: `~/.config/fish/completions/ssd.fish` (auto-loaded by fish)
+
+Completes top-level commands, sub-commands (`env`/`secret set|list|rm`,
+`provision check`, `completion install`), common flags, and dynamically
+lists services from your `ssd.yaml`.
+
 ### Other
 ```bash
 ssd version              # Show version
