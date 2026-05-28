@@ -2,6 +2,7 @@ package testhelpers
 
 import (
 	"context"
+	"io"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -21,6 +22,12 @@ func (m *MockExecutor) Run(ctx context.Context, name string, args ...string) (st
 func (m *MockExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
 	callArgs := m.Called(name, args)
 	return callArgs.Error(0)
+}
+
+// SetOutput is a no-op for the mock — tests don't exercise the
+// captured-output path. Present to satisfy CommandExecutor.
+func (m *MockExecutor) SetOutput(stdout, stderr io.Writer) {
+	_, _ = stdout, stderr
 }
 
 // MockRemoteClient is a mock implementation of the remote client interface

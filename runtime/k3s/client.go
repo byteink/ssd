@@ -3,6 +3,7 @@ package k3s
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -41,6 +42,12 @@ func NewClientWithExecutor(cfg *config.Config, executor remote.CommandExecutor) 
 // SSH delegates to the inner client.
 func (c *Client) SSH(ctx context.Context, command string) (string, error) {
 	return c.inner.SSH(ctx, command)
+}
+
+// SetOutput delegates to the inner client so subprocess output can be
+// redirected (e.g. into ui.Reporter's tail window).
+func (c *Client) SetOutput(stdout, stderr io.Writer) {
+	c.inner.SetOutput(stdout, stderr)
 }
 
 // SSHInteractive delegates to the inner client.

@@ -60,6 +60,8 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── scaffold.go   # ssd init command (generate ssd.yaml)
 ├── completion/
 │   └── completion.go # Shell completion scripts + __complete dispatcher
+├── ui/
+│   └── reporter.go   # Deploy progress renderer (plain + pretty/tty)
 ├── skill/
 │   └── SKILL.md      # Claude Code skill file (installed via ssd skill)
 └── .goreleaser.yaml  # Release config (bundles skill/ in brew install)
@@ -96,6 +98,65 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 7. Generate K8s manifests, apply with `kubectl apply`
 8. Wait for rollout: `kubectl rollout status`
 9. Clean up temp directory
+
+## Deploy Output (ui package)
+
+`ui.Reporter` renders deploy progress in two modes, picked by `ui.New(w)`
+based on whether `w` is a tty:
+
+- **Plain** (non-tty: CI, pipes, redirected logs): line-by-line transcript.
+  Steps render as ` · name` on start and ` ✓ name  1.2s` / ` ✗ name  …`
+  on end. Details are indented under the active step.
+- **Pretty** (tty): Docker-style live block. The current step's header
+  is repainted at 10Hz with a spinner and ticking elapsed time; on
+  Done/Fail the line is frozen as ` ✓ name  1.2s` / ` ✗ name  …` and the
+  next step starts. Completed steps and their details become permanent
+  transcript above the live area. ANSI cursor codes (`CSI nA`, `CSI 0J`)
+  do the in-place updates — no `uilive`/`tcell` dep.
+
+API: `Reporter` exposes `Header`, `Step(name) Step`, `Info`, `Warn`,
+`Close`. `Step` exposes `Detail`, `Quiet`, `Done`, `Fail(err)`. Only
+one step may be active at a time — starting a new step or calling
+`Header`/`Info`/`Warn`/`Close` finalises any pending live area. All
+methods are concurrency-safe.
+
+**Stream tail window for noisy subprocesses.** Pretty mode redraws the
+active step header in-place via cursor-up + clear-to-end. That collides
+with any subprocess that writes its own lines to the same terminal
+(docker buildkit's `#1`, `#2`, ... progress; `docker rollout`; `kubectl
+rollout status`) — the spinner repaints and the subprocess output keeps
+shoving it down, leaving duplicate headers.
+
+`step.Stream(n) io.Writer` is the docker-build-style fix: subprocess
+output goes through the returned writer, lines are stripped of ANSI
+codes and pushed into a ring buffer of the last `n` lines, and the live
+area paints as **spinner header + last n lines** indented beneath. On
+Done/Fail the tail window vanishes, leaving only the final ✓/✗ line —
+just like `[+] Building (15/15) FINISHED` collapsing in docker.
+
+Plumbing: `Deployer.SetOutput(stdout, stderr io.Writer)` redirects the
+client's `SSHInteractive` (and everything built on it: `BuildImage`,
+`PullImage`, `StartService`, `RolloutService`) into the Stream writer.
+`nil` restores `os.Stdout`/`os.Stderr`. The helper `withStreamedOutput`
+in deploy.go wraps the set/restore + step lifecycle so callers stay
+terse. Tail height is `streamTailLines = 4`.
+
+Used in `deploy/deploy.go` for `BuildImage`, `PullImage` (prebuilt +
+dependency), and `StartService`/`RolloutService` (main + dependency).
+`Rsync` doesn't need it — `git archive | tar` is silent on success.
+
+`step.Quiet()` still exists as a coarser alternative: it freezes the
+header and lets subprocess output flow inline (no tail window, no
+clipping). Use it when the subprocess output is short enough to want
+fully visible.
+
+`deploy.Options.Reporter` is the wiring seam. When nil, `DeployWithClient`
+builds a plain reporter from `Options.Output` (kept for backwards
+compatibility with existing tests that pass `io.Discard`). `main.go`
+constructs `ui.New(os.Stdout)` for `ssd deploy` and `deployServiceBuildOnly`.
+
+Restart/Rollback still use the simple `logf` writer path — they have
+two or three output lines each and don't justify the reporter machinery.
 
 ## Deployment Strategy
 

@@ -15,6 +15,7 @@ Agentless remote deployment tool for Docker Compose and K3s.
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
 - **Reliable**: Zero-downtime deployments with automatic version tracking
+- **Polished output**: Docker-style live progress in your terminal — spinner + per-step timer, frozen ✓/✗ summary on completion. Falls back to plain text in CI and pipes automatically.
 
 ## Installation
 

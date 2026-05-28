@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,11 @@ type RemoteClient interface {
 	StartService(ctx context.Context, serviceName string) error
 	RolloutService(ctx context.Context, serviceName string) error
 	CopyFiles(ctx context.Context, files map[string]string) error
+	// SetOutput redirects the writers used by SSHInteractive (and anything
+	// built on top of it: BuildImage, PullImage, StartService, RolloutService).
+	// Passing nil restores os.Stdout/os.Stderr. Used by ui.Reporter to feed
+	// subprocess output into a tail window.
+	SetOutput(stdout, stderr io.Writer)
 }
 
 // Ensure Client implements RemoteClient
@@ -68,6 +74,13 @@ func defaultGitRoot(dir string) (string, error) {
 		return "", fmt.Errorf("not a git repository (or any parent): %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// SetOutput delegates to the underlying executor. nil writers restore the
+// default os.Stdout/os.Stderr. Used by ui.Reporter Stream() to capture
+// subprocess output into a tail window.
+func (c *Client) SetOutput(stdout, stderr io.Writer) {
+	c.executor.SetOutput(stdout, stderr)
 }
 
 // NewClient creates a new remote client with the default executor

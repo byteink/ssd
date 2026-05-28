@@ -109,6 +109,11 @@ func (m *MockDeployer) RolloutService(ctx context.Context, serviceName string) e
 	return args.Error(0)
 }
 
+// SetOutput is a no-op for tests — they don't exercise streamed subprocess output.
+func (m *MockDeployer) SetOutput(stdout, stderr io.Writer) {
+	_, _ = stdout, stderr
+}
+
 func (m *MockDeployer) CopyFiles(ctx context.Context, files map[string]string) error {
 	args := m.Called(files)
 	return args.Error(0)

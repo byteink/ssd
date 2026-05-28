@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -123,6 +124,11 @@ func (e *ChaosExecutor) Run(ctx context.Context, name string, args ...string) (s
 }
 
 // RunInteractive simulates interactive command execution with chaos injection
+// SetOutput is a no-op for chaos tests — they don't exercise streaming.
+func (e *ChaosExecutor) SetOutput(stdout, stderr io.Writer) {
+	_, _ = stdout, stderr
+}
+
 func (e *ChaosExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
 	e.commandCallCount++
 

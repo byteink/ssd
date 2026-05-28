@@ -22,6 +22,7 @@ import (
 	"github.com/byteink/ssd/runtime"
 	"github.com/byteink/ssd/runtime/k3s"
 	"github.com/byteink/ssd/scaffold"
+	"github.com/byteink/ssd/ui"
 )
 
 // deployServiceBuildOnly builds/pulls the image for a service without starting it.
@@ -32,11 +33,9 @@ func deployServiceBuildOnly(rootCfg *config.RootConfig, serviceName string, allS
 		return err
 	}
 
-	fmt.Printf("Building %s...\n", cfg.Name)
-
 	client := runtime.New(rootCfg.Runtime, cfg)
 	opts := &deploy.Options{
-		Output:      os.Stdout,
+		Reporter:    ui.New(os.Stdout),
 		AllServices: allServices,
 		BuildOnly:   true,
 		Runtime:     rootCfg.Runtime,
@@ -562,11 +561,11 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 		allServices[name] = svcCfg
 	}
 
-	fmt.Printf("Deploying %s to %s...\n\n", cfg.Name, cfg.Server)
-
 	client := runtime.New(rootCfg.Runtime, cfg)
+	reporter := ui.New(os.Stdout)
+	defer reporter.Close()
 	opts := &deploy.Options{
-		Output:       os.Stdout,
+		Reporter:     reporter,
 		Dependencies: depConfigs,
 		AllServices:  allServices,
 		Runtime:      rootCfg.Runtime,
