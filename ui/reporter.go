@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -311,26 +312,38 @@ func (r *prettyReporter) paintLocked() {
 		return
 	}
 	r.clearLiveLocked()
-	header := r.formatActiveHeader(r.active)
-	writeln(r.w, header)
+	lines := []string{r.formatActiveHeader(r.active)}
 	body := r.active.details
 	if r.active.streaming {
 		body = r.active.tailLines
 	}
 	for _, d := range body {
-		writeln(r.w, styleDetail.Render("     "+d))
+		lines = append(lines, styleDetail.Render("     "+d))
 	}
-	r.liveLines = 1 + len(body)
+	// Write the live region WITHOUT a trailing newline so the cursor stays
+	// parked on the last line. A trailing newline while the block sits on
+	// the bottom screen row forces the terminal to scroll on every repaint,
+	// committing each animation frame to scrollback (a 21s build at 10Hz
+	// leaves 200+ spinner lines in the transcript). clearLiveLocked walks
+	// back up from the parked cursor before the next paint.
+	writef(r.w, "%s", strings.Join(lines, "\n"))
+	r.liveLines = len(lines)
 }
 
-// clearLiveLocked moves the cursor up liveLines and clears to end of
-// screen. Caller holds r.mu.
+// clearLiveLocked erases the live area. The cursor is parked at the end of
+// the last live line (paintLocked emits no trailing newline), so move to
+// column 0, up to the first live line, then erase to end of screen.
+// Caller holds r.mu.
 func (r *prettyReporter) clearLiveLocked() {
 	if r.liveLines == 0 {
 		return
 	}
-	// CSI nA = cursor up n lines; CSI 0J = erase from cursor to end of screen.
-	writef(r.w, "\x1b[%dA\x1b[0J", r.liveLines)
+	up := ""
+	if r.liveLines > 1 {
+		up = fmt.Sprintf("\x1b[%dA", r.liveLines-1)
+	}
+	// \r = column 0; CSI nA = cursor up n lines; CSI 0J = erase to end of screen.
+	writef(r.w, "\r%s\x1b[0J", up)
 	r.liveLines = 0
 }
 

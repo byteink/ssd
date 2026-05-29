@@ -174,6 +174,28 @@ func TestPrettyStreamRingBufferDropsOldLines(t *testing.T) {
 	}
 }
 
+// A live repaint must never end with a newline. A trailing newline while
+// the block sits on the bottom terminal row scrolls the screen on every
+// 10Hz tick, dumping each spinner frame into scrollback (the "200 spinner
+// lines for one build" bug). Repositioning instead uses \r + CSI nA.
+func TestPrettyPaintNoTrailingNewline(t *testing.T) {
+	var buf bytes.Buffer
+	r := &prettyReporter{w: &buf, now: time.Now, tickEvery: time.Second}
+	s := &prettyStep{r: r, name: "build", streaming: true, tailMax: 4}
+	r.active = s
+	r.paintLocked()
+	if got := buf.String(); strings.HasSuffix(got, "\n") {
+		t.Fatalf("live paint ended with newline (scrolls at screen bottom): %q", got)
+	}
+
+	// A second paint must walk the cursor back up, not append below.
+	buf.Reset()
+	r.paintLocked()
+	if got := buf.String(); !strings.HasPrefix(got, "\r") {
+		t.Fatalf("repaint must reposition with \\r, got: %q", got)
+	}
+}
+
 func TestPlainStepQuietIsNoOp(t *testing.T) {
 	var buf bytes.Buffer
 	r := newTestPlain(&buf, time.Second)

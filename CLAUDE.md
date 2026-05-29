@@ -111,8 +111,12 @@ based on whether `w` is a tty:
   is repainted at 10Hz with a spinner and ticking elapsed time; on
   Done/Fail the line is frozen as ` ✓ name  1.2s` / ` ✗ name  …` and the
   next step starts. Completed steps and their details become permanent
-  transcript above the live area. ANSI cursor codes (`CSI nA`, `CSI 0J`)
-  do the in-place updates — no `uilive`/`tcell` dep.
+  transcript above the live area. The live block is painted with **no
+  trailing newline** so the cursor parks on its last line; the next repaint
+  walks back with `\r` + `CSI nA` (up) and `CSI 0J` (erase to end of screen).
+  Emitting a trailing newline while the block sits on the bottom screen row
+  would scroll the terminal every repaint and dump each animation frame into
+  scrollback. No `uilive`/`tcell` dep.
 
 API: `Reporter` exposes `Header`, `Step(name) Step`, `Info`, `Warn`,
 `Close`. `Step` exposes `Detail`, `Quiet`, `Done`, `Fail(err)`. Only
