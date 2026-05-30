@@ -220,12 +220,12 @@ func (s *plainStep) Fail(err error) {
 var (
 	styleHeader  = lipgloss.NewStyle().Bold(true)
 	styleStep    = lipgloss.NewStyle()
-	styleOK      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))  // green
-	styleFail    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))  // red
-	styleRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // cyan
-	styleDetail  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // grey
-	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow
-	styleElapsed = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // grey
+	styleOK      = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
+	styleFail    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
+	styleRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
+	styleDetail  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // grey
+	styleWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	styleElapsed = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // grey
 )
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -235,6 +235,17 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // elapsed timer. Completed steps are frozen as plain transcript above.
 func NewPretty(w io.Writer) Reporter {
 	r := &prettyReporter{w: w, now: time.Now, tickEvery: 100 * time.Millisecond}
+	if f, ok := w.(*os.File); ok {
+		fd := int(f.Fd())
+		// Read live per paint so resizes are honoured without re-wiring.
+		r.width = func() int {
+			cols, _, err := term.GetSize(fd)
+			if err != nil || cols < 1 {
+				return 0
+			}
+			return cols
+		}
+	}
 	return r
 }
 
@@ -243,10 +254,23 @@ type prettyReporter struct {
 	w         io.Writer
 	now       func() time.Time
 	tickEvery time.Duration
+	// width reports the terminal's column count; nil when w is not a sized
+	// tty. Injectable like now, so tests can drive a fixed width. Read via
+	// the cols() helper, which folds nil to 0 (= "unknown, don't clamp").
+	width func() int
 
 	active    *prettyStep // current step (nil if none)
 	liveLines int         // number of lines currently in the live area
 	stopTick  chan struct{}
+}
+
+// cols returns the terminal width, or 0 when it is unknown (not a sized
+// tty). The single nil check lives here so call sites stay flat.
+func (r *prettyReporter) cols() int {
+	if r.width == nil {
+		return 0
+	}
+	return r.width()
 }
 
 func (r *prettyReporter) Header(format string, args ...any) {
@@ -319,6 +343,15 @@ func (r *prettyReporter) paintLocked() {
 	}
 	for _, d := range body {
 		lines = append(lines, styleDetail.Render("     "+d))
+	}
+	// Clamp each line to the terminal width so one logical line is always one
+	// physical row: a line that wraps would desync the cursor-up repaint math
+	// below and flood scrollback (see CLAUDE.md). width-1 leaves a column of
+	// slack to dodge the pending-wrap latch; width 0 = unknown, leave intact.
+	if w := r.cols(); w > 1 {
+		for i, line := range lines {
+			lines[i] = ansi.Truncate(line, w-1, "")
+		}
 	}
 	// Write the live region WITHOUT a trailing newline so the cursor stays
 	// parked on the last line. A trailing newline while the block sits on

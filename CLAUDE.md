@@ -118,6 +118,17 @@ based on whether `w` is a tty:
   would scroll the terminal every repaint and dump each animation frame into
   scrollback. No `uilive`/`tcell` dep.
 
+  **Lines are clamped to the terminal width** before painting
+  (`ansi.Truncate` to `width-1`). The repaint walks the cursor up by
+  `liveLines` *logical* lines, but the terminal lays out *physical*
+  rows — any line wider than the screen wraps onto extra rows, the
+  cursor-up count under-shoots, and every frame drifts down into
+  scrollback. A single long buildkit line (`#15 go: downloading …`) is
+  enough to corrupt the count; after that even the bare spinner header
+  floods. Clamping guarantees one logical line == one physical row, so
+  the up/erase math stays exact. Width is read live per paint via
+  `term.GetSize` (resize-safe); `width 0` (non-sized tty) skips the clamp.
+
 API: `Reporter` exposes `Header`, `Step(name) Step`, `Info`, `Warn`,
 `Close`. `Step` exposes `Detail`, `Quiet`, `Done`, `Fail(err)`. Only
 one step may be active at a time — starting a new step or calling

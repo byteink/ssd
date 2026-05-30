@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // fakeClock returns deterministic times so elapsed values are predictable.
@@ -193,6 +195,85 @@ func TestPrettyPaintNoTrailingNewline(t *testing.T) {
 	r.paintLocked()
 	if got := buf.String(); !strings.HasPrefix(got, "\r") {
 		t.Fatalf("repaint must reposition with \\r, got: %q", got)
+	}
+}
+
+// visibleWidth strips the repaint control prefix (\r + optional CSI nA) and
+// any SGR styling, then returns the printed cell width of a painted line.
+func visibleWidth(line string) int {
+	return ansi.StringWidth(strings.TrimLeft(ansi.Strip(line), "\r"))
+}
+
+// A painted line wider than the terminal would wrap onto a second physical
+// row, desyncing the cursor-up repaint math and flooding scrollback. Every
+// painted line — header AND tail — must be clamped so one logical line is
+// always exactly one physical row, using the full width-1 budget.
+func TestPrettyPaintClampsToTerminalWidth(t *testing.T) {
+	var buf bytes.Buffer
+	const cols = 40
+	r := &prettyReporter{w: &buf, now: time.Now, tickEvery: time.Second, width: func() int { return cols }}
+	s := &prettyStep{r: r, name: strings.Repeat("n", 200), streaming: true, tailMax: 4}
+	s.tailLines = []string{
+		strings.Repeat("x", 200), // long ASCII: must truncate to exactly cols-1
+		strings.Repeat("你", 100), // wide (2-cell) runes: must not overshoot
+	}
+	r.active = s
+	r.paintLocked()
+
+	out := buf.String()
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 { // header + 2 tail lines
+		t.Fatalf("want 3 painted lines, got %d: %q", len(lines), out)
+	}
+	// Header (lines[0]) and the long ASCII tail (lines[1]) must use the full
+	// width-1 budget: not wider (would wrap), not narrower (off-by-one slack).
+	for i, want := 0, cols-1; i <= 1; i++ {
+		if got := visibleWidth(lines[i]); got != want {
+			t.Errorf("line %d width = %d, want exactly %d (width-1): %q", i, got, want, lines[i])
+		}
+	}
+	// Wide runes can't always fill the last cell, so allow <= width-1 but
+	// never wider — overshoot is the wrap bug.
+	if got := visibleWidth(lines[2]); got > cols-1 {
+		t.Errorf("wide-rune line width = %d, want <= %d: %q", got, cols-1, lines[2])
+	}
+
+	// Row-count integrity: with no line wrapping, the logical line count the
+	// repaint walks back over must equal the physical rows painted.
+	if r.liveLines != 3 {
+		t.Fatalf("liveLines = %d, want 3 (physical rows)", r.liveLines)
+	}
+	// The next paint must reposition by exactly liveLines-1 rows. A wrong
+	// count here is the desync that floods scrollback.
+	buf.Reset()
+	r.paintLocked()
+	if up := "\x1b[2A"; !strings.Contains(buf.String(), up) {
+		t.Errorf("repaint must walk cursor up %q (liveLines-1), got: %q", up, buf.String())
+	}
+}
+
+// When the width is unknown (output is not a sized tty), clamping is skipped
+// so piped/redirected output keeps full lines.
+func TestPrettyPaintSkipsClampWhenWidthUnknown(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	for _, tc := range []struct {
+		name  string
+		width func() int
+	}{
+		{"nil width", nil},
+		{"zero width", func() int { return 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			r := &prettyReporter{w: &buf, now: time.Now, tickEvery: time.Second, width: tc.width}
+			s := &prettyStep{r: r, name: "build", streaming: true, tailMax: 4}
+			s.tailLines = []string{long}
+			r.active = s
+			r.paintLocked()
+			if !strings.Contains(buf.String(), long) {
+				t.Errorf("unknown width must not clamp; full line missing: %q", buf.String())
+			}
+		})
 	}
 }
 
