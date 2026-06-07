@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +199,18 @@ func (s *SSHContainer) Cleanup(ctx context.Context) {
 // SSHConfigExecutor is a custom executor that uses a specific SSH config file
 type SSHConfigExecutor struct {
 	ConfigPath string
+	stdout     io.Writer // nil → os.Stdout
+	stderr     io.Writer // nil → os.Stderr
+}
+
+// SetOutput overrides the writers used by RunInteractive. Passing nil for a
+// writer restores the default (os.Stdout / os.Stderr). Mirrors
+// remote.RealExecutor.SetOutput so this helper satisfies
+// remote.CommandExecutor. Not safe for concurrent use — set, run, restore
+// from a single goroutine.
+func (e *SSHConfigExecutor) SetOutput(stdout, stderr io.Writer) {
+	e.stdout = stdout
+	e.stderr = stderr
 }
 
 // Run executes a command using the custom SSH config
@@ -212,12 +226,21 @@ func (e *SSHConfigExecutor) Run(ctx context.Context, name string, args ...string
 	return stdout.String(), nil
 }
 
-// RunInteractive executes a command with terminal output
+// RunInteractive executes a command with output streamed to the configured
+// writers (defaults: os.Stdout / os.Stderr, overridable via SetOutput).
 func (e *SSHConfigExecutor) RunInteractive(ctx context.Context, name string, args ...string) error {
 	args = e.injectSSHConfig(name, args)
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	out := e.stdout
+	if out == nil {
+		out = os.Stdout
+	}
+	errW := e.stderr
+	if errW == nil {
+		errW = os.Stderr
+	}
+	cmd.Stdout = out
+	cmd.Stderr = errW
 	return cmd.Run()
 }
 
@@ -233,6 +256,19 @@ func (e *SSHConfigExecutor) injectSSHConfig(name string, args []string) []string
 		sshCmd := fmt.Sprintf("ssh -F %s", e.ConfigPath)
 		newArgs := []string{"-e", sshCmd}
 		return append(newArgs, args...)
+	case "bash":
+		// Client.Rsync runs `bash -c "git archive … | ssh <server> …"`. The
+		// inner ssh is not a top-level command, so the case above never sees
+		// it. Rewrite the pipeline string to thread -F into that nested ssh,
+		// matching the "ssh" case so the test config is honored.
+		out := make([]string, len(args))
+		copy(out, args)
+		for i, a := range out {
+			if strings.Contains(a, "| ssh ") {
+				out[i] = strings.Replace(a, "| ssh ", fmt.Sprintf("| ssh -F %s ", e.ConfigPath), 1)
+			}
+		}
+		return out
 	default:
 		return args
 	}

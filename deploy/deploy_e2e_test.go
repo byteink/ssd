@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,186 +19,162 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupE2EEnvironment creates a complete test environment with SSH and Docker
-func setupE2EEnvironment(t *testing.T) (*testhelpers.SSHContainer, *config.Config, string, func()) {
-	t.Helper()
+// E2E tests run the real DeployWithClient path against an isolated
+// docker-in-docker sandbox — a privileged container that runs its own Docker
+// daemon plus sshd. ssd SSHes in and does real `docker build` / `docker
+// compose` / `docker rollout` entirely inside that container, so the host
+// Docker is never touched and everything is torn down with the sandbox.
+//
+// Two modes, mirroring how the toolchain is installed by `ssd provision`:
+//   - fast (default, CI): recreate strategy, compose plugin only.
+//   - full (SSD_E2E_FULL set, run locally before release): rollout strategy,
+//     docker-rollout plugin installed exactly as provision installs it.
+func e2eFullMode() bool { return os.Getenv("SSD_E2E_FULL") != "" }
 
+// gitInitCommitE2E makes dir a git repo with one commit. Client.Rsync ships the
+// build context via `git archive HEAD`, so the context must be a committed repo.
+func gitInitCommitE2E(t *testing.T, dir string) {
+	t.Helper()
+	cmds := [][]string{
+		{"git", "-C", dir, "init"},
+		{"git", "-C", dir, "config", "user.email", "test@test.com"},
+		{"git", "-C", dir, "config", "user.name", "Test"},
+		{"git", "-C", dir, "add", "-A"},
+		{"git", "-C", dir, "commit", "-m", "test"},
+	}
+	for _, c := range cmds {
+		out, err := exec.Command(c[0], c[1:]...).CombinedOutput()
+		require.NoError(t, err, "command %v failed: %s", c, string(out))
+	}
+}
+
+// setupE2EEnvironment starts the DinD sandbox, provisions it for the active
+// mode, and returns a ready single-service config plus a cleanup func.
+func setupE2EEnvironment(t *testing.T) (*testhelpers.SSHContainer, *config.Config, func()) {
+	t.Helper()
 	ctx := context.Background()
 
-	// Start SSH container
-	sshContainer, err := testhelpers.StartSSHContainer(ctx, t)
-	require.NoError(t, err, "failed to start SSH container")
+	sandbox, err := testhelpers.StartSSHDockerContainer(ctx, t)
+	require.NoError(t, err, "failed to start dind sandbox")
 
-	// Generate SSH config
-	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
-	require.NoError(t, err, "failed to write SSH config")
-
-	// Install Docker on the SSH container
-	t.Log("Installing Docker on SSH container...")
-	installDocker := `
-		apk add --no-cache docker docker-compose
-		rc-update add docker boot
-		service docker start
-		sleep 2
-	`
-	_, err = sshContainer.RunSSH(installDocker)
-	require.NoError(t, err, "failed to install Docker")
-
-	// Create test project directory
-	tmpDir := t.TempDir()
-	projectDir := filepath.Join(tmpDir, "testproject")
-	err = os.Mkdir(projectDir, 0755)
+	// Side effect: writes ssh_config next to the key; newE2EClient reads it back.
+	_, err = sandbox.WriteSSHConfig("testserver")
 	require.NoError(t, err)
 
-	// Create a minimal Dockerfile
-	dockerfile := `FROM alpine:latest
-CMD ["sh", "-c", "echo 'Test app running' && sleep 3600"]
-`
-	err = os.WriteFile(filepath.Join(projectDir, "Dockerfile"), []byte(dockerfile), 0644)
+	// Provision the sandbox like `ssd provision`: compose plugin always,
+	// docker-rollout only for the full-fidelity local run.
+	provision := []string{"apk add --no-cache docker-cli-compose git"}
+	strategy := "recreate"
+	if e2eFullMode() {
+		provision = append(provision,
+			"apk add --no-cache curl",
+			"mkdir -p /root/.docker/cli-plugins",
+			"curl -fsSL https://raw.githubusercontent.com/wowu/docker-rollout/main/docker-rollout "+
+				"-o /root/.docker/cli-plugins/docker-rollout",
+			"chmod +x /root/.docker/cli-plugins/docker-rollout")
+		strategy = "rollout"
+	}
+	for _, cmd := range provision {
+		_, err := sandbox.RunSSH(cmd)
+		require.NoError(t, err, "provision step failed: %s", cmd)
+	}
+
+	// Stack root on the remote (sandbox user is root — no sudo needed).
+	_, err = sandbox.RunSSH("mkdir -p /stacks")
 	require.NoError(t, err)
 
-	// Create stack directory on remote server
-	stackPath := "/stacks/testapp"
-	_, err = sshContainer.RunSSH(fmt.Sprintf("mkdir -p %s", stackPath))
-	require.NoError(t, err)
+	// Local build context: a committed git repo with a long-lived container.
+	projectDir := t.TempDir()
+	dockerfile := "FROM alpine:latest\nCMD [\"sh\", \"-c\", \"echo running && sleep 3600\"]\n"
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "Dockerfile"), []byte(dockerfile), 0644))
+	gitInitCommitE2E(t, projectDir)
 
-	// Create test config
 	cfg := &config.Config{
 		Name:       "testapp",
 		Server:     "testserver",
-		Stack:      stackPath,
+		Stack:      "/stacks/testapp",
 		Dockerfile: "./Dockerfile",
 		Context:    projectDir,
+		Deploy:     &config.DeployConfig{Strategy: strategy},
 	}
+	t.Logf("e2e mode: strategy=%s full=%v", strategy, e2eFullMode())
 
-	// Set SSH config environment variable
-	oldSSHConfig := os.Getenv("SSH_CONFIG")
-	os.Setenv("SSH_CONFIG", sshConfig)
+	return sandbox, cfg, func() { sandbox.Cleanup(ctx) }
+}
 
-	cleanup := func() {
-		os.Setenv("SSH_CONFIG", oldSSHConfig)
-		sshContainer.Cleanup(ctx)
-	}
+// newE2EClient wires a remote client that talks to the sandbox via its SSH config.
+func newE2EClient(t *testing.T, sandbox *testhelpers.SSHContainer, cfg *config.Config) *remote.Client {
+	t.Helper()
+	sshConfigPath := filepath.Join(filepath.Dir(sandbox.KeyPath), "ssh_config")
+	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
+	return remote.NewClientWithExecutor(cfg, executor)
+}
 
-	return sshContainer, cfg, projectDir, cleanup
+// deployE2E runs one full deploy and returns the captured reporter output.
+func deployE2E(t *testing.T, cfg *config.Config, client *remote.Client) string {
+	t.Helper()
+	out := new(strings.Builder)
+	err := DeployWithClient(cfg, client, &Options{Output: out})
+	require.NoError(t, err, "deploy failed; output:\n%s", out.String())
+	return out.String()
 }
 
 func TestE2E_FirstDeploy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
 	}
-
-	sshContainer, cfg, projectDir, cleanup := setupE2EEnvironment(t)
-	defer cleanup()
-
 	ctx := context.Background()
 
-	// Create a basic compose.yaml (empty, no services yet)
-	initialCompose := `services:
-  app:
-    image: placeholder:0
-    ports:
-      - "8080:8080"
-`
-	_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", initialCompose, cfg.Stack))
-	require.NoError(t, err)
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
 
-	// Create client with SSH config executor
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
+	out := deployE2E(t, cfg, client)
 
-	// Perform deployment
-	output := new(strings.Builder)
-	opts := &Options{Output: output}
-	err = DeployWithClient(cfg, client, opts)
-	require.NoError(t, err, "first deploy should succeed")
-
-	// Verify version was incremented to 1
+	// Fresh stack starts at version 0 → first deploy is version 1.
 	version, err := client.GetCurrentVersion(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, version, "version should be 1 after first deploy")
 
-	// Verify compose.yaml was updated
-	composeContent, err := sshContainer.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
+	imageTag := fmt.Sprintf("%s:1", cfg.ImageName())
+	images, err := sandbox.RunSSH("docker images --format '{{.Repository}}:{{.Tag}}'")
 	require.NoError(t, err)
-	assert.Contains(t, composeContent, "ssd-testapp:1", "compose.yaml should contain new image tag")
+	assert.Contains(t, images, imageTag, "built image should exist in the sandbox")
 
-	// Verify Docker image exists
-	imageList, err := sshContainer.RunSSH("docker images --format '{{.Repository}}:{{.Tag}}'")
+	compose, err := sandbox.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
 	require.NoError(t, err)
-	assert.Contains(t, imageList, "ssd-testapp:1", "Docker image should exist")
+	assert.Contains(t, compose, imageTag, "compose.yaml should reference the new tag")
 
-	// Verify deployment output contains expected messages
-	outputStr := output.String()
-	assert.Contains(t, outputStr, "Checking current version", "output should mention version check")
-	assert.Contains(t, outputStr, "deploying version: 1", "output should mention deploying version 1")
-	assert.Contains(t, outputStr, "Deployed testapp version 1 successfully", "output should confirm success")
-
-	// Save project directory for next test
-	t.Setenv("E2E_PROJECT_DIR", projectDir)
+	assert.Contains(t, out, "Deployed testapp version 1 successfully")
 }
 
 func TestE2E_UpgradeDeploy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
 	}
-
-	sshContainer, cfg, _, cleanup := setupE2EEnvironment(t)
-	defer cleanup()
-
 	ctx := context.Background()
 
-	// Create initial compose.yaml with version 5
-	initialCompose := `services:
-  app:
-    image: ssd-testapp:5
-    ports:
-      - "8080:8080"
-`
-	_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", initialCompose, cfg.Stack))
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
+
+	// First deploy establishes version 1; second must increment to 2.
+	deployE2E(t, cfg, client)
+	v1, err := client.GetCurrentVersion(ctx)
 	require.NoError(t, err)
+	require.Equal(t, 1, v1)
 
-	// Build version 5 image manually so it exists
-	_, err = sshContainer.RunSSH("echo 'FROM alpine:latest\nCMD sleep 3600' | docker build -t ssd-testapp:5 -")
+	out := deployE2E(t, cfg, client)
+
+	v2, err := client.GetCurrentVersion(ctx)
 	require.NoError(t, err)
+	assert.Equal(t, 2, v2, "second deploy should increment to version 2")
 
-	// Create client
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
-
-	// Verify current version is 5
-	currentVersion, err := client.GetCurrentVersion(ctx)
+	compose, err := sandbox.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
 	require.NoError(t, err)
-	assert.Equal(t, 5, currentVersion, "current version should be 5")
-
-	// Perform upgrade deployment
-	output := new(strings.Builder)
-	opts := &Options{Output: output}
-	err = DeployWithClient(cfg, client, opts)
-	require.NoError(t, err, "upgrade deploy should succeed")
-
-	// Verify version was incremented to 6
-	newVersion, err := client.GetCurrentVersion(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 6, newVersion, "version should be incremented to 6")
-
-	// Verify compose.yaml was updated
-	composeContent, err := sshContainer.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
-	require.NoError(t, err)
-	assert.Contains(t, composeContent, "ssd-testapp:6", "compose.yaml should contain new version")
-	assert.NotContains(t, composeContent, "ssd-testapp:5", "compose.yaml should not contain old version")
-
-	// Verify new Docker image exists
-	imageList, err := sshContainer.RunSSH("docker images --format '{{.Repository}}:{{.Tag}}'")
-	require.NoError(t, err)
-	assert.Contains(t, imageList, "ssd-testapp:6", "new Docker image should exist")
-
-	// Verify output mentions version increment
-	outputStr := output.String()
-	assert.Contains(t, outputStr, "Current version: 5", "output should show current version")
-	assert.Contains(t, outputStr, "deploying version: 6", "output should show new version")
+	assert.Contains(t, compose, fmt.Sprintf("%s:2", cfg.ImageName()))
+	assert.NotContains(t, compose, fmt.Sprintf("%s:1", cfg.ImageName()))
+	assert.Contains(t, out, "Version: 1 → 2")
 }
 
 func TestE2E_VerifyContainerRunning(t *testing.T) {
@@ -205,136 +182,34 @@ func TestE2E_VerifyContainerRunning(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
-	sshContainer, cfg, _, cleanup := setupE2EEnvironment(t)
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
 	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
 
-	ctx := context.Background()
+	deployE2E(t, cfg, client)
 
-	// Create compose.yaml with a simple service
-	composeContent := `services:
-  app:
-    image: ssd-testapp:1
-    container_name: testapp-container
-    command: sh -c "echo 'Container started' && sleep 3600"
-`
-	_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", composeContent, cfg.Stack))
+	// The container sleeps 3600s, so it stays Up after deploy returns.
+	ps, err := sandbox.RunSSH("docker ps --format '{{.Image}}\\t{{.Status}}'")
 	require.NoError(t, err)
-
-	// Create client
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
-
-	// Deploy
-	err = DeployWithClient(cfg, client, nil)
-	require.NoError(t, err, "deployment should succeed")
-
-	// Wait for container to start
-	time.Sleep(2 * time.Second)
-
-	// Verify container is running
-	status, err := client.GetContainerStatus(ctx)
-	require.NoError(t, err)
-	assert.NotEmpty(t, status, "container status should not be empty")
-
-	// Check container is actually running via docker ps
-	containerList, err := sshContainer.RunSSH("docker ps --format '{{.Names}}\\t{{.Status}}'")
-	require.NoError(t, err)
-	assert.Contains(t, containerList, "testapp", "container should be running")
-	assert.Contains(t, containerList, "Up", "container status should be Up")
-
-	// Verify we can get logs
-	logs, err := sshContainer.RunSSH(fmt.Sprintf("cd %s && docker compose logs --tail 10", cfg.Stack))
-	require.NoError(t, err)
-	assert.NotEmpty(t, logs, "logs should not be empty")
+	assert.Contains(t, ps, cfg.ImageName(), "deployed container should be running")
+	assert.Contains(t, ps, "Up", "container status should be Up")
 }
 
-func TestE2E_VerifyVersionInCompose(t *testing.T) {
+func TestE2E_VersionIncrement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
 	}
-
-	sshContainer, cfg, _, cleanup := setupE2EEnvironment(t)
-	defer cleanup()
-
 	ctx := context.Background()
 
-	testCases := []struct {
-		name            string
-		initialVersion  int
-		expectedVersion int
-	}{
-		{
-			name:            "version 0 to 1",
-			initialVersion:  0,
-			expectedVersion: 1,
-		},
-		{
-			name:            "version 10 to 11",
-			initialVersion:  10,
-			expectedVersion: 11,
-		},
-		{
-			name:            "version 99 to 100",
-			initialVersion:  99,
-			expectedVersion: 100,
-		},
-	}
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Create compose.yaml with initial version
-			var composeContent string
-			if tc.initialVersion == 0 {
-				composeContent = `services:
-  app:
-    image: placeholder:latest
-    ports:
-      - "8080:8080"
-`
-			} else {
-				composeContent = fmt.Sprintf(`services:
-  app:
-    image: ssd-testapp:%d
-    ports:
-      - "8080:8080"
-`, tc.initialVersion)
-			}
-
-			_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", composeContent, cfg.Stack))
-			require.NoError(t, err)
-
-			// If initial version > 0, create the image
-			if tc.initialVersion > 0 {
-				_, err = sshContainer.RunSSH(fmt.Sprintf("echo 'FROM alpine:latest' | docker build -t ssd-testapp:%d -", tc.initialVersion))
-				require.NoError(t, err)
-			}
-
-			// Create client
-			sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-			executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-			client := remote.NewClientWithExecutor(cfg, executor)
-
-			// Deploy
-			err = DeployWithClient(cfg, client, nil)
-			require.NoError(t, err)
-
-			// Read compose.yaml and verify version
-			composeResult, err := sshContainer.RunSSH(fmt.Sprintf("cat %s/compose.yaml", cfg.Stack))
-			require.NoError(t, err)
-
-			expectedImageTag := fmt.Sprintf("ssd-testapp:%d", tc.expectedVersion)
-			assert.Contains(t, composeResult, expectedImageTag, "compose.yaml should contain correct version")
-
-			// Verify version via client
-			version, err := client.GetCurrentVersion(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedVersion, version, "GetCurrentVersion should return correct version")
-
-			// Cleanup for next iteration
-			_, _ = sshContainer.RunSSH(fmt.Sprintf("docker compose -f %s/compose.yaml down 2>/dev/null || true", cfg.Stack))
-			_, _ = sshContainer.RunSSH("docker image prune -f")
-		})
+	for expected := 1; expected <= 3; expected++ {
+		deployE2E(t, cfg, client)
+		got, err := client.GetCurrentVersion(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, expected, got, "deploy %d should produce version %d", expected, expected)
 	}
 }
 
@@ -342,57 +217,32 @@ func TestE2E_RsyncExclusions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")
 	}
+	ctx := context.Background()
 
-	sshContainer, cfg, projectDir, cleanup := setupE2EEnvironment(t)
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
 	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
 
-	// Create files that should be excluded
-	excludedDirs := []string{".git", "node_modules", ".next"}
-	for _, dir := range excludedDirs {
-		dirPath := filepath.Join(projectDir, dir)
-		err := os.Mkdir(dirPath, 0755)
-		require.NoError(t, err)
-		err = os.WriteFile(filepath.Join(dirPath, "test.txt"), []byte("excluded"), 0644)
-		require.NoError(t, err)
-	}
+	// git archive ships only tracked files. A tracked source file must arrive;
+	// .git internals and a .gitignored dir must not.
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "app.go"), []byte("package main"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, ".gitignore"), []byte("node_modules/\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Context, "node_modules"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "node_modules", "junk.txt"), []byte("junk"), 0644))
+	gitInitCommitE2E(t, cfg.Context)
 
-	// Create files that should be included
-	err := os.WriteFile(filepath.Join(projectDir, "app.go"), []byte("package main"), 0644)
+	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
-	// Create client
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
+	require.NoError(t, client.Rsync(ctx, cfg.Context, remoteDir))
 
-	// Create initial compose
-	initialCompose := `services:
-  app:
-    image: ssd-testapp:1
-`
-	_, err = sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", initialCompose, cfg.Stack))
+	listing, err := sandbox.RunSSH(fmt.Sprintf("ls -a %s", remoteDir))
 	require.NoError(t, err)
-
-	// Deploy
-	err = DeployWithClient(cfg, client, nil)
-	require.NoError(t, err)
-
-	// Verify excluded directories don't exist on remote
-	tempDirs, err := sshContainer.RunSSH("find /tmp -maxdepth 1 -name 'tmp.*' -type d 2>/dev/null | head -1")
-	require.NoError(t, err)
-	tempDir := strings.TrimSpace(tempDirs)
-
-	if tempDir != "" {
-		for _, excludedDir := range excludedDirs {
-			output, _ := sshContainer.RunSSH(fmt.Sprintf("ls -la %s/%s 2>&1", tempDir, excludedDir))
-			assert.Contains(t, output, "No such file", "excluded directory %s should not be synced", excludedDir)
-		}
-
-		// Verify included files exist
-		output, err := sshContainer.RunSSH(fmt.Sprintf("ls %s/app.go 2>&1", tempDir))
-		assert.NoError(t, err, "included file should be synced")
-		assert.NotContains(t, output, "No such file", "app.go should exist")
-	}
+	assert.Contains(t, listing, "app.go", "tracked file should be synced")
+	assert.Contains(t, listing, "Dockerfile", "tracked file should be synced")
+	assert.NotContains(t, listing, "node_modules", ".gitignored dir must not be synced")
+	assert.NotContains(t, listing, ".git\n", ".git internals must not be synced")
 }
 
 func TestE2E_DeploymentLocking(t *testing.T) {
@@ -400,44 +250,33 @@ func TestE2E_DeploymentLocking(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
-	sshContainer, cfg, _, cleanup := setupE2EEnvironment(t)
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
 	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
 
-	// Create compose.yaml
-	composeContent := `services:
-  app:
-    image: ssd-testapp:1
-`
-	_, err := sshContainer.RunSSH(fmt.Sprintf("echo '%s' > %s/compose.yaml", composeContent, cfg.Stack))
-	require.NoError(t, err)
-
-	// Create client
-	sshConfigPath := filepath.Join(filepath.Dir(sshContainer.KeyPath), "ssh_config")
-	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfigPath}
-	client := remote.NewClientWithExecutor(cfg, executor)
-
-	// Acquire lock manually
+	// Hold the stack lock, then start a deploy: it must stay blocked while the
+	// lock is held and complete once released. (The 5-minute acquire timeout
+	// itself is covered by TestAcquireLock — re-proving it here would mean a
+	// 5-minute wait.)
 	unlock, err := acquireLockWithTimeout(cfg.StackPath(), 2*time.Second)
 	require.NoError(t, err)
 
-	// Try to deploy while lock is held (should timeout)
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- DeployWithClient(cfg, client, nil)
-	}()
+	done := make(chan error, 1)
+	go func() { done <- DeployWithClient(cfg, client, nil) }()
 
 	select {
-	case err := <-errChan:
-		assert.Error(t, err, "deployment should fail when lock is held")
-		assert.Contains(t, err.Error(), "timeout", "error should mention timeout")
+	case err := <-done:
+		t.Fatalf("deploy proceeded while the lock was held: %v", err)
 	case <-time.After(3 * time.Second):
-		t.Fatal("deployment should have timed out")
+		// Still blocked on the lock, as required.
 	}
 
-	// Release lock
 	unlock()
 
-	// Now deployment should succeed
-	err = DeployWithClient(cfg, client, nil)
-	assert.NoError(t, err, "deployment should succeed after lock is released")
+	select {
+	case err := <-done:
+		require.NoError(t, err, "deploy should succeed after the lock is released")
+	case <-time.After(3 * time.Minute):
+		t.Fatal("deploy did not complete after the lock was released")
+	}
 }

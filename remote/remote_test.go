@@ -152,6 +152,41 @@ func TestClient_Rsync_Subdirectory(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
+// TestClient_Rsync_ResolvesSymlinkedContext guards a macOS/CI regression: when
+// the context path traverses a symlink (e.g. /var -> /private/var, or a /tmp
+// build dir), `git rev-parse --show-toplevel` returns the canonical path while
+// the caller's localPath is unresolved. filepath.Rel then emits a `../../`
+// traversal that `git archive --` rejects ("is outside repository"). Rsync must
+// canonicalise localPath so the git-root-relative path stays inside the repo.
+func TestClient_Rsync_ResolvesSymlinkedContext(t *testing.T) {
+	realDir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	canonical, err := filepath.EvalSymlinks(realDir)
+	require.NoError(t, err)
+
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+	// Mirror `git rev-parse --show-toplevel`: always the canonical root.
+	client.findGitRoot = func(string) (string, error) { return canonical, nil }
+
+	mockExec.On("RunInteractive", "bash", mock.MatchedBy(func(args []string) bool {
+		if len(args) != 2 || args[0] != "-c" {
+			return false
+		}
+		pipeline := args[1]
+		// Context resolves onto the git root: no upward traversal, root context.
+		return !strings.Contains(pipeline, "..") &&
+			!strings.Contains(pipeline, "--strip-components") &&
+			!strings.Contains(pipeline, " -- ")
+	})).Return(nil)
+
+	require.NoError(t, client.Rsync(context.Background(), link, "/remote/path"))
+	mockExec.AssertExpectations(t)
+}
+
 func TestClient_Rsync_GitRootError(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)

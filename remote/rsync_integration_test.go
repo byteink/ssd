@@ -62,7 +62,7 @@ func TestRsync_BasicSync(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "file1.txt"), []byte("content1"), 0644))
@@ -83,7 +83,7 @@ func TestRsync_BasicSync(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestRsync_ExcludesGitignored(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 
@@ -152,7 +152,7 @@ func TestRsync_ExcludesGitignored(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestRsync_DeepNestedPath(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 
@@ -211,7 +211,7 @@ func TestRsync_DeepNestedPath(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func TestRsync_LargeFile(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 
@@ -278,7 +278,7 @@ func TestRsync_LargeFile(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestRsync_ManySmallFiles(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 
@@ -329,7 +329,7 @@ func TestRsync_ManySmallFiles(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestRsync_FilenameWithSpaces(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 	testContent := "content with spaces"
@@ -379,7 +379,7 @@ func TestRsync_FilenameWithSpaces(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
@@ -410,7 +410,7 @@ func TestRsync_FilenameWithUnicode(t *testing.T) {
 
 	localDir, err := os.MkdirTemp("", "rsync-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(localDir)
+	defer func() { _ = os.RemoveAll(localDir) }()
 
 	initGitRepo(t, localDir)
 	testContent := "unicode content"
@@ -430,7 +430,7 @@ func TestRsync_FilenameWithUnicode(t *testing.T) {
 
 	remoteDir, err := client.MakeTempDir(ctx)
 	require.NoError(t, err)
-	defer client.Cleanup(ctx, remoteDir)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
 
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)

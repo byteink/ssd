@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Rules
 
-- **TDD**: Write tests first, then implementation
+- **TDD is mandatory — red/green, every tier**: Write a failing test first, watch
+  it fail (red), then write the minimum code to make it pass (green). This is a
+  hard requirement and it applies to **all** test tiers — unit, integration,
+  **and e2e**. No production behaviour change lands without a test that failed
+  before it and passes after.
+- **Release gate — the whole suite must be green**: Nothing is released until
+  unit **and** integration **and** e2e all pass. Run `make test-all` locally
+  before tagging a release (it runs unit + integration + full-fidelity e2e). A
+  red test anywhere blocks the release, no exceptions.
 - **Never weaken tests**: Fix code, not tests
 - **Never relax linting**: Fix errors, don't disable rules or use `_ =`
 - **CLAUDE.md is the source of truth**: This file must always reflect the current state of the app. Every feature addition, removal, or change must include a CLAUDE.md update in the same changeset. If the code and CLAUDE.md disagree, the code is wrong or CLAUDE.md is stale — fix whichever is behind. Never merge a change that leaves CLAUDE.md out of sync.
@@ -21,17 +29,58 @@ make setup             # Configure git hooks for linting (run once after clone)
 
 ```bash
 make build             # Build binary (also runs make setup if needed)
-make test              # Run tests
-make lint              # Run linter
+make test              # Run unit tests
+make lint              # Run linter (lints unit + integration + e2e sources)
 go run .               # Run directly
 ./ssd version          # Test the binary
 ```
+
+## Testing
+
+Three tiers, each red/green TDD (see Development Rules). Lint runs over all
+three (`make lint` passes `--build-tags 'integration e2e'`).
+
+```bash
+make test              # Unit — fast, no Docker. Runs in CI on every push/PR.
+make test-integration  # Integration — real SSH/Docker in throwaway containers.
+make test-e2e          # E2E, fast path — full deploy in a DinD sandbox.
+make test-e2e-full     # E2E, full-fidelity path — local pre-release gate.
+make test-all          # Unit + integration + full-fidelity e2e (release gate).
+```
+
+- **Unit** (`./...`, no tags): pure-Go, mocked executors. CI required check.
+- **Integration** (`//go:build integration`): spins up real SSH / docker:dind
+  containers via testcontainers and exercises `remote` against them (SSH,
+  rsync-over-`git archive`, docker build). CI required check.
+- **E2E** (`//go:build e2e`): runs the real `DeployWithClient` path against an
+  **isolated docker-in-docker sandbox** — a privileged container running its
+  own Docker daemon plus sshd. ssd SSHes in and does real `docker build` /
+  `docker compose` / `docker rollout` entirely inside that container, so the
+  **host Docker is never touched** and everything dies with the sandbox.
+  Two modes:
+  - **fast** (default, CI): recreate strategy, compose plugin only. ~4 min.
+  - **full-fidelity** (`SSD_E2E_FULL=1`, local pre-release): provisions
+    `docker-rollout` exactly as `ssd provision` does and drives the real
+    zero-downtime rollout deploy. This is the gate to run before tagging.
+
+Test infrastructure lives in `internal/testhelpers/` (DinD/SSH containers,
+chaos executor, mocks, fixtures). The `SSHConfigExecutor` there must satisfy
+`remote.CommandExecutor`; a compile-time guard in `containers_test.go` keeps the
+gated suites from silently rotting when that interface changes.
+
+CI (`.github/workflows/test.yml`): `unit-tests`, `integration-tests`, and
+`e2e-tests` (fast path) all run on every push/PR, plus `lint` and the
+cross-compile `build` matrix.
 
 ## Release
 
 Uses goreleaser. Version is injected via ldflags (`-X main.version={{.Version}}`).
 
+**Gate**: run `make test-all` first — unit + integration + full-fidelity e2e
+must all be green before tagging. A red test anywhere blocks the release.
+
 ```bash
+make test-all                           # Release gate — must be fully green
 goreleaser release --snapshot --clean   # Test release locally
 ```
 

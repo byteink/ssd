@@ -113,7 +113,7 @@ func (s *SSHIntegrationSuite) TestGetCurrentVersion_NoComposeFile() {
 	client := s.newClient()
 
 	// Ensure no compose.yaml exists
-	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
+	_, _ = client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 
 	version, err := client.GetCurrentVersion(context.Background())
 	require.NoError(s.T(), err)
@@ -141,7 +141,7 @@ EOF`)
 	assert.Equal(s.T(), 7, version)
 
 	// Cleanup
-	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
+	_, _ = client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestUpdateManifest() {
@@ -171,7 +171,7 @@ EOF`)
 	assert.NotContains(s.T(), output, "ssd-testapp-testapp:1")
 
 	// Cleanup
-	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
+	_, _ = client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
 func (s *SSHIntegrationSuite) TestCreateEnvFile() {
@@ -214,7 +214,7 @@ func (s *SSHIntegrationSuite) TestCreateEnvFile() {
 	assert.Contains(s.T(), strings.TrimSpace(output), "600")
 
 	// Cleanup
-	client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
+	_, _ = client.SSH(context.Background(), "rm -rf /tmp/stacks/testapp")
 }
 
 func TestSSHIntegrationSuite(t *testing.T) {

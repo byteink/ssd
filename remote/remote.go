@@ -142,6 +142,15 @@ func (c *Client) SSHInteractive(ctx context.Context, command string) error {
 // Rsync syncs local directory to remote server using git archive.
 // Only git-tracked files are transferred, automatically respecting .gitignore.
 func (c *Client) Rsync(ctx context.Context, localPath, remotePath string) error {
+	// Canonicalise the context path. `git rev-parse --show-toplevel` returns
+	// a symlink-resolved path; if localPath still traverses a symlink (macOS
+	// /var -> /private/var, a /tmp build dir), filepath.Rel below would emit a
+	// `../../` traversal that `git archive --` rejects. Fall back to the raw
+	// path when it can't be resolved (e.g. unit tests with synthetic paths).
+	if resolved, err := filepath.EvalSymlinks(localPath); err == nil {
+		localPath = resolved
+	}
+
 	// Find git repository root
 	gitRoot, err := c.findGitRoot(localPath)
 	if err != nil {
