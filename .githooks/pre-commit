@@ -1,5 +1,16 @@
 #!/bin/sh
-# Pre-commit hook to run linting
+# Pre-commit hook: gofmt staged Go files (lint-staged style), then lint.
+
+# Format only the staged Go files and re-stage them, so the committed content
+# is always gofmt-clean — without reformatting the whole repo.
+staged_go=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$')
+if [ -n "$staged_go" ]; then
+    echo "Formatting staged Go files (gofmt)..."
+    printf '%s\n' "$staged_go" | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        gofmt -w "$f" && git add "$f"
+    done
+fi
 
 echo "Running golangci-lint..."
 if ! golangci-lint run; then
