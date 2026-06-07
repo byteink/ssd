@@ -536,9 +536,19 @@ make setup    # Configures git hooks for linting
 
 # Build and test
 make build    # Build binary
-make test     # Run tests
+make test     # Run unit tests
 make lint     # Run linter
+
+# Test tiers (development is strict red/green TDD across all tiers)
+make test-integration  # Real SSH/Docker in throwaway containers (needs Docker)
+make test-e2e          # Full deploy in an isolated docker-in-docker sandbox
+make test-e2e-full     # Full-fidelity rollout deploy — run before a release
+make test-all          # Unit + integration + full e2e (the release gate)
 ```
+
+Tests never touch your host Docker: integration and e2e tiers run everything
+inside throwaway containers (e2e uses a docker-in-docker sandbox), torn down
+automatically. The whole suite must be green before any release.
 
 ## Claude Code Skill
 
