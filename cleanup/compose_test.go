@@ -110,4 +110,3 @@ func TestComposeCleaner_RemoveImage_RejectsForeignRef(t *testing.T) {
 	// Should never have called SSH.
 	client.AssertNotCalled(t, "SSH", mock.Anything)
 }
-

@@ -81,7 +81,7 @@ func (s *SSHIntegrationSuite) TestMakeTempDir() {
 	assert.True(s.T(), strings.HasPrefix(dir, "/tmp/"))
 
 	// Verify directory exists
-	output, err := client.SSH(context.Background(), "ls -d " + dir)
+	output, err := client.SSH(context.Background(), "ls -d "+dir)
 	require.NoError(s.T(), err)
 	assert.Contains(s.T(), output, dir)
 
@@ -97,7 +97,7 @@ func (s *SSHIntegrationSuite) TestCleanup() {
 	dir, err := client.MakeTempDir(context.Background())
 	require.NoError(s.T(), err)
 
-	_, err = client.SSH(context.Background(), "touch " + dir + "/testfile && mkdir " + dir + "/subdir")
+	_, err = client.SSH(context.Background(), "touch "+dir+"/testfile && mkdir "+dir+"/subdir")
 	require.NoError(s.T(), err)
 
 	// Cleanup
@@ -105,7 +105,7 @@ func (s *SSHIntegrationSuite) TestCleanup() {
 	require.NoError(s.T(), err)
 
 	// Verify it's gone
-	output, _ := client.SSH(context.Background(), "ls " + dir + " 2>&1 || echo 'DELETED'")
+	output, _ := client.SSH(context.Background(), "ls "+dir+" 2>&1 || echo 'DELETED'")
 	assert.Contains(s.T(), output, "DELETED")
 }
 

@@ -12,9 +12,9 @@ import (
 
 // ComposeFile represents the structure of a docker-compose.yaml file
 type ComposeFile struct {
-	Services map[string]Service         `yaml:"services"`
-	Networks map[string]Network         `yaml:"networks"`
-	Volumes  map[string]interface{}     `yaml:"volumes,omitempty"`
+	Services map[string]Service     `yaml:"services"`
+	Networks map[string]Network     `yaml:"networks"`
+	Volumes  map[string]interface{} `yaml:"volumes,omitempty"`
 }
 
 // Service represents a Docker Compose service definition

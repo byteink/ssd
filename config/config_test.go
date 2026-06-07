@@ -297,7 +297,7 @@ func TestRootConfig_GetService_MultiService(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "web-svc", svc.Name)
-	assert.Equal(t, "shared-server", svc.Server) // Inherited
+	assert.Equal(t, "shared-server", svc.Server)  // Inherited
 	assert.Equal(t, "/stacks/project", svc.Stack) // Inherited
 	assert.Equal(t, "./web", svc.Context)
 }
@@ -318,7 +318,7 @@ func TestRootConfig_GetService_MultiServiceInheritance(t *testing.T) {
 	svc, err := cfg.GetService("web")
 	require.NoError(t, err)
 
-	assert.Equal(t, "custom-server", svc.Server) // Uses custom
+	assert.Equal(t, "custom-server", svc.Server)  // Uses custom
 	assert.Equal(t, "/stacks/default", svc.Stack) // Inherited from root
 }
 
@@ -349,8 +349,8 @@ func TestRootConfig_GetService_ServiceNotFound(t *testing.T) {
 func TestRootConfig_ListServices(t *testing.T) {
 	cfg := &RootConfig{
 		Services: map[string]*Config{
-			"web": {},
-			"api": {},
+			"web":    {},
+			"api":    {},
 			"worker": {},
 		},
 	}
@@ -920,7 +920,7 @@ services:
       ./config.yaml: /app/config.yaml
       ./certs/ca.pem: /etc/ssl/ca.pem`,
 			expected: map[string]string{
-				"./config.yaml":   "/app/config.yaml",
+				"./config.yaml":  "/app/config.yaml",
 				"./certs/ca.pem": "/etc/ssl/ca.pem",
 			},
 		},

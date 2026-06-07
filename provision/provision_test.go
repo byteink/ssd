@@ -9,18 +9,18 @@ import (
 
 // MockRemoteClient is a test double for remote operations
 type MockRemoteClient struct {
-	SSHCalls         []string
-	SSHOutputs       map[string]string
-	SSHErrors        map[string]error
+	SSHCalls            []string
+	SSHOutputs          map[string]string
+	SSHErrors           map[string]error
 	SSHInteractiveCalls []string
 	InteractiveErrors   map[string]error
 }
 
 func NewMockRemoteClient() *MockRemoteClient {
 	return &MockRemoteClient{
-		SSHCalls:          make([]string, 0),
-		SSHOutputs:        make(map[string]string),
-		SSHErrors:         make(map[string]error),
+		SSHCalls:            make([]string, 0),
+		SSHOutputs:          make(map[string]string),
+		SSHErrors:           make(map[string]error),
 		SSHInteractiveCalls: make([]string, 0),
 		InteractiveErrors:   make(map[string]error),
 	}
@@ -295,11 +295,11 @@ func TestProvision_CallsStepsInOrder(t *testing.T) {
 
 	// Verify all steps were called in the correct order
 	expectedSSHSequence := []string{
-		"which docker",                                     // Step 1: Check Docker
-		"docker-rollout",                                   // Step 2: Install docker-rollout
-		"docker network create traefik_web",               // Step 3: Create network
-		"mkdir -p /stacks/traefik",                        // Step 4: Create directory
-		"test -f /stacks/traefik/acme.json",               // Step 5: Create acme.json
+		"which docker",                      // Step 1: Check Docker
+		"docker-rollout",                    // Step 2: Install docker-rollout
+		"docker network create traefik_web", // Step 3: Create network
+		"mkdir -p /stacks/traefik",          // Step 4: Create directory
+		"test -f /stacks/traefik/acme.json", // Step 5: Create acme.json
 	}
 
 	if len(mock.SSHCalls) < len(expectedSSHSequence) {

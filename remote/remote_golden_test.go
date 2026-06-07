@@ -119,4 +119,3 @@ func TestGolden_UpdateManifest_MixedSpacing(t *testing.T) {
 
 	require.Equal(t, expected, result)
 }
-

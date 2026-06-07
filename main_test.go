@@ -546,8 +546,8 @@ services:
 // TestProvisionParsing tests the flag parsing for provision command
 func TestProvisionParsing(t *testing.T) {
 	tests := []struct {
-		name          string
-		args          []string
+		name           string
+		args           []string
 		expectedServer string
 		expectedEmail  string
 		shouldPrompt   bool
@@ -938,4 +938,3 @@ func equalSlices(a, b []string) bool {
 	}
 	return true
 }
-

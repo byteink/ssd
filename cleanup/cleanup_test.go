@@ -40,8 +40,8 @@ func TestSelectOldTags_NeverRemovesRunning(t *testing.T) {
 func TestSelectOldTags_IgnoresNonNumeric(t *testing.T) {
 	tags := []Tag{
 		{Numeric: 5}, {Numeric: 4},
-		{Raw: "<none>"},            // intermediate layer
-		{Raw: "latest"},             // non-numeric user tag
+		{Raw: "<none>"}, // intermediate layer
+		{Raw: "latest"}, // non-numeric user tag
 		{Numeric: 3}, {Numeric: 2},
 	}
 	old := SelectOldTags(tags, 2, 5)
@@ -80,9 +80,9 @@ func TestSelectOldTags_DuplicatesNormalized(t *testing.T) {
 // fakeCleaner is a hand-rolled ImageCleaner recording calls — simpler
 // than mockery for the few behavioural tests PruneOldTags needs.
 type fakeCleaner struct {
-	listTags    func(string) ([]Tag, error)
-	removed     []string
-	removeErr   error
+	listTags  func(string) ([]Tag, error)
+	removed   []string
+	removeErr error
 }
 
 func (f *fakeCleaner) ListTags(_ context.Context, image string) ([]Tag, error) {

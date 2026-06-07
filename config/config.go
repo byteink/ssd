@@ -112,10 +112,10 @@ type Config struct {
 	Stack       string            `yaml:"stack"`
 	Dockerfile  string            `yaml:"dockerfile"`
 	Context     string            `yaml:"context"`
-	Domain      string            `yaml:"domain"`       // optional, enables Traefik (single domain)
-	Domains     []string          `yaml:"domains"`      // optional, multi-domain support
-	RedirectTo  string            `yaml:"redirect_to"`  // optional, domain to redirect all others to (must be in Domains)
-	Path        string            `yaml:"path"`         // optional, path prefix for Traefik routing
+	Domain      string            `yaml:"domain"`      // optional, enables Traefik (single domain)
+	Domains     []string          `yaml:"domains"`     // optional, multi-domain support
+	RedirectTo  string            `yaml:"redirect_to"` // optional, domain to redirect all others to (must be in Domains)
+	Path        string            `yaml:"path"`        // optional, path prefix for Traefik routing
 	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port        int               `yaml:"port"`        // default 80
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
@@ -123,20 +123,20 @@ type Config struct {
 	Target      string            `yaml:"target"`      // Docker build target stage
 	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
 	DependsOn   Dependencies      `yaml:"depends_on"`
-	Volumes     map[string]string `yaml:"volumes"`     // name: mount_path
-	Files       map[string]string `yaml:"files"`       // local_path: container_mount_path
-	EnvFile     string            `yaml:"env_file"`    // local path to .env file (relative to project root); overwrites {service}.env on deploy
+	Volumes     map[string]string `yaml:"volumes"`  // name: mount_path
+	Files       map[string]string `yaml:"files"`    // local_path: container_mount_path
+	EnvFile     string            `yaml:"env_file"` // local path to .env file (relative to project root); overwrites {service}.env on deploy
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
-	Cleanup     *CleanupConfig    `yaml:"cleanup"`     // post-deploy image tag retention; inherits from root
+	Cleanup     *CleanupConfig    `yaml:"cleanup"` // post-deploy image tag retention; inherits from root
 }
 
 // RootConfig represents the ssd.yaml file structure
 type RootConfig struct {
-	Runtime  string              `yaml:"runtime"`
-	Server   string              `yaml:"server"`
-	Stack    string              `yaml:"stack"`
-	Deploy   *DeployConfig       `yaml:"deploy"`
-	Cleanup  *CleanupConfig      `yaml:"cleanup"`
+	Runtime  string             `yaml:"runtime"`
+	Server   string             `yaml:"server"`
+	Stack    string             `yaml:"stack"`
+	Deploy   *DeployConfig      `yaml:"deploy"`
+	Cleanup  *CleanupConfig     `yaml:"cleanup"`
 	Services map[string]*Config `yaml:"services"`
 }
 
@@ -279,7 +279,8 @@ func DetectLayout() Layout {
 //
 // For .ssd/ssd.yaml      -> .ssd/.cache
 // For ssd.yaml (legacy)  -> .ssd-cache  (avoids cluttering repo root with
-//                                        an ambiguous ".cache" dir)
+//
+//	an ambiguous ".cache" dir)
 //
 // Generated artifacts must always live under this directory and never in
 // the repo root or alongside the config files themselves.
@@ -308,10 +309,11 @@ func mergeRawYAML(base, overlay []byte) ([]byte, error) {
 }
 
 // mergeNodes deep-merges overlay onto base at the YAML AST level.
-// - Documents: merge the inner content.
-// - Mapping: keys present in both are merged recursively; overlay-only
-//   keys are appended; base-only keys are kept.
-// - Scalar/Sequence: overlay replaces base.
+//   - Documents: merge the inner content.
+//   - Mapping: keys present in both are merged recursively; overlay-only
+//     keys are appended; base-only keys are kept.
+//   - Scalar/Sequence: overlay replaces base.
+//
 // Returns the merged node (may be base, mutated, or overlay).
 func mergeNodes(base, overlay *yaml.Node) *yaml.Node {
 	if base == nil || base.Kind == 0 {

@@ -148,7 +148,8 @@ func MigrateLegacy(dir string) (string, error) {
 //
 // Preferred: <dir>/.ssd/ssd.yaml (new layout, keeps repo root clean).
 // Legacy:    <dir>/ssd.yaml when it already exists, to avoid surprising
-//            existing projects with a new .ssd/ directory.
+//
+//	existing projects with a new .ssd/ directory.
 func TargetPath(dir string) string {
 	legacy := filepath.Join(dir, configFileName)
 	if _, err := os.Stat(legacy); err == nil {

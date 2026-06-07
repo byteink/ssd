@@ -194,6 +194,7 @@ func extractGlobalFlags(args []string) ([]string, error) {
 // As a side effect, prints layout-related warnings to stderr:
 //   - both .ssd/ssd.yaml and ./ssd.yaml exist (delete the legacy one)
 //   - only ./ssd.yaml exists (suggest `ssd migrate`)
+//
 // The warning is only emitted when --config was not given, since an
 // explicit path means the user is being deliberate about which file.
 func loadRootConfig() *config.RootConfig {

@@ -315,7 +315,7 @@ func StartSSHDockerContainer(ctx context.Context, t *testing.T) (*SSHContainer, 
 			"DOCKER_TLS_CERTDIR": "", // Disable TLS for simplicity in tests
 		},
 		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("2375/tcp").WithStartupTimeout(120*time.Second),
+			wait.ForListeningPort("2375/tcp").WithStartupTimeout(120 * time.Second),
 		),
 		LifecycleHooks: []testcontainers.ContainerLifecycleHooks{
 			{
