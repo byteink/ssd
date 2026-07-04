@@ -32,6 +32,88 @@ func sortedKeys(m map[string]*config.Config) []string {
 	return keys
 }
 
+// OrderByDependsOn returns service names ordered so every service comes after
+// the dependencies it declares via depends_on — a stable (alphabetical
+// tie-break) topological sort (Kahn's algorithm). Deploy-all uses it so a
+// dependency (e.g. a database) is started and Ready before a dependent whose
+// readiness probe needs it; iterating alphabetically would start the dependent
+// first and deadlock on its progress deadline.
+//
+// depends_on entries that name a non-service are ignored. Services caught in a
+// cycle are appended in alphabetical order so a bad depends_on never drops a
+// service from the deploy.
+func OrderByDependsOn(services map[string]*config.Config) []string {
+	names := sortedKeys(services)
+	indeg, dependents := dependencyGraph(services, names)
+
+	queue := make([]string, 0, len(names))
+	for _, n := range names {
+		if indeg[n] == 0 {
+			queue = append(queue, n)
+		}
+	}
+
+	ordered := make([]string, 0, len(names))
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		ordered = append(ordered, n)
+		for _, m := range dependents[n] {
+			indeg[m]--
+			if indeg[m] == 0 {
+				queue = insertSorted(queue, m)
+			}
+		}
+	}
+
+	return appendLeftover(ordered, names)
+}
+
+// dependencyGraph builds in-degree counts and a dep->dependents adjacency map
+// over the depends_on edges. Only edges to real services in the map count;
+// self-edges and dangling names are ignored. `names` must be sorted so the
+// adjacency lists are deterministic.
+func dependencyGraph(services map[string]*config.Config, names []string) (map[string]int, map[string][]string) {
+	indeg := make(map[string]int, len(names))
+	dependents := make(map[string][]string, len(names))
+	for _, n := range names {
+		for _, dep := range services[n].DependsOn.Names() {
+			if _, ok := services[dep]; ok && dep != n {
+				indeg[n]++
+				dependents[dep] = append(dependents[dep], n)
+			}
+		}
+	}
+	return indeg, dependents
+}
+
+// appendLeftover appends any names not already in ordered (services caught in
+// a cycle) in their given order, so a bad depends_on never drops a service.
+func appendLeftover(ordered, names []string) []string {
+	if len(ordered) == len(names) {
+		return ordered
+	}
+	seen := make(map[string]bool, len(ordered))
+	for _, n := range ordered {
+		seen[n] = true
+	}
+	for _, n := range names {
+		if !seen[n] {
+			ordered = append(ordered, n)
+		}
+	}
+	return ordered
+}
+
+// insertSorted inserts v into the already-sorted slice s, keeping it sorted.
+func insertSorted(s []string, v string) []string {
+	i := sort.SearchStrings(s, v)
+	s = append(s, "")
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	return s
+}
+
 // Deployer defines the interface for deployment operations
 type Deployer interface {
 	GetCurrentVersion(ctx context.Context) (int, error)

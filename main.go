@@ -288,11 +288,14 @@ func runDeploy(args []string) {
 			}
 		}
 
-		// Deploy each service using its configured strategy
+		// Deploy each service using its configured strategy, in dependency
+		// order so a dependency (e.g. a DB a readiness probe needs) is Ready
+		// before the dependent starts. Alphabetical order would start the
+		// dependent first and deadlock on its rollout deadline.
 		fmt.Println("\n==> Starting all services...")
 		client := runtime.New(rootCfg.Runtime, allServices[services[0]])
 		tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
-		for _, name := range services {
+		for _, name := range deploy.OrderByDependsOn(allServices) {
 			cfg := allServices[name]
 			strategy := cfg.DeployStrategy()
 			fmt.Printf("    %s (strategy: %s)...\n", name, strategy)

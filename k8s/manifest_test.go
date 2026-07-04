@@ -118,14 +118,25 @@ func TestGenerateManifests_SingleService(t *testing.T) {
 		t.Errorf("containerPort = %v, want 80", port["containerPort"])
 	}
 
-	// Check envFrom
+	// Check envFrom: an optional ConfigMap ref and an optional Secret ref.
+	// optional:true keeps the pod schedulable when a backing object is absent.
 	envFrom := container["envFrom"].([]interface{})
-	if len(envFrom) != 1 {
-		t.Fatalf("envFrom count = %d, want 1", len(envFrom))
+	if len(envFrom) != 2 {
+		t.Fatalf("envFrom count = %d, want 2", len(envFrom))
 	}
 	cmRef := envFrom[0].(map[string]interface{})["configMapRef"].(map[string]interface{})
 	if cmRef["name"] != "web-env" {
 		t.Errorf("configMapRef name = %v, want web-env", cmRef["name"])
+	}
+	if cmRef["optional"] != true {
+		t.Errorf("configMapRef optional = %v, want true", cmRef["optional"])
+	}
+	secRef := envFrom[1].(map[string]interface{})["secretRef"].(map[string]interface{})
+	if secRef["name"] != "web-secret" {
+		t.Errorf("secretRef name = %v, want web-secret", secRef["name"])
+	}
+	if secRef["optional"] != true {
+		t.Errorf("secretRef optional = %v, want true", secRef["optional"])
 	}
 
 	// ConfigMap is intentionally NOT emitted by GenerateManifests.
@@ -363,6 +374,12 @@ func TestGenerateManifests_WithVolumes(t *testing.T) {
 	pvc := findDoc(docs, "PersistentVolumeClaim", "postgres-data")
 	if pvc == nil {
 		t.Fatal("PersistentVolumeClaim missing")
+	}
+	// The PVC must carry app: <svc> so the per-service `kubectl apply
+	// -l app=<svc>` includes it (otherwise the pod hangs on FailedScheduling).
+	pvcLabels := pvc["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+	if pvcLabels["app"] != "postgres" {
+		t.Errorf("PVC label app = %v, want postgres", pvcLabels["app"])
 	}
 	pvcSpec := pvc["spec"].(map[string]interface{})
 	if pvcSpec["storageClassName"] != "local-path" {
@@ -942,5 +959,92 @@ func TestGenerateManifests_ReplicasDefaultsToOne(t *testing.T) {
 	spec := dep["spec"].(map[string]interface{})
 	if spec["replicas"] != 1 {
 		t.Errorf("replicas = %v, want 1", spec["replicas"])
+	}
+}
+
+// envFromRefName returns the referenced object name and its optional flag for
+// the given ref kind ("configMapRef" / "secretRef") in a container's envFrom.
+func envFromRefName(t *testing.T, container map[string]interface{}, kind string) (string, bool) {
+	t.Helper()
+	for _, e := range container["envFrom"].([]interface{}) {
+		entry := e.(map[string]interface{})
+		ref, ok := entry[kind].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := ref["name"].(string)
+		optional, _ := ref["optional"].(bool)
+		return name, optional
+	}
+	return "", false
+}
+
+func containerOf(t *testing.T, docs []map[string]interface{}, svc string) map[string]interface{} {
+	t.Helper()
+	dep := findDoc(docs, "Deployment", svc)
+	if dep == nil {
+		t.Fatalf("Deployment %q missing", svc)
+	}
+	spec := dep["spec"].(map[string]interface{})
+	podSpec := spec["template"].(map[string]interface{})["spec"].(map[string]interface{})
+	return podSpec["containers"].([]interface{})[0].(map[string]interface{})
+}
+
+// TestGenerateManifests_StackWithVolumesSecretsDepends is the regression for
+// the four k3s bugs at manifest-generation level: a db (volume) + a backend
+// (healthcheck needing the db, no env vars) + a frontend.
+//   - Bug 1: the db PVC carries app: db so the per-service apply includes it.
+//   - Bug 2: every service's Deployment wires a secretRef, so secrets set via
+//     `ssd secret set` reach the pod without a post-rollout patch.
+//   - Bug 3: refs are optional, so the env-less backend does not trip
+//     CreateContainerConfigError when its {svc}-env ConfigMap is absent.
+func TestGenerateManifests_StackWithVolumesSecretsDepends(t *testing.T) {
+	services := map[string]*config.Config{
+		"db": {
+			Name: "db", Stack: "/stacks/app", Image: "postgres:16-alpine", Port: 5432,
+			Volumes: map[string]string{"db-data": "/var/lib/postgresql/data"},
+		},
+		"backend": {
+			Name: "backend", Stack: "/stacks/app", Port: 8000,
+			DependsOn:   config.Dependencies{{Name: "db"}},
+			HealthCheck: &config.HealthCheck{Cmd: "curl -f http://localhost:8000/api/health || exit 1"},
+		},
+		"frontend": {Name: "frontend", Stack: "/stacks/app", Port: 3000},
+	}
+
+	result, err := GenerateManifests(services, "/stacks/app", map[string]int{"db": 1, "backend": 1, "frontend": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+	docs := parseMultiDoc(t, result)
+
+	// Bug 1: db's PVC is labeled app: db.
+	pvc := findDoc(docs, "PersistentVolumeClaim", "db-data")
+	if pvc == nil {
+		t.Fatal("db-data PVC missing")
+	}
+	if lbl := pvc["metadata"].(map[string]interface{})["labels"].(map[string]interface{}); lbl["app"] != "db" {
+		t.Errorf("PVC app label = %v, want db", lbl["app"])
+	}
+
+	// Bugs 2 + 3: every Deployment wires optional configMap + secret refs.
+	for _, svc := range []string{"db", "backend", "frontend"} {
+		c := containerOf(t, docs, svc)
+
+		cmName, cmOptional := envFromRefName(t, c, "configMapRef")
+		if cmName != svc+"-env" {
+			t.Errorf("%s configMapRef name = %q, want %s-env", svc, cmName, svc)
+		}
+		if !cmOptional {
+			t.Errorf("%s configMapRef must be optional (Bug 3)", svc)
+		}
+
+		secName, secOptional := envFromRefName(t, c, "secretRef")
+		if secName != svc+"-secret" {
+			t.Errorf("%s secretRef name = %q, want %s-secret (Bug 2)", svc, secName, svc)
+		}
+		if !secOptional {
+			t.Errorf("%s secretRef must be optional (Bug 3)", svc)
+		}
 	}
 }

@@ -401,7 +401,9 @@ ssd scale worker 0    # scale down to zero
 ```
 
 **Deploy behavior:**
-- With no argument, deploys all services in alphabetical order
+- With no argument, deploys all services; images build alphabetically, then
+  services start in **dependency order** (`depends_on`) so a dependency is
+  Ready before a dependent whose readiness probe needs it
 - With a service name, deploys that single service
 - Dependencies are started first (respects `depends_on`)
 - Example: `ssd deploy api` will also start `db` if `api` depends on it

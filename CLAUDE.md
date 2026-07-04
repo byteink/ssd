@@ -229,7 +229,13 @@ Configurable via `deploy.strategy` in ssd.yaml. Two strategies:
 - **recreate**: In-place replacement. Compose: `docker compose up --force-recreate`. K3s: K8s `Recreate` strategy.
 
 Strategy is set at root level and inherited by services. Per-service override supported.
-Deploy-all (`ssd deploy` with no args) builds all images first, then deploys each service using its configured strategy.
+Deploy-all (`ssd deploy` with no args) builds all images first, then deploys
+each service using its configured strategy. Services start in **dependency
+order** (`deploy.OrderByDependsOn`, a stable topological sort of `depends_on`)
+so a dependency (e.g. a DB a readiness probe needs) is Ready before the
+dependent starts. Alphabetical order would start the dependent first and
+deadlock on its rollout deadline. Dangling `depends_on` names are ignored;
+services in a cycle are appended in alphabetical order so none are dropped.
 
 ## Conventions
 
@@ -241,6 +247,18 @@ Deploy-all (`ssd deploy` with no args) builds all images first, then deploys eac
 - **Runtime**: `compose` (default) or `k3s`, set via `runtime:` field in ssd.yaml
 - **K3s namespace**: One namespace per stack, derived from stack path basename (`/stacks/myapp` → `myapp`)
 - **K3s manifests**: Single `manifests.yaml` in stack dir, all K8s resources separated by `---`
+- **K3s per-service labels**: every generated resource (Deployment, Service,
+  Ingress, Middleware, **PVC**) carries `app: <svc>` so the per-service
+  `kubectl apply -f manifests.yaml -l app=<svc>` includes it. A PVC missing this
+  label is filtered out of the apply and the pod hangs on `FailedScheduling`.
+- **K3s env/secret wiring**: each Deployment's `envFrom` references both the
+  `{svc}-env` ConfigMap and the `{svc}-secret` Secret, both `optional: true`.
+  `optional` keeps the pod schedulable when a backing object is absent (a
+  service with no env vars or no secrets) — no `CreateContainerConfigError`.
+  Because the `secretRef` is always in the generated manifest, a plain
+  `ssd deploy` wires any secret set via `ssd secret set` into the pod; no
+  post-rollout patch is needed. The `{svc}-env` ConfigMap is populated by
+  `applyEnvConfigMap`; the `{svc}-secret` Secret is created by `ssd secret set`.
 - **K3s builds**: `nerdctl --namespace k8s.io build` (images land directly in K3s containerd)
 
 ## Config Layout
@@ -604,7 +622,10 @@ Environment variables are stored in `{service}.env` files on the server inside t
 
 For K3s runtime, env vars are translated to a ConfigMap on every deploy via
 `k3s kubectl create configmap {service}-env --from-env-file={stack}/{service}.env --dry-run=client -o yaml | k3s kubectl apply -f -`,
-issued before `kubectl apply` in both StartService and RolloutService.
+issued before `kubectl apply` in both StartService and RolloutService. The
+Deployment references it as `configMapRef: {name: {service}-env, optional:
+true}`; `optional` keeps a service with no env vars schedulable instead of
+failing with `CreateContainerConfigError`.
 
 If `env_file` is set in ssd.yaml, it OVERWRITES any values set via
 `ssd env set` on every deploy. To manage env vars via CLI only, remove
@@ -617,7 +638,12 @@ ssd secret <service> list             # List all secrets
 ssd secret <service> rm KEY           # Remove a secret
 ```
 
-K8s Secrets are injected as env vars alongside ConfigMap vars. Only available with `runtime: k3s`. Running `ssd secret` with compose runtime errors out.
+K8s Secrets are injected as env vars alongside ConfigMap vars. The generated
+Deployment's `envFrom` always carries `secretRef: {name: {service}-secret,
+optional: true}`, so a plain `ssd deploy` wires the secret into the pod on the
+next manifest apply — no post-rollout patch. `optional: true` means a service
+with no secret still schedules. Only available with `runtime: k3s`. Running
+`ssd secret` with compose runtime errors out.
 
 ### Prune
 ```bash

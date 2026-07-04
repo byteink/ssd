@@ -63,7 +63,7 @@ func GenerateManifests(services map[string]*config.Config, stack string, version
 
 		// PVCs for volumes
 		for volName := range cfg.Volumes {
-			pvcDoc, err := marshalResource(pvcResource(volName, namespace))
+			pvcDoc, err := marshalResource(pvcResource(volName, namespace, name))
 			if err != nil {
 				return "", err
 			}
@@ -155,10 +155,23 @@ func deploymentResource(name, namespace, project string, cfg *config.Config, ver
 		"image":           image,
 		"imagePullPolicy": pullPolicy,
 		"ports":           containerPorts,
+		// envFrom always references both the {svc}-env ConfigMap and the
+		// {svc}-secret Secret, and both are optional. optional:true keeps the
+		// pod schedulable when a backing object is absent (a service with no
+		// env vars or no secrets), so `ssd deploy` never trips
+		// CreateContainerConfigError. When the objects exist — populated by
+		// applyEnvConfigMap and `ssd secret set` — their values are injected.
 		"envFrom": []map[string]interface{}{
 			{
 				"configMapRef": map[string]interface{}{
-					"name": name + "-env",
+					"name":     name + "-env",
+					"optional": true,
+				},
+			},
+			{
+				"secretRef": map[string]interface{}{
+					"name":     name + "-secret",
+					"optional": true,
 				},
 			},
 		},
@@ -290,7 +303,11 @@ func serviceResource(name, namespace string, cfg *config.Config) map[string]inte
 	}
 }
 
-func pvcResource(name, namespace string) map[string]interface{} {
+// pvcResource builds a PVC for volume `name` owned by service `svc`. The
+// `app: <svc>` label is required so the per-service `kubectl apply -l app=<svc>`
+// includes the claim — without it the PVC is filtered out and the pod hangs
+// on FailedScheduling ("persistentvolumeclaim not found").
+func pvcResource(name, namespace, svc string) map[string]interface{} {
 	return map[string]interface{}{
 		"apiVersion": "v1",
 		"kind":       "PersistentVolumeClaim",
@@ -298,6 +315,7 @@ func pvcResource(name, namespace string) map[string]interface{} {
 			"name":      name,
 			"namespace": namespace,
 			"labels": map[string]interface{}{
+				"app":        svc,
 				"managed-by": "ssd",
 			},
 		},
