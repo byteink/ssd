@@ -252,6 +252,16 @@ printed before the deploy. A no-arg deploy already covers everything, so it
 skips this expansion (and runs orphan detection instead — a subset can't,
 since the un-deployed rest are intentional).
 
+**Manifest is always regenerated from the full config, not the deploy subset.**
+`updateManifestStep` rewrites the whole compose.yaml / manifests from
+`Options.AllServices`, so `deployMany` (and `deployService`) pass the complete
+service map via `loadAllServices` — only build/start is scoped to the subset.
+Passing just the subset would shrink the manifest to those services, dropping
+the rest and breaking any `depends_on` that points at an excluded service
+(`docker compose config` fails with exit 15). This was the v0.20.0 →
+v0.20.1 subset-deploy regression; `TestLoadAllServices_ReturnsFullConfig`
+guards it.
+
 ## Conventions
 
 - **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)

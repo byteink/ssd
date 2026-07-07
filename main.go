@@ -373,27 +373,49 @@ func parseServiceList(args []string) []string {
 	return names
 }
 
-// deployMany builds all requested services first, then starts each in
-// dependency order using its configured strategy. detectOrphansToo is set
+// loadAllServices resolves every service in the config. The compose.yaml /
+// manifests are regenerated from this complete set on every deploy, so a
+// targeted subset deploy still keeps other services defined and lets their
+// depends_on references resolve. Passing only the subset would shrink the
+// manifest and break `docker compose config` validation.
+func loadAllServices(rootCfg *config.RootConfig) (map[string]*config.Config, error) {
+	all := make(map[string]*config.Config, len(rootCfg.Services))
+	for _, name := range rootCfg.ListServices() {
+		cfg, err := rootCfg.GetService(name)
+		if err != nil {
+			return nil, fmt.Errorf("loading service %s: %w", name, err)
+		}
+		all[name] = cfg
+	}
+	return all, nil
+}
+
+// deployMany builds the requested services first, then starts each in
+// dependency order using its configured strategy. `names` is the subset to
+// build and start; the manifest is always regenerated from the full config
+// (see loadAllServices) so other services survive. detectOrphansToo is set
 // only for a full deploy (see runDeploy).
 func deployMany(rootCfg *config.RootConfig, names []string, detectOrphansToo bool) {
 	sort.Strings(names)
 
 	fmt.Printf("Deploying services: %s\n\n", strings.Join(names, ", "))
 
-	// Precompute all service configs once
-	allServices := make(map[string]*config.Config, len(names))
+	// Full config drives manifest generation; the subset drives build/start.
+	allServices, err := loadAllServices(rootCfg)
+	if err != nil {
+		fmt.Printf("\nError: %v\n", err)
+		os.Exit(1)
+	}
 	for _, name := range names {
-		svcCfg, err := rootCfg.GetService(name)
-		if err != nil {
-			fmt.Printf("\nError loading service %s: %v\n", name, err)
+		if _, ok := allServices[name]; !ok {
+			fmt.Printf("\nError: service %q not found\n", name)
 			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
 			os.Exit(1)
 		}
-		allServices[name] = svcCfg
 	}
 
-	// Build/pull all images first (BuildOnly mode)
+	// Build/pull images for the targeted subset (BuildOnly mode). The full
+	// config is passed so the regenerated manifest keeps every service.
 	for _, name := range names {
 		if err := deployServiceBuildOnly(rootCfg, name, allServices); err != nil {
 			fmt.Printf("\nError building %s: %v\n", name, err)
@@ -401,14 +423,18 @@ func deployMany(rootCfg *config.RootConfig, names []string, detectOrphansToo boo
 		}
 	}
 
-	// Deploy each service using its configured strategy, in dependency
-	// order so a dependency (e.g. a DB a readiness probe needs) is Ready
-	// before the dependent starts. Alphabetical order would start the
-	// dependent first and deadlock on its rollout deadline.
+	// Start the targeted subset using each service's strategy, in dependency
+	// order so a dependency (e.g. a DB a readiness probe needs) is Ready before
+	// the dependent starts. Alphabetical order would start the dependent first
+	// and deadlock on its rollout deadline.
 	fmt.Println("\n==> Starting all services...")
 	client := runtime.New(rootCfg.Runtime, allServices[names[0]])
 	tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
-	for _, name := range deploy.OrderByDependsOn(allServices) {
+	deploySet := make(map[string]*config.Config, len(names))
+	for _, name := range names {
+		deploySet[name] = allServices[name]
+	}
+	for _, name := range deploy.OrderByDependsOn(deploySet) {
 		startAndClean(rootCfg, client, tagCleaner, name, allServices[name])
 	}
 
@@ -664,14 +690,11 @@ func deployService(rootCfg *config.RootConfig, serviceName string) error {
 		}
 	}
 
-	// Load all service configs for initial stack creation
-	allServices := make(map[string]*config.Config)
-	for _, name := range rootCfg.ListServices() {
-		svcCfg, err := rootCfg.GetService(name)
-		if err != nil {
-			continue
-		}
-		allServices[name] = svcCfg
+	// Full config drives compose.yaml/manifest generation (keeps every
+	// service defined so depends_on references resolve).
+	allServices, err := loadAllServices(rootCfg)
+	if err != nil {
+		return err
 	}
 
 	client := runtime.New(rootCfg.Runtime, cfg)

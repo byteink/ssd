@@ -1017,3 +1017,28 @@ func sortedCopy(s []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestLoadAllServices_ReturnsFullConfig is the v0.20.0 subset-deploy
+// regression: the manifest is regenerated from this map, so a targeted
+// deploy of a subset must still resolve every service (else a depends_on to
+// a non-deployed service produces an invalid compose.yaml).
+func TestLoadAllServices_ReturnsFullConfig(t *testing.T) {
+	rootCfg := &config.RootConfig{
+		Server: "s",
+		Services: map[string]*config.Config{
+			"backend":     {DependsOn: config.Dependencies{{Name: "bytebucket"}}},
+			"web":         {DependsOn: config.Dependencies{{Name: "meilisearch"}}},
+			"bytebucket":  {Image: "bytebucket:1"},
+			"meilisearch": {Image: "meili:1"},
+		},
+	}
+	all, err := loadAllServices(rootCfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"backend", "web", "bytebucket", "meilisearch"} {
+		if _, ok := all[want]; !ok {
+			t.Errorf("loadAllServices missing %q; got %v keys", want, len(all))
+		}
+	}
+}
