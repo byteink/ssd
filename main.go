@@ -109,7 +109,7 @@ func main() {
 	switch command {
 	case "version", "-v", "--version":
 		fmt.Printf("ssd version %s\n", version)
-	case "deploy", "up":
+	case "deploy", "up", "update":
 		runDeploy(args)
 	case "down":
 		runDown(args)
@@ -258,83 +258,192 @@ func runDeploy(args []string) {
 
 	rootCfg := loadRootConfig()
 
-	// No args: deploy all services
-	if len(args) == 0 {
-		services := rootCfg.ListServices()
-		if len(services) == 0 {
+	names := parseServiceList(args)
+
+	// No args → deploy every service; orphan detection runs because we can
+	// compare against the full config. A targeted subset instead auto-includes
+	// each named service's dependencies that aren't already running (updating
+	// one service in a stack shouldn't fail because its DB was never brought
+	// up), and skips orphan detection — the un-deployed rest are intentional.
+	if len(names) == 0 {
+		names = rootCfg.ListServices()
+		if len(names) == 0 {
 			fmt.Println("Error: no services defined in ssd.yaml")
 			os.Exit(1)
 		}
-		sort.Strings(services)
-
-		fmt.Printf("Deploying all services: %s\n\n", strings.Join(services, ", "))
-
-		// Precompute all service configs once
-		allServices := make(map[string]*config.Config, len(services))
-		for _, name := range services {
-			svcCfg, err := rootCfg.GetService(name)
-			if err != nil {
-				fmt.Printf("\nError loading service %s: %v\n", name, err)
-				os.Exit(1)
-			}
-			allServices[name] = svcCfg
-		}
-
-		// Build/pull all images first (BuildOnly mode)
-		for _, name := range services {
-			if err := deployServiceBuildOnly(rootCfg, name, allServices); err != nil {
-				fmt.Printf("\nError building %s: %v\n", name, err)
-				os.Exit(1)
-			}
-		}
-
-		// Deploy each service using its configured strategy, in dependency
-		// order so a dependency (e.g. a DB a readiness probe needs) is Ready
-		// before the dependent starts. Alphabetical order would start the
-		// dependent first and deadlock on its rollout deadline.
-		fmt.Println("\n==> Starting all services...")
-		client := runtime.New(rootCfg.Runtime, allServices[services[0]])
-		tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
-		for _, name := range deploy.OrderByDependsOn(allServices) {
-			cfg := allServices[name]
-			strategy := cfg.DeployStrategy()
-			fmt.Printf("    %s (strategy: %s)...\n", name, strategy)
-			switch strategy {
-			case "rollout":
-				if err := client.RolloutService(context.Background(), name); err != nil {
-					fmt.Printf("\nError rolling out %s: %v\n", name, err)
-					os.Exit(1)
-				}
-			default:
-				if err := client.StartService(context.Background(), name); err != nil {
-					fmt.Printf("\nError starting %s: %v\n", name, err)
-					os.Exit(1)
-				}
-			}
-
-			// Post-deploy image cleanup per service (warn-only).
-			// Use a per-service client so GetCurrentVersion parses the
-			// correct image tag from the manifest.
-			if !cfg.IsPrebuilt() && cfg.RetainTags() > 0 {
-				svcClient := runtime.New(rootCfg.Runtime, cfg)
-				version, _ := svcClient.GetCurrentVersion(context.Background())
-				if err := tagCleaner.PruneOldTags(context.Background(), cfg.ImageName(), cfg.RetainTags(), version); err != nil {
-					fmt.Printf("    Warning: image cleanup failed for %s: %v\n", name, err)
-				}
-			}
-		}
-
-		fmt.Println("\nAll services deployed successfully!")
-
-		// Detect orphaned services on the server
-		detectOrphans(rootCfg, allServices, client)
+		deployMany(rootCfg, names, true)
 		return
 	}
 
-	serviceName := args[0]
-	if err := deployService(rootCfg, serviceName); err != nil {
-		fmt.Printf("\nError: %v\n", err)
+	names = expandWithMissingDeps(rootCfg, names)
+
+	// A single service (no missing deps to pull in) keeps the simple path.
+	if len(names) == 1 {
+		if err := deployService(rootCfg, names[0]); err != nil {
+			fmt.Printf("\nError: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	deployMany(rootCfg, names, false)
+}
+
+// expandWithMissingDeps returns the named services plus each transitive
+// dependency that is not already deployed on the server. Named services are
+// always kept. When the named set declares no dependencies, it is returned
+// unchanged without an SSH round-trip.
+func expandWithMissingDeps(rootCfg *config.RootConfig, named []string) []string {
+	closure := deploy.TransitiveDeps(named, rootCfg.Services)
+	if len(closure) == len(named) {
+		return named // no dependencies declared — nothing to pull in
+	}
+
+	// A resolved config (inherited stack) is needed to query the server.
+	firstCfg, err := rootCfg.GetService(named[0])
+	if err != nil {
+		return named // let the downstream deploy report the bad name
+	}
+	client := runtime.New(rootCfg.Runtime, firstCfg)
+	// ponytail: presence check only — a dep that's deployed-but-crashing counts
+	// as "running" and won't be repulled. Upgrade to a health check (compose
+	// health status / kubectl rollout status) if unhealthy deps need repairing.
+	deployed := deployedServices(rootCfg, firstCfg, client)
+
+	added := filterDeploySet(closure, named, deployed)
+	if len(added) > len(named) {
+		fmt.Printf("Including dependencies not yet deployed: %s\n",
+			strings.Join(sortedExcept(added, named), ", "))
+	}
+	return added
+}
+
+// filterDeploySet keeps every named service plus any dependency in closure
+// that is not already deployed. Pure for testability.
+func filterDeploySet(closure, named []string, deployed map[string]bool) []string {
+	namedSet := make(map[string]bool, len(named))
+	for _, n := range named {
+		namedSet[n] = true
+	}
+	out := make([]string, 0, len(closure))
+	for _, s := range closure {
+		if namedSet[s] || !deployed[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// sortedExcept returns the members of all not in exclude, sorted — used only
+// to print the dependencies that were auto-included.
+func sortedExcept(all, exclude []string) []string {
+	skip := make(map[string]bool, len(exclude))
+	for _, e := range exclude {
+		skip[e] = true
+	}
+	var out []string
+	for _, a := range all {
+		if !skip[a] {
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// parseServiceList flattens deploy args into a de-duplicated, ordered list of
+// service names. Accepts comma-separated (`web,api`) and multi-arg
+// (`web api`) forms, trims spaces, and drops empties.
+func parseServiceList(args []string) []string {
+	var names []string
+	seen := make(map[string]struct{})
+	for _, a := range args {
+		for _, part := range strings.Split(a, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, dup := seen[part]; dup {
+				continue
+			}
+			seen[part] = struct{}{}
+			names = append(names, part)
+		}
+	}
+	return names
+}
+
+// deployMany builds all requested services first, then starts each in
+// dependency order using its configured strategy. detectOrphansToo is set
+// only for a full deploy (see runDeploy).
+func deployMany(rootCfg *config.RootConfig, names []string, detectOrphansToo bool) {
+	sort.Strings(names)
+
+	fmt.Printf("Deploying services: %s\n\n", strings.Join(names, ", "))
+
+	// Precompute all service configs once
+	allServices := make(map[string]*config.Config, len(names))
+	for _, name := range names {
+		svcCfg, err := rootCfg.GetService(name)
+		if err != nil {
+			fmt.Printf("\nError loading service %s: %v\n", name, err)
+			fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
+			os.Exit(1)
+		}
+		allServices[name] = svcCfg
+	}
+
+	// Build/pull all images first (BuildOnly mode)
+	for _, name := range names {
+		if err := deployServiceBuildOnly(rootCfg, name, allServices); err != nil {
+			fmt.Printf("\nError building %s: %v\n", name, err)
+			os.Exit(1)
+		}
+	}
+
+	// Deploy each service using its configured strategy, in dependency
+	// order so a dependency (e.g. a DB a readiness probe needs) is Ready
+	// before the dependent starts. Alphabetical order would start the
+	// dependent first and deadlock on its rollout deadline.
+	fmt.Println("\n==> Starting all services...")
+	client := runtime.New(rootCfg.Runtime, allServices[names[0]])
+	tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
+	for _, name := range deploy.OrderByDependsOn(allServices) {
+		startAndClean(rootCfg, client, tagCleaner, name, allServices[name])
+	}
+
+	fmt.Println("\nAll services deployed successfully!")
+
+	if detectOrphansToo {
+		detectOrphans(rootCfg, allServices, client)
+	}
+}
+
+// startAndClean starts one service with its configured strategy, then prunes
+// old image tags for it (warn-only). Exits on a start failure.
+func startAndClean(rootCfg *config.RootConfig, client remote.RemoteClient, tagCleaner deploy.TagCleaner, name string, cfg *config.Config) {
+	strategy := cfg.DeployStrategy()
+	fmt.Printf("    %s (strategy: %s)...\n", name, strategy)
+
+	start := client.StartService
+	verb := "starting"
+	if strategy == "rollout" {
+		start, verb = client.RolloutService, "rolling out"
+	}
+	if err := start(context.Background(), name); err != nil {
+		fmt.Printf("\nError %s %s: %v\n", verb, name, err)
 		os.Exit(1)
+	}
+
+	// Post-deploy image cleanup per service (warn-only). Use a per-service
+	// client so GetCurrentVersion parses the correct image tag.
+	if cfg.IsPrebuilt() || cfg.RetainTags() <= 0 {
+		return
+	}
+	svcClient := runtime.New(rootCfg.Runtime, cfg)
+	version, _ := svcClient.GetCurrentVersion(context.Background())
+	if err := tagCleaner.PruneOldTags(context.Background(), cfg.ImageName(), cfg.RetainTags(), version); err != nil {
+		fmt.Printf("    Warning: image cleanup failed for %s: %v\n", name, err)
 	}
 }
 
@@ -807,12 +916,34 @@ func runEnvRm(service string, args []string) {
 	fmt.Printf("Removed %s from service %s\n", key, service)
 }
 
-func detectOrphans(rootCfg *config.RootConfig, allServices map[string]*config.Config, client remote.RemoteClient) {
-	configServices := make(map[string]bool, len(allServices))
-	for name := range allServices {
-		configServices[name] = true
+// deployedServices returns the set of service names currently deployed on the
+// server for the given stack. Best-effort: an SSH failure yields an empty set.
+func deployedServices(rootCfg *config.RootConfig, cfg *config.Config, client remote.RemoteClient) map[string]bool {
+	var cmd string
+	switch rootCfg.Runtime {
+	case "k3s":
+		namespace := filepath.Base(cfg.Stack)
+		cmd = fmt.Sprintf("k3s kubectl get deployments -n %s -l managed-by=ssd -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}' 2>/dev/null",
+			shellescape.Quote(namespace))
+	default: // compose
+		cmd = fmt.Sprintf("cd %s && docker compose ps --format '{{.Service}}' 2>/dev/null",
+			shellescape.Quote(cfg.StackPath()))
 	}
 
+	set := make(map[string]bool)
+	output, err := client.SSH(context.Background(), cmd)
+	if err != nil {
+		return set
+	}
+	for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+func detectOrphans(rootCfg *config.RootConfig, allServices map[string]*config.Config, client remote.RemoteClient) {
 	// Pick any config to get stack path
 	var cfg *config.Config
 	for _, c := range allServices {
@@ -824,34 +955,12 @@ func detectOrphans(rootCfg *config.RootConfig, allServices map[string]*config.Co
 	}
 
 	var orphans []string
-
-	switch rootCfg.Runtime {
-	case "k3s":
-		namespace := filepath.Base(cfg.Stack)
-		cmd := fmt.Sprintf("k3s kubectl get deployments -n %s -l managed-by=ssd -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}' 2>/dev/null",
-			shellescape.Quote(namespace))
-		output, err := client.SSH(context.Background(), cmd)
-		if err == nil {
-			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
-				name = strings.TrimSpace(name)
-				if name != "" && !configServices[name] {
-					orphans = append(orphans, name)
-				}
-			}
-		}
-	default: // compose
-		cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Service}}' 2>/dev/null",
-			shellescape.Quote(cfg.StackPath()))
-		output, err := client.SSH(context.Background(), cmd)
-		if err == nil {
-			for _, name := range strings.Split(strings.TrimSpace(output), "\n") {
-				name = strings.TrimSpace(name)
-				if name != "" && !configServices[name] {
-					orphans = append(orphans, name)
-				}
-			}
+	for name := range deployedServices(rootCfg, cfg, client) {
+		if _, inConfig := allServices[name]; !inConfig {
+			orphans = append(orphans, name)
 		}
 	}
+	sort.Strings(orphans)
 
 	if len(orphans) > 0 {
 		fmt.Printf("\nWarning: %d orphaned services detected on server (not in ssd.yaml):\n", len(orphans))
@@ -2017,7 +2126,7 @@ Global flags (accepted on every command):
 Commands:
   init                            Create ssd.yaml configuration file
   migrate                         Move legacy ./ssd.yaml into .ssd/ssd.yaml
-  deploy|up [service]             Build and deploy a service (or all services)
+  deploy|up|update [service...]   Build and deploy service(s), or all if omitted
   down [service]                  Stop services (or all if omitted)
   rm [service]                    Permanently remove services (or entire stack)
   restart [service]               Restart without rebuilding
@@ -2045,11 +2154,18 @@ Learn more: https://github.com/byteink/ssd
 func printDeployHelp() {
 	fmt.Print(`ssd deploy - Build and deploy services
 
-Aliases: deploy, up
+Aliases: deploy, up, update
 
 Usage:
   ssd deploy                      Deploy all services defined in ssd.yaml
   ssd deploy <service>            Deploy a single service
+  ssd deploy <svc1,svc2>          Deploy a subset (comma-separated or space-separated)
+
+A targeted deploy (one or more named services) also brings up each service's
+dependencies (depends_on) that are not already running on the server, so
+updating one service in a stack never fails on a dependency that was never
+started. Dependencies already deployed are left untouched. A no-arg deploy
+covers every service, so nothing extra is pulled in.
 
 Workflow:
   1. Reads ssd.yaml from the current directory
@@ -2065,8 +2181,12 @@ Deploy strategies (set via deploy.strategy in ssd.yaml):
   recreate  In-place replacement via docker compose up --force-recreate. Brief downtime.
 
 Examples:
-  # Deploy a single service
+  # Deploy a single service (pulls in its missing dependencies)
   ssd deploy web
+
+  # Update a subset — comma or space separated (both bring up missing deps)
+  ssd update web,api
+  ssd up web api
 
   # Deploy all services (builds all images first, then starts)
   ssd deploy

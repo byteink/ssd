@@ -237,6 +237,21 @@ dependent starts. Alphabetical order would start the dependent first and
 deadlock on its rollout deadline. Dangling `depends_on` names are ignored;
 services in a cycle are appended in alphabetical order so none are dropped.
 
+### Targeted deploy pulls in missing dependencies
+
+`deploy`, `up`, and `update` are aliases. A **targeted** deploy — one or more
+named services (`ssd update web,api`) — auto-includes each named service's
+transitive `depends_on` dependencies that are **not already running** on the
+server, so updating one service in a stack never fails because its DB was
+never brought up. `deploy.TransitiveDeps` computes the closure;
+`deployedServices` (reused by orphan detection) lists what's already deployed
+via `docker compose ps` / `kubectl get deploy -l managed-by=ssd`;
+`filterDeploySet` keeps every named service plus the not-yet-deployed deps.
+Dependencies already running are left untouched. Auto-included deps are
+printed before the deploy. A no-arg deploy already covers everything, so it
+skips this expansion (and runs orphan detection instead — a subset can't,
+since the un-deployed rest are intentional).
+
 ## Conventions
 
 - **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)
@@ -595,7 +610,7 @@ ssd init -s myserver --stack /dockge/stacks/myapp -d myapp.example.com -p 3000
 
 ### Deployment
 ```bash
-ssd deploy|up [service]       # Deploy service (or all if omitted)
+ssd deploy|up|update [svc...] # Deploy service(s) (all if omitted; comma/space-separated subset supported)
 ssd down [service]            # Stop services (or all if omitted)
 ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
@@ -728,6 +743,13 @@ The scripts are intentionally thin shims that call the hidden helper
 (`completion/completion.go`) holds the single source of truth for the
 command layout and emits one candidate per line; the shell does
 prefix filtering. Dynamic completions sourced from ssd.yaml today:
-service names for `deploy/up/down/rm/restart/rollback/status/logs/config/scale/env/secret`.
+service names for `deploy/up/update/down/rm/restart/rollback/status/logs/config/scale/env/secret`.
 Honors global `--config` / `--env` so completion in a multi-env repo
 reflects the right overlay.
+
+`deploy`/`up` accept a comma-separated subset (`ssd deploy web,api`), so
+completion is comma-aware: after a comma the shell completes the next item
+and re-attaches the already-typed `web,` prefix. The Go candidate set is
+unchanged (all service names) — each shell handles the comma prefix in its
+native filter layer (bash `compgen -P`, zsh `compset -P '*,'`, fish prefix
+prepend).

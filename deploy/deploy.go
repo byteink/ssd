@@ -69,6 +69,37 @@ func OrderByDependsOn(services map[string]*config.Config) []string {
 	return appendLeftover(ordered, names)
 }
 
+// TransitiveDeps returns the named services plus every service reachable
+// through depends_on edges, de-duplicated. A targeted deploy uses it to pull
+// in the dependencies a named service needs. Names absent from services are
+// kept (so the caller can surface a bad name) but contribute no edges. The
+// seen-guard bounds the walk and makes cycles terminate. Order is
+// unspecified — callers that care should sort or OrderByDependsOn the result.
+func TransitiveDeps(named []string, services map[string]*config.Config) []string {
+	seen := make(map[string]bool, len(services))
+	out := make([]string, 0, len(named))
+
+	var visit func(string)
+	visit = func(n string) {
+		if seen[n] {
+			return
+		}
+		seen[n] = true
+		out = append(out, n)
+		cfg, ok := services[n]
+		if !ok {
+			return
+		}
+		for _, dep := range cfg.DependsOn.Names() {
+			visit(dep)
+		}
+	}
+	for _, n := range named {
+		visit(n)
+	}
+	return out
+}
+
 // dependencyGraph builds in-degree counts and a dep->dependents adjacency map
 // over the depends_on edges. Only edges to real services in the map count;
 // self-edges and dangling names are ignored. `names` must be sorted so the

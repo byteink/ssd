@@ -365,7 +365,7 @@ ssd init -s myserver          # Non-interactive with flags
 
 ### Deployment
 ```bash
-ssd deploy|up [service]       # Deploy service (or all if omitted)
+ssd deploy|up|update [svc...] # Deploy service(s) (all if omitted; comma/space subset; pulls in missing deps)
 ssd down [service]            # Stop services (or all if omitted)
 ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
@@ -401,12 +401,16 @@ ssd scale worker 0    # scale down to zero
 ```
 
 **Deploy behavior:**
+- `deploy`, `up`, and `update` are aliases
 - With no argument, deploys all services; images build alphabetically, then
   services start in **dependency order** (`depends_on`) so a dependency is
   Ready before a dependent whose readiness probe needs it
-- With a service name, deploys that single service
-- Dependencies are started first (respects `depends_on`)
-- Example: `ssd deploy api` will also start `db` if `api` depends on it
+- With one or more service names (`ssd update web,api`), deploys those plus any
+  of their `depends_on` dependencies **not already running** — so updating one
+  service never fails because its DB was never started. Deps already running
+  are left untouched; auto-included ones are printed first
+- Example: `ssd deploy api` also starts `db` if `api` depends on it and `db`
+  isn't up yet
 
 ### Configuration
 ```bash

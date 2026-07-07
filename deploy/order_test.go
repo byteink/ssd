@@ -86,3 +86,41 @@ func TestOrderByDependsOn_CycleKeepsAllServices(t *testing.T) {
 func TestOrderByDependsOn_Empty(t *testing.T) {
 	assert.Empty(t, OrderByDependsOn(map[string]*config.Config{}))
 }
+
+func TestTransitiveDeps_PullsChain(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": svc("web", "api"),
+		"api": svc("api", "db"),
+		"db":  svc("db"),
+	}
+	got := TransitiveDeps([]string{"web"}, services)
+	assert.ElementsMatch(t, []string{"web", "api", "db"}, got)
+}
+
+func TestTransitiveDeps_NoDeps_ReturnsNamedOnly(t *testing.T) {
+	services := map[string]*config.Config{"web": svc("web"), "db": svc("db")}
+	assert.Equal(t, []string{"web"}, TransitiveDeps([]string{"web"}, services))
+}
+
+func TestTransitiveDeps_MultipleNamed_Deduped(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": svc("web", "db"),
+		"api": svc("api", "db"),
+		"db":  svc("db"),
+	}
+	got := TransitiveDeps([]string{"web", "api"}, services)
+	assert.ElementsMatch(t, []string{"web", "api", "db"}, got)
+}
+
+func TestTransitiveDeps_UnknownNamedKept(t *testing.T) {
+	services := map[string]*config.Config{"web": svc("web")}
+	assert.ElementsMatch(t, []string{"web", "ghost"}, TransitiveDeps([]string{"web", "ghost"}, services))
+}
+
+func TestTransitiveDeps_CycleTerminates(t *testing.T) {
+	services := map[string]*config.Config{
+		"a": svc("a", "b"),
+		"b": svc("b", "a"),
+	}
+	assert.ElementsMatch(t, []string{"a", "b"}, TransitiveDeps([]string{"a"}, services))
+}

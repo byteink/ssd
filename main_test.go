@@ -753,6 +753,36 @@ func TestMainDispatch_ScaleRegistered(t *testing.T) {
 	}
 }
 
+// TestMainDispatch_UpdateAliasRegistered verifies the "update" alias routes
+// through runDeploy (its -h prints the deploy help).
+func TestMainDispatch_UpdateAliasRegistered(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
+
+	oldArgs := os.Args
+	os.Args = []string{"ssd", "update", "-h"}
+	defer func() { os.Args = oldArgs }()
+
+	done := make(chan struct{})
+	go func() {
+		main()
+		close(done)
+	}()
+	<-done
+	_ = w.Close()
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	if out := string(buf[:n]); !strings.Contains(out, "ssd deploy - Build and deploy services") {
+		t.Errorf("expected deploy help from `update -h`, got: %s", out)
+	}
+}
+
 // --- ssd prune flag parsing ---
 
 func TestParsePruneFlags_Defaults(t *testing.T) {
@@ -937,4 +967,53 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestParseServiceList(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"empty", nil, nil},
+		{"single", []string{"web"}, []string{"web"}},
+		{"comma", []string{"web,api"}, []string{"web", "api"}},
+		{"comma spaces", []string{"web, api , db"}, []string{"web", "api", "db"}},
+		{"multiple args", []string{"web", "api"}, []string{"web", "api"}},
+		{"mixed", []string{"web,api", "db"}, []string{"web", "api", "db"}},
+		{"dedup", []string{"web,web", "api"}, []string{"web", "api"}},
+		{"empty parts", []string{"web,,api,"}, []string{"web", "api"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseServiceList(tc.args)
+			if !equalSlices(got, tc.want) {
+				t.Errorf("parseServiceList(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilterDeploySet(t *testing.T) {
+	// closure = named + deps; keep every named, drop deps already deployed.
+	closure := []string{"web", "api", "db"}
+	named := []string{"web"}
+	deployed := map[string]bool{"db": true} // db already up, api not
+	got := filterDeploySet(closure, named, deployed)
+	if !equalSlices(sortedCopy(got), []string{"api", "web"}) {
+		t.Errorf("got %v, want [api web]", got)
+	}
+}
+
+func TestFilterDeploySet_NamedAlwaysKeptEvenIfDeployed(t *testing.T) {
+	got := filterDeploySet([]string{"web", "db"}, []string{"web"}, map[string]bool{"web": true, "db": true})
+	if !equalSlices(got, []string{"web"}) {
+		t.Errorf("got %v, want [web] (named kept, deployed dep dropped)", got)
+	}
+}
+
+func sortedCopy(s []string) []string {
+	out := append([]string(nil), s...)
+	sort.Strings(out)
+	return out
 }

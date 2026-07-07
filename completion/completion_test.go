@@ -175,6 +175,27 @@ func TestScript_AllShellsReturnNonEmpty(t *testing.T) {
 	}
 }
 
+// Comma-separated service lists (`ssd deploy web,api`) must complete each
+// item after the last comma. The candidate set comes from `ssd __complete`
+// unchanged; each shell re-attaches the already-typed `prefix,` while
+// filtering the tail. These assert the per-shell mechanism is wired.
+func TestScript_CompletesCommaSeparatedServices(t *testing.T) {
+	cases := map[string]string{
+		"bash": `-P "${prefix}"`,        // compgen prepends the "web," prefix
+		"zsh":  "compset -P '*,'",       // consume up-to-last-comma as fixed prefix
+		"fish": "string match -q '*,*'", // detect a comma in the current token
+	}
+	for sh, want := range cases {
+		s, err := Script(sh)
+		if err != nil {
+			t.Fatalf("Script(%q): %v", sh, err)
+		}
+		if !strings.Contains(s, want) {
+			t.Errorf("%s script missing comma completion (%q)", sh, want)
+		}
+	}
+}
+
 func TestScript_UnknownShellErrors(t *testing.T) {
 	if _, err := Script("powershell"); err == nil {
 		t.Error("expected error for unknown shell")

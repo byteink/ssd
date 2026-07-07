@@ -24,7 +24,7 @@ import (
 // `ssd <command>`. Hidden helpers (e.g. __complete) are intentionally
 // omitted so they do not surface in TAB completion.
 var TopLevelCommands = []string{
-	"init", "migrate", "deploy", "up", "down", "rm", "restart",
+	"init", "migrate", "deploy", "up", "update", "down", "rm", "restart",
 	"rollback", "status", "logs", "config", "env", "secret",
 	"prune", "scale", "provision", "skill", "completion",
 	"version", "help",
@@ -34,7 +34,7 @@ var TopLevelCommands = []string{
 // (or none, meaning "all services"). Completion offers the configured
 // service names from ssd.yaml.
 var ServiceCommands = map[string]bool{
-	"deploy": true, "up": true, "down": true, "rm": true,
+	"deploy": true, "up": true, "update": true, "down": true, "rm": true,
 	"restart": true, "rollback": true, "status": true,
 	"logs": true, "config": true, "scale": true,
 }
@@ -315,12 +315,19 @@ func SupportedShells() []string {
 
 const bashScript = `# ssd bash completion
 _ssd_completion() {
-    local cur prev_words candidates
+    local cur prev_words candidates prefix
     cur="${COMP_WORDS[COMP_CWORD]}"
     # Tokens between the binary name and the cursor (exclusive of cur).
     prev_words=("${COMP_WORDS[@]:1:COMP_CWORD-1}")
     candidates="$(ssd __complete "${prev_words[@]}" 2>/dev/null)"
-    COMPREPLY=( $(compgen -W "${candidates}" -- "${cur}") )
+    # Comma-separated lists (e.g. deploy web,api): complete the item after the
+    # last comma and re-attach the already-typed "web," prefix to each match.
+    if [[ "${cur}" == *,* ]]; then
+        prefix="${cur%,*},"
+        COMPREPLY=( $(compgen -W "${candidates}" -P "${prefix}" -- "${cur##*,}") )
+    else
+        COMPREPLY=( $(compgen -W "${candidates}" -- "${cur}") )
+    fi
 }
 complete -F _ssd_completion ssd
 `
@@ -337,6 +344,9 @@ _ssd() {
         prev_words=()
     fi
     candidates=( ${(f)"$(ssd __complete "${prev_words[@]}" 2>/dev/null)"} )
+    # Comma-separated lists (e.g. deploy web,api): consume text up to the last
+    # comma as a fixed prefix so matching applies to the item after it.
+    compset -P '*,'
     compadd -a candidates
 }
 
@@ -346,10 +356,20 @@ compdef _ssd ssd
 const fishScript = `# ssd fish completion
 function __ssd_complete
     set -l tokens (commandline -opc)
+    set -l cur (commandline -ct)
+    set -l cands
     if test (count $tokens) -gt 1
-        ssd __complete $tokens[2..-1] 2>/dev/null
+        set cands (ssd __complete $tokens[2..-1] 2>/dev/null)
     else
-        ssd __complete 2>/dev/null
+        set cands (ssd __complete 2>/dev/null)
+    end
+    # Comma-separated lists (e.g. deploy web,api): fish filters against the whole
+    # token, so emit each candidate with the already-typed "web," prefix.
+    if string match -q '*,*' -- $cur
+        set -l prefix (string replace -r '[^,]*$' '' -- $cur)
+        printf '%s\n' $prefix$cands
+    else
+        printf '%s\n' $cands
     end
 end
 
