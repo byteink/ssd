@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"al.essio.dev/pkg/shellescape"
 
@@ -119,7 +120,7 @@ func main() {
 		runRestart(args)
 	case "rollback":
 		runRollback(args)
-	case "status":
+	case "status", "ps":
 		runStatus(args)
 	case "logs":
 		runLogs(args)
@@ -766,22 +767,88 @@ func runStatus(args []string) {
 		serviceName = args[0]
 	}
 
-	rootCfg, cfg := loadConfig(serviceName)
-	client := runtime.New(rootCfg.Runtime, cfg)
+	rootCfg := loadRootConfig()
 
-	fmt.Printf("Status for %s on %s:\n\n", cfg.Name, cfg.Server)
+	// Every service config carries the same server and stack, which is all the
+	// query needs — a named service only narrows the rows. With no name, borrow
+	// the first service's config to reach the stack.
+	cfgName := serviceName
+	if cfgName == "" {
+		services := rootCfg.ListServices()
+		if len(services) == 0 {
+			fmt.Println("Error: no services defined in ssd.yaml")
+			os.Exit(1)
+		}
+		cfgName = services[0]
+	}
 
-	status, err := client.GetContainerStatus(context.Background())
+	cfg, err := rootCfg.GetService(cfgName)
+	if err != nil {
+		fmt.Printf(errorFmt, err)
+		fmt.Printf("Available services: %s\n", strings.Join(rootCfg.ListServices(), ", "))
+		os.Exit(1)
+	}
+
+	rows, err := runtime.NewStatus(rootCfg.Runtime, cfg).GetStatus(context.Background(), serviceName)
 	if err != nil {
 		fmt.Printf(errorFmt, err)
 		os.Exit(1)
 	}
 
-	if status == "" {
-		fmt.Println("No containers found")
-	} else {
-		fmt.Println(status)
+	fmt.Printf("%s on %s\n\n", filepath.Base(cfg.StackPath()), cfg.Server)
+	if err := renderStatus(os.Stdout, rows); err != nil {
+		fmt.Printf(errorFmt, err)
+		os.Exit(1)
 	}
+}
+
+// renderStatus prints the status rows as an aligned table. The PORTS column is
+// dropped when no service publishes a port (the norm on k3s, where traffic
+// arrives through the Ingress) to keep the table narrow.
+func renderStatus(w io.Writer, rows []remote.ServiceStatus) error {
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "No services running")
+		return err
+	}
+
+	showPorts := false
+	for _, r := range rows {
+		if r.Ports != "" {
+			showPorts = true
+			break
+		}
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if err := writeStatusRow(tw, showPorts, "SERVICE", "STATUS", "UPTIME", "VERSION", "PORTS"); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		state := r.State
+		if r.Health != "" {
+			state = fmt.Sprintf("%s (%s)", r.State, r.Health)
+		}
+		ports := r.Ports
+		if ports == "" {
+			ports = "-"
+		}
+		if err := writeStatusRow(tw, showPorts, r.Service, state, r.Uptime, r.Version, ports); err != nil {
+			return err
+		}
+	}
+
+	return tw.Flush()
+}
+
+// writeStatusRow emits one tab-separated row, without a trailing tab so the
+// last column is not padded.
+func writeStatusRow(w io.Writer, showPorts bool, service, state, uptime, version, ports string) error {
+	cells := []string{service, state, uptime, version}
+	if showPorts {
+		cells = append(cells, ports)
+	}
+	_, err := fmt.Fprintln(w, strings.Join(cells, "\t"))
+	return err
 }
 
 func runLogs(args []string) {
@@ -2318,18 +2385,21 @@ Examples:
 }
 
 func printStatusHelp() {
-	fmt.Print(`ssd status - Show container status
+	fmt.Print(`ssd status - Show what is running in the stack
 
 Usage:
-  ssd status                      Show status for all containers in the stack
-  ssd status <service>            Show status for a specific service
+  ssd status [service]            Whole stack, or one service when named
+  ssd ps [service]                Alias of status
 
-Runs 'docker compose ps' on the server and displays container state,
-health, ports, and uptime.
+Prints one row per running instance: service, state (with health when the
+runtime reports it), uptime, deployed image tag, and published ports. The
+PORTS column is omitted when nothing publishes a port (the norm on k3s,
+where traffic arrives through the Ingress).
 
 Examples:
-  ssd status web
   ssd status
+  ssd status web
+  ssd ps
 `)
 }
 

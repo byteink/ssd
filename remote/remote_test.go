@@ -399,22 +399,41 @@ func TestClient_RestartStack(t *testing.T) {
 	mockExec.AssertExpectations(t)
 }
 
-func TestClient_GetContainerStatus(t *testing.T) {
+func TestClient_GetStatus_WholeStack(t *testing.T) {
 	cfg := newTestConfig()
 	mockExec := new(testhelpers.MockExecutor)
 	client := NewClientWithExecutor(cfg, mockExec)
 
-	expectedOutput := "myapp-app-1\tUp 5 minutes"
+	output := `{"Service":"app","State":"running","Status":"Up 5 minutes","Image":"ssd-myapp-app:3"}`
 	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
 		cmd := args[1]
 		return strings.Contains(cmd, "cd /stacks/myapp") &&
-			strings.Contains(cmd, "docker compose ps")
-	})).Return(expectedOutput, nil)
+			strings.Contains(cmd, "docker compose ps --all --format json") &&
+			!strings.Contains(cmd, "--all --format json ") // no service filter appended
+	})).Return(output, nil)
 
-	status, err := client.GetContainerStatus(context.Background())
+	rows, err := client.GetStatus(context.Background(), "")
 
 	require.NoError(t, err)
-	assert.Contains(t, status, "Up 5 minutes")
+	require.Len(t, rows, 1)
+	assert.Equal(t, "app", rows[0].Service)
+	assert.Equal(t, "5m", rows[0].Uptime)
+	assert.Equal(t, "3", rows[0].Version)
+}
+
+func TestClient_GetStatus_SingleService(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.MatchedBy(func(args []string) bool {
+		return strings.Contains(args[1], "docker compose ps --all --format json -- web")
+	})).Return("", nil)
+
+	rows, err := client.GetStatus(context.Background(), "web")
+
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }
 
 func TestClient_GetLogs_NoFollow(t *testing.T) {

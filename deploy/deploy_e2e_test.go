@@ -195,6 +195,48 @@ func TestE2E_VerifyContainerRunning(t *testing.T) {
 	assert.Contains(t, ps, "Up", "container status should be Up")
 }
 
+// GetStatus is what `ssd status` / `ssd ps` renders. Against a real docker
+// daemon it must report the deployed service as running, carry the tag the
+// deploy just produced, and honour the service filter.
+func TestE2E_GetStatus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+	ctx := context.Background()
+
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+	client := newE2EClient(t, sandbox, cfg)
+
+	deployE2E(t, cfg, client)
+
+	rows, err := client.GetStatus(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "the stack has exactly one service")
+	assert.Equal(t, cfg.Name, rows[0].Service)
+	assert.Equal(t, "running", rows[0].State)
+	assert.Equal(t, "1", rows[0].Version, "first deploy is tag 1")
+	assert.NotEqual(t, "-", rows[0].Uptime, "a running container has an uptime")
+
+	// Named service narrows to that service.
+	named, err := client.GetStatus(ctx, cfg.Name)
+	require.NoError(t, err)
+	require.Len(t, named, 1)
+	assert.Equal(t, cfg.Name, named[0].Service)
+
+	// A stopped service must still be listed (that is what --all buys) and
+	// report no uptime — otherwise `ssd status` would silently hide the one
+	// service the user is trying to debug.
+	_, err = sandbox.RunSSH(fmt.Sprintf("cd %s && docker compose stop", cfg.StackPath()))
+	require.NoError(t, err)
+
+	stopped, err := client.GetStatus(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, stopped, 1, "a stopped service must still be listed")
+	assert.Equal(t, "exited", stopped[0].State)
+	assert.Equal(t, "-", stopped[0].Uptime)
+}
+
 func TestE2E_VersionIncrement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E test in short mode")

@@ -14,7 +14,7 @@ ssd down [service]            # Stop services (or all if omitted)
 ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
-ssd status <service>          # Container status
+ssd status|ps [service]       # What's running: state, uptime, version, ports
 ssd logs <service> [-f]       # View/follow logs
 ssd config [service]          # Show resolved config
 ssd env <service> set K=V     # Set env var on server

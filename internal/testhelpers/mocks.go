@@ -77,12 +77,6 @@ func (m *MockRemoteClient) RestartStack(ctx context.Context) error {
 	return args.Error(0)
 }
 
-// GetContainerStatus mocks container status retrieval
-func (m *MockRemoteClient) GetContainerStatus(ctx context.Context) (string, error) {
-	args := m.Called()
-	return args.String(0), args.Error(1)
-}
-
 // GetLogs mocks log retrieval
 func (m *MockRemoteClient) GetLogs(ctx context.Context, follow bool, tail int) error {
 	args := m.Called(follow, tail)

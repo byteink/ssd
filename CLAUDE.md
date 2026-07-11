@@ -625,10 +625,45 @@ ssd down [service]            # Stop services (or all if omitted)
 ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
-ssd status <service>          # Check container status
+ssd status|ps [service]       # What's running (whole stack, or one service)
 ssd logs <service> [-f]       # View logs, -f to follow
 ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
 ```
+
+### `ssd status` / `ssd ps`
+
+One row per running instance, same table for both runtimes:
+
+```
+arcline on hl-master
+
+SERVICE     STATUS             UPTIME  VERSION  PORTS
+backend     running            25m     7        8092→8090
+kb          running (healthy)  7m      8        8102→8100
+web         exited             -       8        -
+```
+
+- No argument = whole stack; a named service narrows the rows (compose:
+  positional service arg; k3s: `-l app=<svc>`).
+- `remote.ServiceStatus` is the shared row type. Compose fills it from
+  `docker compose ps --all --format json` (`remote.ParseComposeStatus`,
+  accepting both the JSON-array and NDJSON shapes compose emits across
+  versions); k3s fills it from a `kubectl get pods -o jsonpath` row
+  (`k3s.ParsePodStatus`).
+- `GetStatus` deliberately lives on `runtime.StatusClient`, **not** on
+  `remote.RemoteClient`: `internal/testhelpers` cannot import `remote` (the
+  mocks are consumed by `remote`'s own in-package tests, so the import would
+  cycle), and only `ssd status` needs the method.
+- STATUS is the runtime state plus health when known — compose reports
+  `healthy`/`unhealthy`/`starting`, k3s reports `not ready` for a pod whose
+  probes have not passed.
+- VERSION is the deployed image tag (`remote.ImageTag`, which ignores a
+  registry port so `registry.local:5000/web` is untagged, not tag `5000`).
+- The PORTS column is dropped entirely when no service publishes a port (the
+  norm on k3s, where traffic arrives through the Ingress) to keep the table
+  narrow. Per row, ports are capped at two with a `+N` overflow marker.
+- Rendering is `renderStatus` in main.go (stdlib `text/tabwriter`) — the
+  `ui.Reporter` machinery is for deploy progress and is not used here.
 
 ### Configuration
 ```bash

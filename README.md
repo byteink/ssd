@@ -370,10 +370,26 @@ ssd down [service]            # Stop services (or all if omitted)
 ssd rm [service]              # Permanently remove services (or entire stack)
 ssd restart <service>         # Restart without rebuilding
 ssd rollback <service>        # Rollback to previous version
-ssd status <service>          # Check container status
+ssd status|ps [service]       # What's running (whole stack, or one service)
 ssd logs <service> [-f]       # View logs, -f to follow
 ssd scale <service> <count>   # Live-scale a service (does not edit ssd.yaml)
 ```
+
+`ssd status` (alias `ssd ps`) prints one row per running instance, identical
+across runtimes:
+
+```
+arcline on hl-master
+
+SERVICE     STATUS             UPTIME  VERSION  PORTS
+backend     running            25m     7        8092→8090
+bytebucket  running            25m     0.10.0   9000→9000
+kb          running (healthy)  7m      8        8102→8100
+web         exited             -       8        -
+```
+
+The PORTS column is omitted when nothing publishes a port — the norm on k3s,
+where traffic arrives through the Ingress.
 
 ### Replicas & scaling
 

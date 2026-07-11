@@ -26,7 +26,6 @@ type RemoteClient interface {
 	BuildImage(ctx context.Context, buildDir string, version int) error
 	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
-	GetContainerStatus(ctx context.Context) (string, error)
 	GetLogs(ctx context.Context, follow bool, tail int) error
 	Cleanup(ctx context.Context, path string) error
 	MakeTempDir(ctx context.Context) (string, error)
@@ -281,12 +280,20 @@ func (c *Client) RestartStack(ctx context.Context) error {
 	return c.SSHInteractive(ctx, cmd)
 }
 
-// GetContainerStatus returns the status of the container
-func (c *Client) GetContainerStatus(ctx context.Context) (string, error) {
-	// Try to find container by compose project name
-	stackPath := c.cfg.StackPath()
-	cmd := fmt.Sprintf("cd %s && docker compose ps --format '{{.Name}}\\t{{.Status}}'", shellescape.Quote(stackPath))
-	return c.SSH(ctx, cmd)
+// GetStatus returns one row per running container in the stack. An empty
+// serviceName covers the whole stack; a named service narrows it to that
+// service's containers.
+func (c *Client) GetStatus(ctx context.Context, serviceName string) ([]ServiceStatus, error) {
+	cmd := fmt.Sprintf("cd %s && docker compose ps --all --format json", shellescape.Quote(c.cfg.StackPath()))
+	if serviceName != "" {
+		cmd += " -- " + shellescape.Quote(serviceName)
+	}
+
+	output, err := c.SSH(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return ParseComposeStatus(output)
 }
 
 // GetLogs returns logs from the container

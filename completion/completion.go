@@ -25,7 +25,7 @@ import (
 // omitted so they do not surface in TAB completion.
 var TopLevelCommands = []string{
 	"init", "migrate", "deploy", "up", "update", "down", "rm", "restart",
-	"rollback", "status", "logs", "config", "env", "secret",
+	"rollback", "status", "ps", "logs", "config", "env", "secret",
 	"prune", "scale", "provision", "skill", "completion",
 	"version", "help",
 }
@@ -35,7 +35,7 @@ var TopLevelCommands = []string{
 // service names from ssd.yaml.
 var ServiceCommands = map[string]bool{
 	"deploy": true, "up": true, "update": true, "down": true, "rm": true,
-	"restart": true, "rollback": true, "status": true,
+	"restart": true, "rollback": true, "status": true, "ps": true,
 	"logs": true, "config": true, "scale": true,
 }
 

@@ -337,14 +337,6 @@ func (c *Client) RestartStack(ctx context.Context) error {
 	return c.SSHInteractive(ctx, cmd)
 }
 
-// GetContainerStatus returns pod status for the service.
-func (c *Client) GetContainerStatus(ctx context.Context) (string, error) {
-	cmd := fmt.Sprintf("k3s kubectl get pods -n %s -l app=%s -o wide",
-		shellescape.Quote(c.namespace),
-		shellescape.Quote(c.cfg.Name))
-	return c.SSH(ctx, cmd)
-}
-
 // GetLogs returns logs for the service pods.
 func (c *Client) GetLogs(ctx context.Context, follow bool, tail int) error {
 	tailArg := ""
