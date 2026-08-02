@@ -94,8 +94,13 @@ func TestPreflight_DirtySubmodulePointer_Aborts(t *testing.T) {
 	}
 	git(t, parent, "commit", "-qm", "add submodule")
 
-	// Move the submodule pointer without committing it in the parent.
+	// Move the submodule pointer without committing it in the parent. The
+	// checkout is a fresh clone, so it carries none of sub's config — give it
+	// an identity of its own or the commit fails wherever git has no global
+	// user set (CI runners).
 	subCheckout := filepath.Join(parent, "vendor", "sub")
+	git(t, subCheckout, "config", "user.email", "test@example.com")
+	git(t, subCheckout, "config", "user.name", "test")
 	require.NoError(t, os.WriteFile(filepath.Join(subCheckout, "tracked.txt"), []byte("v2\n"), 0o600))
 	git(t, subCheckout, "commit", "-qam", "move pointer")
 
