@@ -13,6 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These tests assert on wall-clock ordering, so the build context is a bare
+// temp dir rather than ".". A context inside the repo makes DeployWithClient's
+// pre-flight run `git status` over the whole worktree inside the measured
+// window, which stretches into seconds when the disk is busy (a parallel e2e
+// run) and turns the timing assertions flaky. Lock behaviour is what is under
+// test here; the git check has its own tests in preflight_test.go.
+
 // TestConcurrent_SameStackBlocked verifies that two deployments to the same stack
 // cannot run simultaneously - the second must wait for the first to complete
 func TestConcurrent_SameStackBlocked(t *testing.T) {
@@ -22,7 +29,7 @@ func TestConcurrent_SameStackBlocked(t *testing.T) {
 		Server:     "testserver",
 		Stack:      stackPath,
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	var firstStarted, secondStarted atomic.Bool
@@ -132,7 +139,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 		Server:     "testserver",
 		Stack:      "/stacks/app1",
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	cfg2 := &config.Config{
@@ -140,7 +147,7 @@ func TestConcurrent_DifferentStacksParallel(t *testing.T) {
 		Server:     "testserver",
 		Stack:      "/stacks/app2",
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	var deploy1Started, deploy2Started atomic.Bool
@@ -230,7 +237,7 @@ func TestConcurrent_LockTimeout(t *testing.T) {
 		Server:     "testserver",
 		Stack:      stackPath,
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	// First deployment holds lock for 500ms
@@ -299,7 +306,7 @@ func TestConcurrent_LockReleasedOnFailure(t *testing.T) {
 		Server:     "testserver",
 		Stack:      stackPath,
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	// First deployment fails
@@ -353,7 +360,7 @@ func TestConcurrent_RaceConditions(t *testing.T) {
 		Server:     "testserver",
 		Stack:      "/stacks/racetest",
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	var successCount, failureCount atomic.Int32
@@ -422,7 +429,7 @@ func TestConcurrent_VersionRace(t *testing.T) {
 		Server:     "testserver",
 		Stack:      stackPath,
 		Dockerfile: "./Dockerfile",
-		Context:    ".",
+		Context:    t.TempDir(),
 	}
 
 	var firstStarted, secondStarted atomic.Bool
@@ -537,7 +544,7 @@ func TestConcurrent_MultipleStacksNoInterference(t *testing.T) {
 			Server:     "testserver",
 			Stack:      "/stacks/multistack-" + string(rune('a'+i)),
 			Dockerfile: "./Dockerfile",
-			Context:    ".",
+			Context:    t.TempDir(),
 		}
 	}
 
