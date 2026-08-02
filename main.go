@@ -2183,6 +2183,15 @@ func printConfig(cfg *config.Config, indent string) {
 			fmt.Printf("%s  %s -> %s\n", indent, local, container)
 		}
 	}
+	if cfg.RequireClean != nil {
+		fmt.Printf("%srequire_clean: %v\n", indent, *cfg.RequireClean)
+	}
+	if len(cfg.PreDeploy) > 0 {
+		fmt.Printf("%spre_deploy:\n", indent)
+		for _, c := range cfg.PreDeploy {
+			fmt.Printf("%s  %s\n", indent, c)
+		}
+	}
 }
 
 // wantsHelp returns true if args contain -h, --help, or help.
@@ -2259,12 +2268,27 @@ covers every service, so nothing extra is pulled in.
 
 Workflow:
   1. Reads ssd.yaml from the current directory
-  2. SSHs into the configured server
-  3. Rsyncs source code to a temp directory on the server (skipped for pre-built images)
-  4. Builds the Docker image on the server (or pulls if 'image' is set)
-  5. Generates compose.yaml in the stack directory
-  6. Starts the service using the configured deploy strategy
-  7. Cleans up the temp directory
+  2. Runs pre_deploy commands locally, then the require_clean check
+  3. SSHs into the configured server
+  4. Rsyncs source code to a temp directory on the server (skipped for pre-built images)
+  5. Builds the Docker image on the server (or pulls if 'image' is set)
+  6. Generates compose.yaml in the stack directory
+  7. Starts the service using the configured deploy strategy
+  8. Cleans up the temp directory
+
+Local pre-flight (per service, or set at root level to apply to all):
+  pre_deploy      List of shell commands run locally, in order, with the working
+                  directory set to the build context. Any non-zero exit aborts
+                  the deploy before anything touches the server.
+  require_clean   true aborts the deploy when the build context has uncommitted
+                  TRACKED changes (staged or unstaged, submodule pointers
+                  included). Untracked files are fine. Default false, which
+                  warns instead — deploys ship 'git archive HEAD', so
+                  uncommitted work never reaches the server either way.
+
+  pre_deploy runs BEFORE require_clean: hooks regenerate committed artifacts,
+  the check then catches "you regenerated and did not commit". Neither applies
+  to pre-built ('image:') services, which sync no build context.
 
 Deploy strategies (set via deploy.strategy in ssd.yaml):
   rollout   (default) Zero-downtime. Scales up new container, health-checks, removes old.

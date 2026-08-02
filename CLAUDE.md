@@ -93,7 +93,8 @@ goreleaser release --snapshot --clean   # Test release locally
 ├── remote/
 │   └── remote.go     # SSH, rsync, docker operations
 ├── deploy/
-│   └── deploy.go     # Deploy orchestration
+│   ├── deploy.go     # Deploy orchestration
+│   └── preflight.go  # Local pre-flight: pre_deploy hooks + require_clean check
 ├── compose/
 │   └── compose.go    # Docker Compose YAML generation
 ├── k8s/
@@ -129,6 +130,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 
 ### Compose runtime
 1. Read `ssd.yaml` config from current directory
+1b. Local pre-flight: `pre_deploy` hooks, then the `require_clean` check
 2. SSH into configured server (uses `~/.ssh/config` hosts)
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
@@ -139,6 +141,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 
 ### K3s runtime
 1. Read `ssd.yaml` config from current directory
+1b. Local pre-flight: `pre_deploy` hooks, then the `require_clean` check
 2. SSH into configured server
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
@@ -147,6 +150,51 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 7. Generate K8s manifests, apply with `kubectl apply`
 8. Wait for rollout: `kubectl rollout status`
 9. Clean up temp directory
+
+## Local Pre-flight (`deploy/preflight.go`)
+
+`Rsync` ships the build context as `git archive HEAD`, so **uncommitted tracked
+changes are never deployed** — and without a check that failure mode is silent:
+the server rebuilds the previous commit and the deploy exits 0. Two config
+fields close that hole. Both are per-service and settable at root for
+inheritance (same shape as `deploy:` / `cleanup:`).
+
+```yaml
+services:
+  website:
+    require_clean: true
+    pre_deploy:
+      - sh advisories.sh
+      - make gen
+```
+
+- **`pre_deploy`** — shell commands run **locally** (`sh -c`), sequentially,
+  with `cmd.Dir` set to the resolved `context`. First non-zero exit aborts;
+  the error carries the command and the tail of its output
+  (`preDeployErrTail`, 2000 runes). Output streams live into the step's tail
+  window and is buffered in parallel, because `Fail()` collapses the window.
+- **`require_clean`** — `true` aborts when `git status --porcelain -- .` (run
+  with `cmd.Dir` = context, so the pathspec scopes the check to the context,
+  not the whole repo) reports tracked changes. `??` lines are skipped:
+  untracked files were never in the archive. A moved submodule pointer shows
+  as a modified path, so it aborts — that is the bit-website case, where the
+  `vendor/bit` pointer decides which docs get published. Default is `false`
+  (`config.CleanRequired()`), which **warns** instead — silence was the actual
+  defect. A non-git context is not an error here; `Rsync` reports it with a
+  better message moments later.
+
+**Ordering is load-bearing**: `pre_deploy` runs *before* `require_clean`. Hooks
+regenerate committed artifacts; the check then catches "you regenerated and did
+not commit". Reversed, the pair is useless.
+`TestPreflight_PreDeployDirtiesTree_RequireClean_Aborts` guards it.
+
+There is deliberately **no opt-out** for files a hook is expected to modify: if
+`pre_deploy` dirties a tracked file, the deploy *should* stop and make you
+commit it. Don't add an escape hatch until someone proves they need one.
+
+Called from `DeployWithClient` right after the header, before `StackExists` —
+a failing hook or dirty tree leaves the server untouched. Skipped for pre-built
+(`image:`) services, which sync no context.
 
 ## Deploy Output (ui package)
 
@@ -428,6 +476,23 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+### Pre-deploy hooks / clean tree
+```yaml
+server: myserver
+require_clean: true           # root default, inherited by every service
+
+services:
+  website:
+    pre_deploy:               # run locally in the context, in order
+      - sh advisories.sh
+      - make gen
+  worker:
+    require_clean: false      # per-service override (warn instead of abort)
+```
+
+See "Local Pre-flight" above. `pre_deploy` runs before the `require_clean`
+check; neither applies to pre-built (`image:`) services.
 
 ### Deploy strategy
 ```yaml

@@ -2561,3 +2561,51 @@ func TestConfig_RetainTagsServiceZeroOverridesRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, svc.RetainTags())
 }
+
+func TestConfig_RequireCleanAndPreDeploy_Service(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    require_clean: true\n    pre_deploy:\n      - make gen\n      - ./build.sh\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.True(t, svc.CleanRequired())
+	assert.Equal(t, []string{"make gen", "./build.sh"}, svc.PreDeploy)
+}
+
+func TestConfig_RequireCleanDefaultsFalse(t *testing.T) {
+	cfg, err := LoadFromBytes([]byte("server: srv\nservices:\n  web: {}\n"))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.False(t, svc.CleanRequired())
+	assert.Nil(t, svc.PreDeploy)
+}
+
+func TestConfig_RequireCleanAndPreDeploy_RootInheritance(t *testing.T) {
+	yaml := "server: srv\nrequire_clean: true\npre_deploy:\n  - make gen\nservices:\n  web: {}\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.True(t, svc.CleanRequired())
+	assert.Equal(t, []string{"make gen"}, svc.PreDeploy)
+}
+
+func TestConfig_RequireCleanServiceOverridesRoot(t *testing.T) {
+	yaml := "server: srv\nrequire_clean: true\npre_deploy:\n  - make gen\nservices:\n  web:\n    require_clean: false\n    pre_deploy: []\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.False(t, svc.CleanRequired())
+	assert.Empty(t, svc.PreDeploy)
+}
+
+func TestConfig_PreDeployRejectsBlankCommand(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    pre_deploy:\n      - \"  \"\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	_, err = cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pre_deploy")
+}

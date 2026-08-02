@@ -176,6 +176,8 @@ When `image` is set, ssd pulls it instead of building.
 | `runtime` | `compose` (default) or `k3s` |
 | `deploy.strategy` | `rollout` (default) or `recreate` |
 | `cleanup.retention` | Default image tag retention (default: `2`; `0` disables) |
+| `require_clean` | Default clean-tree enforcement for all services |
+| `pre_deploy` | Default pre-deploy hooks for all services |
 
 ### Service-level
 
@@ -194,6 +196,8 @@ When `image` is set, ssd pulls it instead of building.
 | `volumes` | — | Named volumes (`name: mount_path`) |
 | `healthcheck` | — | Health check (one of `cmd`/`exec`, plus interval, timeout, retries) |
 | `cleanup.retention` | inherited | Per-service override for image tag retention |
+| `require_clean` | `false` | Abort when the build context has uncommitted **tracked** changes (untracked files are fine). `false` warns instead |
+| `pre_deploy` | — | Shell commands run locally in the build context before the sync, in order. Non-zero exit aborts. Runs **before** `require_clean` |
 
 ---
 
@@ -205,6 +209,8 @@ Local machine                        Remote server
 ssd deploy app
   │
   ├─ Read ssd.yaml
+  ├─ pre_deploy hooks (local)
+  ├─ require_clean check (local)
   ├─ SSH connect ──────────────────► Create temp dir
   ├─ rsync code ───────────────────► /tmp/ssd-xxxxx/
   │                                  docker build → ssd-project-app:4
@@ -217,6 +223,9 @@ ssd deploy app
 - Versions auto-increment (parsed from `compose.yaml`)
 - Dependencies start first if not already running
 - A lock file prevents concurrent deploys to the same stack
+- Only committed code ships: the sync is `git archive HEAD`. Uncommitted tracked
+  changes are left behind — `require_clean: true` turns that into an abort
+  instead of a warning
 
 ---
 

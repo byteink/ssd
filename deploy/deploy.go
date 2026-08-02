@@ -284,6 +284,16 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 
 	r.Header("Deploying %s → %s", cfg.Name, cfg.Server)
 
+	// Local pre-flight (pre_deploy hooks, then require_clean) runs before
+	// anything touches the server, so a failing hook or a dirty tree leaves
+	// the remote stack untouched. Pre-built services sync no context, so
+	// neither applies to them.
+	if !cfg.IsPrebuilt() {
+		if err := preflight(ctx, r, cfg); err != nil {
+			return err
+		}
+	}
+
 	stackExists, err := client.StackExists(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to check stack existence: %w", err)

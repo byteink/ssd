@@ -15,6 +15,7 @@ Agentless remote deployment tool for Docker Compose and K3s.
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
 - **Reliable**: Zero-downtime deployments with automatic version tracking
+- **Honest about what ships**: deploys send `git archive HEAD`, so `require_clean` refuses to deploy a dirty tree instead of silently shipping the last commit
 - **Polished output**: Docker-style live progress in your terminal — spinner + per-step timer, frozen ✓/✗ summary on completion. Falls back to plain text in CI and pipes automatically.
 
 ## Installation
@@ -195,6 +196,43 @@ services:
       retries: 3
 ```
 
+### Pre-deploy hooks and clean-tree enforcement
+
+```yaml
+server: myserver
+
+services:
+  website:
+    require_clean: true             # abort if the context has uncommitted tracked changes
+    pre_deploy:                     # run locally, in order, in the build context
+      - sh advisories.sh
+      - make gen
+```
+
+ssd ships the build context with `git archive HEAD`, so **uncommitted tracked
+changes are never deployed**. Without `require_clean` that is silent: edit a
+file, deploy without committing, and the server rebuilds the previous version
+while the deploy reports success.
+
+- `pre_deploy`: shell commands run **locally**, sequentially, with the working
+  directory set to the resolved `context`. The first non-zero exit aborts the
+  deploy and prints the command and its output. Nothing has touched the server
+  at that point.
+- `require_clean`: `true` aborts when the context has uncommitted **tracked**
+  changes — staged or unstaged, submodule pointer moves included. Untracked
+  files are not an error (`git archive` never shipped them). The check is
+  scoped to the context path, so a dirty file elsewhere in the repo is
+  irrelevant. Default is `false`, which prints a warning instead of aborting.
+
+`pre_deploy` runs **before** `require_clean`. That ordering is the point: hooks
+regenerate committed artifacts, and the check then catches "you regenerated and
+did not commit". Neither field applies to pre-built (`image:`) services, which
+sync no build context.
+
+Both fields can be set at the root level and are inherited by every service; a
+service-level value always wins (including `require_clean: false` and
+`pre_deploy: []`).
+
 ### Config files
 
 ```yaml
@@ -335,6 +373,8 @@ services:
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
 - `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files
+- `require_clean`: Abort the deploy when the build context has uncommitted tracked changes (default: `false`, which warns). Inherits from root
+- `pre_deploy`: Shell commands run locally in the build context before the sync, in order. A non-zero exit aborts the deploy. Runs before the `require_clean` check. Inherits from root
 - `healthcheck`: Health check configuration (exactly one of `cmd` / `exec`)
   - `cmd`: Shell command, rendered as `["CMD","sh","-c",cmd]`
   - `exec`: Array form, rendered as `["CMD",arg0,arg1,...]`. Use for scratch images with no shell.
@@ -345,6 +385,8 @@ services:
 **Root-level fields:**
 - `server`: SSH server name (from `~/.ssh/config`)
 - `stack`: Default stack path for all services
+- `require_clean`: Default for all services
+- `pre_deploy`: Default for all services
 
 ## Commands
 

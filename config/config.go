@@ -128,16 +128,25 @@ type Config struct {
 	EnvFile     string            `yaml:"env_file"` // local path to .env file (relative to project root); overwrites {service}.env on deploy
 	HealthCheck *HealthCheck      `yaml:"healthcheck"`
 	Cleanup     *CleanupConfig    `yaml:"cleanup"` // post-deploy image tag retention; inherits from root
+	// RequireClean aborts the deploy when the build context has uncommitted
+	// tracked changes. Pointer so a service can override an inherited true
+	// with false. nil (default) warns instead of aborting.
+	RequireClean *bool `yaml:"require_clean"`
+	// PreDeploy are shell commands run locally in the build context before
+	// the sync, in order. Inherits from root when unset.
+	PreDeploy []string `yaml:"pre_deploy"`
 }
 
 // RootConfig represents the ssd.yaml file structure
 type RootConfig struct {
-	Runtime  string             `yaml:"runtime"`
-	Server   string             `yaml:"server"`
-	Stack    string             `yaml:"stack"`
-	Deploy   *DeployConfig      `yaml:"deploy"`
-	Cleanup  *CleanupConfig     `yaml:"cleanup"`
-	Services map[string]*Config `yaml:"services"`
+	Runtime      string             `yaml:"runtime"`
+	Server       string             `yaml:"server"`
+	Stack        string             `yaml:"stack"`
+	Deploy       *DeployConfig      `yaml:"deploy"`
+	Cleanup      *CleanupConfig     `yaml:"cleanup"`
+	RequireClean *bool              `yaml:"require_clean"`
+	PreDeploy    []string           `yaml:"pre_deploy"`
+	Services     map[string]*Config `yaml:"services"`
 }
 
 // Load reads and parses an ssd config from disk.
@@ -394,8 +403,25 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 		return nil, fmt.Errorf("service %q not found", serviceName)
 	}
 
-	// Inherit root-level values if not set on service
 	cfg := *svc
+	r.inherit(&cfg)
+
+	result, err := applyDefaults(&cfg, serviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateConfig(result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// inherit fills unset service fields from the root-level defaults.
+// A value set on the service always wins — including an explicit zero
+// (cleanup.retention: 0, require_clean: false, pre_deploy: []).
+func (r *RootConfig) inherit(cfg *Config) {
 	if cfg.Server == "" {
 		cfg.Server = r.Server
 	}
@@ -409,25 +435,19 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 			cfg.Deploy.Strategy = r.Deploy.Strategy
 		}
 	}
-	// Cleanup inheritance: service value wins when set (including 0),
-	// otherwise inherit from root. nil at both levels means default.
 	if cfg.Cleanup == nil || cfg.Cleanup.Retention == nil {
 		if r.Cleanup != nil && r.Cleanup.Retention != nil {
 			inherited := *r.Cleanup.Retention
 			cfg.Cleanup = &CleanupConfig{Retention: &inherited}
 		}
 	}
-
-	result, err := applyDefaults(&cfg, serviceName)
-	if err != nil {
-		return nil, err
+	if cfg.RequireClean == nil && r.RequireClean != nil {
+		inherited := *r.RequireClean
+		cfg.RequireClean = &inherited
 	}
-
-	if err := validateConfig(result); err != nil {
-		return nil, err
+	if cfg.PreDeploy == nil {
+		cfg.PreDeploy = r.PreDeploy
 	}
-
-	return result, nil
 }
 
 // ListServices returns all service names in a multi-service config
@@ -571,6 +591,23 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
+	if err := validatePreDeploy(cfg.PreDeploy); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validatePreDeploy rejects blank commands — `sh -c ""` would silently
+// succeed, hiding a typo'd hook. The command text itself is not sanitised:
+// it runs on the operator's machine from a config that already names the
+// ssh host, so it is trusted input, not a boundary.
+func validatePreDeploy(cmds []string) error {
+	for i, c := range cmds {
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("pre_deploy[%d]: command cannot be empty", i)
+		}
+	}
 	return nil
 }
 
@@ -729,6 +766,12 @@ func (c *Config) RetainTags() int {
 		return 2
 	}
 	return *c.Cleanup.Retention
+}
+
+// CleanRequired reports whether a dirty build context must abort the deploy.
+// Defaults to false (warn only) for backwards compatibility.
+func (c *Config) CleanRequired() bool {
+	return c.RequireClean != nil && *c.RequireClean
 }
 
 // UseHTTPS returns true if HTTPS should be used for this config

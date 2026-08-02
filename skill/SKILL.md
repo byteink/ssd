@@ -102,6 +102,10 @@ services:
     depends_on: [db, redis]   # Or map with conditions (service_healthy, service_started)
     env_file: ./.env          # Upload local .env to {stack}/{service}.env on every deploy (mode 600)
                               # OVERWRITES values set via `ssd env set`. Remove to manage vars via CLI only.
+    require_clean: true       # Abort if the build context has uncommitted TRACKED changes
+                              # (default false = warn). Deploys ship `git archive HEAD`.
+    pre_deploy:               # Shell commands run LOCALLY in the context, in order, before
+      - make gen              # the sync. Non-zero exit aborts. Runs BEFORE require_clean.
     files:
       ./config.yaml: /app/config.yaml  # Local file -> container path (works with .gitignored files)
     volumes:
@@ -116,7 +120,7 @@ services:
       replicas: 3             # default 1 (compose: requires `docker compose --compatibility`)
 ```
 
-Root-level `server`, `stack`, and `deploy.strategy` are inherited by all services.
+Root-level `server`, `stack`, `deploy.strategy`, `require_clean`, and `pre_deploy` are inherited by all services.
 Traefik is only included when a service has `domain` or `domains` set. Services without domains can use `ports` for host access (Tailscale, Cloudflare tunnels).
 
 ## Workflow
