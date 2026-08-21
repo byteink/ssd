@@ -95,8 +95,8 @@ goreleaser release --snapshot --clean   # Test release locally
 ├── deploy/
 │   ├── deploy.go     # Deploy orchestration
 │   ├── preflight.go  # Local pre-flight: pre_deploy hooks + require_clean check
-│   ├── buildargs.go  # build_args resolution (${secret:}/${env:} → values)
-│   └── redact.go     # Masks resolved build-arg values in build output
+│   ├── buildargs.go  # build_args/build_secrets resolution (${secret:}/${env:})
+│   └── redact.go     # Masks resolved build-arg/secret values in build output
 ├── compose/
 │   └── compose.go    # Docker Compose YAML generation
 ├── k8s/
@@ -136,7 +136,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 2. SSH into configured server (uses `~/.ssh/config` hosts)
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
-4b. Resolve `build_args` (`${secret:}` / `${env:}`) — missing key aborts here
+4b. Resolve `build_args` / `build_secrets` — missing key aborts here
 5. Build Docker image on server: `ssd-{name}:{version}` (with `--build-arg`)
 6. Parse current version from compose.yaml, increment it
 7. Start service using configured strategy (`docker rollout` or `--force-recreate`)
@@ -148,7 +148,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 2. SSH into configured server
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
-4b. Resolve `build_args` (`${secret:}` / `${env:}`) — missing key aborts here
+4b. Resolve `build_args` / `build_secrets` — missing key aborts here
 5. Ensure buildkitd is running, build image with `nerdctl --namespace k8s.io build`
    (plus `--build-arg` flags)
 6. Parse current version from manifests.yaml, increment it
@@ -201,7 +201,7 @@ Called from `DeployWithClient` right after the header, before `StackExists` —
 a failing hook or dirty tree leaves the server untouched. Skipped for pre-built
 (`image:`) services, which sync no context.
 
-## Build Args (`deploy/buildargs.go`, `deploy/redact.go`)
+## Build Args and Build Secrets (`deploy/buildargs.go`, `deploy/redact.go`)
 
 `build_args` is a per-service map passed to the builder as `--build-arg K=V`
 (`docker build` on compose, `nerdctl --namespace k8s.io build` on k3s, both via
@@ -217,6 +217,12 @@ services:
       MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
       BUILD_CHANNEL: stable
 ```
+
+`build_secrets` is the same map shape with a different transport: BuildKit
+`--secret`, so the value never enters an image layer or `docker history`.
+Both resolve identically and share their stores (`resolveBuildInputs` →
+`resolveEntries`, one fetch per store per deploy). A key may not appear in
+both maps.
 
 A value is a literal or a **whole-value** reference (`config.ParseBuildArgRef`,
 anchored regexp — `prefix${secret:K}` is a config error, not a template):
@@ -267,9 +273,35 @@ Build args are per-service only (no root-level inheritance) and merge through
 env overlays for free, since the overlay deep-merge is at the YAML node level:
 an overlay that names one key replaces that key and keeps the rest.
 
-Deliberately **not** implemented: BuildKit `RUN --mount=type=secret`. It keeps
-credentials out of image layers entirely and is the better long-term answer,
-but `build_args` is what the blocked app needs today.
+### Transport
+
+- `build_args` → `remote.BuildArgFlags`: shell-escaped `--build-arg K=V`,
+  sorted keys. **Recorded in image history** — that is inherent to `--build-arg`,
+  not an ssd choice, and it is why `build_secrets` exists.
+  `TestE2E_BuildArgsDoLandInImageHistory` pins the behaviour so nobody
+  "fixes" the docs to claim otherwise.
+- `build_secrets` → `remote.BuildSecretsScript`: a shell prelude that
+  `umask 077`s, `mktemp -d`s a directory, base64-decodes each value into a
+  file inside it, and traps `EXIT HUP INT TERM` to `rm -rf` it however the
+  build ends (including a dropped SSH connection). The build then gets
+  `--secret id=K,src="$SSD_SECRETS/K"`. The compose path also pins
+  `DOCKER_BUILDKIT=1`, since `--secret` is a BuildKit flag and an older daemon
+  would reject it.
+
+  The temp dir is deliberately **outside the build context**: a file inside it
+  would be visible to `COPY . .` and end up in the image — precisely what
+  `--secret` prevents. `TestClient_BuildImage_SecretsLiveOutsideBuildContext`
+  guards that.
+
+  The Dockerfile must read the mount rather than an `ARG`:
+  `RUN --mount=type=secret,id=KEY ... "$(cat /run/secrets/KEY)"`.
+
+**Residual exposure, both mechanisms**: the value travels inside the SSH
+command string (base64 for secrets — encoding, not protection), so it is
+briefly visible in `ps` on the server. Closing that needs stdin transport
+through the executor, which has no API for it today. The image-history leak
+was the one worth fixing; `ps` requires concurrent root access on the box that
+already holds the secret store.
 
 ## Deploy Output (ui package)
 
@@ -543,6 +575,7 @@ services:
     target: production          # Docker build target stage (optional)
     build_args:                 # --build-arg KEY=VALUE (optional)
       BUILD_CHANNEL: stable
+    build_secrets:              # BuildKit --secret mounts (optional)
       MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
@@ -580,8 +613,22 @@ services:
       BUILD_CHANNEL: stable                              # literal
 ```
 
-See "Build Args" above. Missing/empty reference aborts before the build;
-resolved values are never printed. Not valid with `image:`.
+### Build secrets
+```yaml
+services:
+  api:
+    build_secrets:
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+```
+
+```dockerfile
+RUN --mount=type=secret,id=MAXMIND_LICENSE_KEY \
+    curl "...license_key=$(cat /run/secrets/MAXMIND_LICENSE_KEY)" -o db.tar.gz
+```
+
+See "Build Args and Build Secrets" above. Missing/empty reference aborts before
+the build; resolved values are never printed. Neither is valid with `image:`.
+Use `build_secrets` for credentials — `build_args` land in image history.
 
 ### Pre-deploy hooks / clean tree
 ```yaml
@@ -870,7 +917,8 @@ ssd secret <service> rm KEY           # Remove a secret
 ```
 
 A secret can also be fed to an image build by referencing it from a service's
-`build_args` as `${secret:KEY}` (see "Build Args").
+`build_args` or `build_secrets` as `${secret:KEY}` (see "Build Args and Build
+Secrets"). Prefer `build_secrets` — `build_args` end up in image history.
 
 K8s Secrets are injected as env vars alongside ConfigMap vars. The generated
 Deployment's `envFrom` always carries `secretRef: {name: {service}-secret,

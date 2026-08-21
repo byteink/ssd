@@ -24,7 +24,7 @@ type RemoteClient interface {
 	SSHInteractive(ctx context.Context, command string) error
 	Rsync(ctx context.Context, localPath, remotePath string) error
 	GetCurrentVersion(ctx context.Context) (int, error)
-	BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error
+	BuildImage(ctx context.Context, buildDir string, version int, buildArgs, buildSecrets map[string]string) error
 	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	GetLogs(ctx context.Context, follow bool, tail int) error
@@ -240,9 +240,11 @@ func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 
 // BuildImage builds a Docker image on the remote server.
 //
-// buildArgs are already-resolved values (see deploy.resolveBuildArgs); they
-// may be credentials, so they are shell-escaped and never logged here.
-func (c *Client) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
+// buildArgs and buildSecrets are already-resolved values (see
+// deploy.resolveBuildInputs); they may be credentials, so they are
+// shell-escaped and never logged here. Secrets additionally travel via
+// BuildKit --secret, which keeps them out of the image and its history.
+func (c *Client) BuildImage(ctx context.Context, buildDir string, version int, buildArgs, buildSecrets map[string]string) error {
 	imageTag := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Build command with dockerfile path relative to build context
@@ -253,8 +255,60 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int, b
 		targetFlag = " --target " + shellescape.Quote(c.cfg.Target)
 	}
 
-	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s%s%s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile), targetFlag, BuildArgFlags(buildArgs))
+	prelude, secretFlags := BuildSecretsScript(buildSecrets)
+	// --secret needs BuildKit. Docker 23+ defaults to it, but an older daemon
+	// (or DOCKER_BUILDKIT=0 in the environment) would fail on the flag.
+	builder := "docker build"
+	if prelude != "" {
+		builder = "DOCKER_BUILDKIT=1 docker build"
+	}
+
+	cmd := fmt.Sprintf("cd %s && %s%s -t %s -f %s%s%s%s .",
+		shellescape.Quote(buildDir),
+		prelude,
+		builder,
+		shellescape.Quote(imageTag),
+		shellescape.Quote(dockerfile),
+		targetFlag,
+		BuildArgFlags(buildArgs),
+		secretFlags)
 	return c.SSHInteractive(ctx, cmd)
+}
+
+// BuildSecretsScript renders the shell prelude that materialises each build
+// secret on the server, plus the matching `--secret id=K,src=...` flags.
+// Returns two empty strings when there is nothing to do.
+//
+// The files are written into a private `mktemp -d` directory, deliberately
+// NOT inside the build context: a Dockerfile with `COPY . .` would otherwise
+// bake them into the image, which is exactly what --secret exists to prevent.
+// `umask 077` makes the directory and files unreadable to other users, and
+// the EXIT/HUP/INT/TERM trap removes them however the build ends — including
+// a dropped SSH connection.
+//
+// Values reach the server base64-encoded rather than as plain text. That is
+// the same transport UploadEnvFile already uses; it is encoding, not
+// protection, so the value is still briefly visible in `ps` on the server.
+// What it does buy is the thing this feature is for: the credential never
+// reaches an image layer or `docker history`.
+func BuildSecretsScript(secrets map[string]string) (prelude, flags string) {
+	if len(secrets) == 0 {
+		return "", ""
+	}
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var p, f strings.Builder
+	p.WriteString(`umask 077 && SSD_SECRETS=$(mktemp -d) && trap 'rm -rf "$SSD_SECRETS"' EXIT HUP INT TERM && `)
+	for _, k := range keys {
+		encoded := base64.StdEncoding.EncodeToString([]byte(secrets[k]))
+		fmt.Fprintf(&p, "echo %s | base64 -d > \"$SSD_SECRETS/%s\" && ", shellescape.Quote(encoded), k)
+		fmt.Fprintf(&f, " --secret id=%s,src=\"$SSD_SECRETS/%s\"", k, k)
+	}
+	return p.String(), f.String()
 }
 
 // BuildArgFlags renders a resolved build_args map as shell-escaped

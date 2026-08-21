@@ -159,3 +159,84 @@ func TestResolve_EnvOverlayMergesBuildArgs(t *testing.T) {
 		"MAXMIND_ACCOUNT_ID": "${secret:MAXMIND_ACCOUNT_ID}",
 	}, cfg.Services["api"].BuildArgs)
 }
+
+func TestGetService_ResolvesBuildSecrets(t *testing.T) {
+	root, err := LoadFromBytes([]byte(
+		"server: myserver\n" +
+			"services:\n" +
+			"  api:\n" +
+			"    build_secrets:\n" +
+			"      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}\n"))
+	require.NoError(t, err)
+
+	cfg, err := root.GetService("api")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}",
+	}, cfg.BuildSecrets)
+}
+
+func TestValidateBuildArgs_BuildSecretsShareTheSameRules(t *testing.T) {
+	require.NoError(t, validateBuildArgs(&Config{BuildSecrets: map[string]string{
+		"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}",
+	}}))
+
+	err := validateBuildArgs(&Config{BuildSecrets: map[string]string{"BAD KEY": "x"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build_secrets")
+
+	err = validateBuildArgs(&Config{BuildSecrets: map[string]string{"K": "${vault:TOKEN}"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build_secrets")
+	assert.Contains(t, err.Error(), "K")
+}
+
+func TestValidateBuildArgs_BuildSecretsRejectedOnPrebuiltImage(t *testing.T) {
+	err := validateBuildArgs(&Config{
+		Image:        "nginx:latest",
+		BuildSecrets: map[string]string{"K": "v"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build_secrets")
+}
+
+// The same key in both maps would be handed to the builder twice, by two
+// different mechanisms — always a mistake, never a useful config.
+func TestValidateBuildArgs_RejectsKeyInBothMaps(t *testing.T) {
+	err := validateBuildArgs(&Config{
+		BuildArgs:    map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"},
+		BuildSecrets: map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MAXMIND_LICENSE_KEY")
+}
+
+func TestValidateBuildArgs_BuildSecretsErrorNeverContainsValue(t *testing.T) {
+	const secret = "s3cr3t-license-key"
+	err := validateBuildArgs(&Config{BuildSecrets: map[string]string{"BAD KEY": secret}})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), secret)
+}
+
+func TestResolve_EnvOverlayMergesBuildSecrets(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".ssd"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.yaml"), []byte(
+		"server: base\n"+
+			"services:\n"+
+			"  api:\n"+
+			"    build_secrets:\n"+
+			"      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".ssd", "ssd.prod.yaml"), []byte(
+		"services:\n"+
+			"  api:\n"+
+			"    build_secrets:\n"+
+			"      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY_PROD}\n"), 0644))
+
+	chdir(t, tmpDir)
+	cfg, _, err := Resolve("", "prod")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY_PROD}",
+	}, cfg.Services["api"].BuildSecrets)
+}

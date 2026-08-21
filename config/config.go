@@ -109,28 +109,32 @@ type CleanupConfig struct {
 
 // Config represents a single service configuration
 type Config struct {
-	Name        string            `yaml:"name"`
-	Server      string            `yaml:"server"`
-	Stack       string            `yaml:"stack"`
-	Dockerfile  string            `yaml:"dockerfile"`
-	Context     string            `yaml:"context"`
-	Domain      string            `yaml:"domain"`      // optional, enables Traefik (single domain)
-	Domains     []string          `yaml:"domains"`     // optional, multi-domain support
-	RedirectTo  string            `yaml:"redirect_to"` // optional, domain to redirect all others to (must be in Domains)
-	Path        string            `yaml:"path"`        // optional, path prefix for Traefik routing
-	HTTPS       *bool             `yaml:"https"`       // default true, pointer for nil check
-	Port        int               `yaml:"port"`        // default 80
-	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
-	Ports       []string          `yaml:"ports"`       // host:container port mappings
-	Target      string            `yaml:"target"`      // Docker build target stage
-	BuildArgs   map[string]string `yaml:"build_args"`  // --build-arg K=V; values may be ${secret:KEY} / ${env:KEY}
-	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
-	DependsOn   Dependencies      `yaml:"depends_on"`
-	Volumes     map[string]string `yaml:"volumes"`  // name: mount_path
-	Files       map[string]string `yaml:"files"`    // local_path: container_mount_path
-	EnvFile     string            `yaml:"env_file"` // local path to .env file (relative to project root); overwrites {service}.env on deploy
-	HealthCheck *HealthCheck      `yaml:"healthcheck"`
-	Cleanup     *CleanupConfig    `yaml:"cleanup"` // post-deploy image tag retention; inherits from root
+	Name       string            `yaml:"name"`
+	Server     string            `yaml:"server"`
+	Stack      string            `yaml:"stack"`
+	Dockerfile string            `yaml:"dockerfile"`
+	Context    string            `yaml:"context"`
+	Domain     string            `yaml:"domain"`      // optional, enables Traefik (single domain)
+	Domains    []string          `yaml:"domains"`     // optional, multi-domain support
+	RedirectTo string            `yaml:"redirect_to"` // optional, domain to redirect all others to (must be in Domains)
+	Path       string            `yaml:"path"`        // optional, path prefix for Traefik routing
+	HTTPS      *bool             `yaml:"https"`       // default true, pointer for nil check
+	Port       int               `yaml:"port"`        // default 80
+	Image      string            `yaml:"image"`       // if set, skip build (pre-built)
+	Ports      []string          `yaml:"ports"`       // host:container port mappings
+	Target     string            `yaml:"target"`      // Docker build target stage
+	BuildArgs  map[string]string `yaml:"build_args"`  // --build-arg K=V; values may be ${secret:KEY} / ${env:KEY}
+	// BuildSecrets are the same shape as BuildArgs but reach the build via
+	// BuildKit's --secret (RUN --mount=type=secret), so the value never
+	// enters an image layer or the image history.
+	BuildSecrets map[string]string `yaml:"build_secrets"`
+	Deploy       *DeployConfig     `yaml:"deploy"` // deployment strategy options
+	DependsOn    Dependencies      `yaml:"depends_on"`
+	Volumes      map[string]string `yaml:"volumes"`  // name: mount_path
+	Files        map[string]string `yaml:"files"`    // local_path: container_mount_path
+	EnvFile      string            `yaml:"env_file"` // local path to .env file (relative to project root); overwrites {service}.env on deploy
+	HealthCheck  *HealthCheck      `yaml:"healthcheck"`
+	Cleanup      *CleanupConfig    `yaml:"cleanup"` // post-deploy image tag retention; inherits from root
 	// RequireClean aborts the deploy when the build context has uncommitted
 	// tracked changes. Pointer so a service can override an inherited true
 	// with false. nil (default) warns instead of aborting.
@@ -626,42 +630,68 @@ func ParseBuildArgRef(value string) (kind, key string, ok bool) {
 	return m[1], m[2], true
 }
 
-// validateBuildArgs checks the build_args map.
+// validateBuildArgs checks the build_args and build_secrets maps. Both hold
+// the same value shapes and differ only in how they reach the builder.
 //
 // No error here ever echoes a value: a literal build arg may itself be a
 // credential, and validation errors go to the terminal and to logs.
 func validateBuildArgs(cfg *Config) error {
-	if len(cfg.BuildArgs) == 0 {
+	if err := validateBuildArgMap(cfg, "build_args", cfg.BuildArgs); err != nil {
+		return err
+	}
+	if err := validateBuildArgMap(cfg, "build_secrets", cfg.BuildSecrets); err != nil {
+		return err
+	}
+	// The same key in both maps would be handed to the builder twice by two
+	// different mechanisms. Always a mistake.
+	for _, key := range sortedMapKeys(cfg.BuildSecrets) {
+		if _, ok := cfg.BuildArgs[key]; ok {
+			return fmt.Errorf("%q appears in both build_args and build_secrets: pick one", key)
+		}
+	}
+	return nil
+}
+
+// validateBuildArgMap validates one of the two maps. field names it in errors.
+func validateBuildArgMap(cfg *Config, field string, entries map[string]string) error {
+	if len(entries) == 0 {
 		return nil
 	}
 	if cfg.Image != "" {
-		return fmt.Errorf("build_args cannot be used with a pre-built image: nothing is built")
+		return fmt.Errorf("%s cannot be used with a pre-built image: nothing is built", field)
 	}
 	// Sorted so a config with several bad entries always reports the same one.
-	keys := make([]string, 0, len(cfg.BuildArgs))
-	for key := range cfg.BuildArgs {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if err := validateBuildArgKey(key); err != nil {
-			return fmt.Errorf("invalid build_args entry: %w", err)
+	for _, key := range sortedMapKeys(entries) {
+		if err := validateBuildArgKey(field, key); err != nil {
+			return fmt.Errorf("invalid %s entry: %w", field, err)
 		}
-		if err := validateBuildArgValue(key, cfg.BuildArgs[key]); err != nil {
+		if err := validateBuildArgValue(field, key, entries[key]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// sortedMapKeys returns a map's keys in sorted order, so errors and generated
+// commands are identical across runs.
+func sortedMapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // validateBuildArgKey enforces the environment-variable name shape docker
-// expects for an ARG, which also keeps the key safe on the remote shell.
-func validateBuildArgKey(key string) error {
+// expects for an ARG, which also keeps the key safe on the remote shell and
+// usable as a --secret id.
+func validateBuildArgKey(field, key string) error {
 	if key == "" {
-		return fmt.Errorf("build_args key cannot be empty")
+		return fmt.Errorf("%s key cannot be empty", field)
 	}
 	if len(key) > maxBuildArgKey {
-		return fmt.Errorf("build_args key exceeds maximum length of %d characters", maxBuildArgKey)
+		return fmt.Errorf("%s key exceeds maximum length of %d characters", field, maxBuildArgKey)
 	}
 	for i, r := range key {
 		isLower := r >= 'a' && r <= 'z'
@@ -670,7 +700,7 @@ func validateBuildArgKey(key string) error {
 		if isLower || isUpper || r == '_' || (isDigit && i > 0) {
 			continue
 		}
-		return fmt.Errorf("build_args key %q contains invalid character: %c (letters, digits and underscore only, not leading digit)", key, r)
+		return fmt.Errorf("%s key %q contains invalid character: %c (letters, digits and underscore only, not leading digit)", field, key, r)
 	}
 	return nil
 }
@@ -678,18 +708,18 @@ func validateBuildArgKey(key string) error {
 // validateBuildArgValue rejects values that cannot survive the trip to the
 // builder, and malformed references that would otherwise be silently baked
 // into the image as literal text.
-func validateBuildArgValue(key, value string) error {
+func validateBuildArgValue(field, key, value string) error {
 	if len(value) > maxBuildArgValue {
-		return fmt.Errorf("build_args %q: value exceeds maximum length of %d characters", key, maxBuildArgValue)
+		return fmt.Errorf("%s %q: value exceeds maximum length of %d characters", field, key, maxBuildArgValue)
 	}
 	for _, r := range value {
 		if r == 0x7f || (r < 0x20 && r != '\t') {
-			return fmt.Errorf("build_args %q: value contains a control character", key)
+			return fmt.Errorf("%s %q: value contains a control character", field, key)
 		}
 	}
 	if strings.Contains(value, "${") {
 		if _, _, ok := ParseBuildArgRef(value); !ok {
-			return fmt.Errorf("build_args %q: invalid reference; use ${secret:KEY}, ${env:KEY}, or a literal value", key)
+			return fmt.Errorf("%s %q: invalid reference; use ${secret:KEY}, ${env:KEY}, or a literal value", field, key)
 		}
 	}
 	return nil

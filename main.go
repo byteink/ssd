@@ -2188,19 +2188,10 @@ func printConfig(w io.Writer, cfg *config.Config, indent string) {
 			p("%s  %s -> %s\n", indent, local, container)
 		}
 	}
-	if len(cfg.BuildArgs) > 0 {
-		// Values are printed exactly as configured — a ${secret:KEY} /
-		// ${env:KEY} reference is never resolved here.
-		p("%sbuild_args:\n", indent)
-		keys := make([]string, 0, len(cfg.BuildArgs))
-		for k := range cfg.BuildArgs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			p("%s  %s: %s\n", indent, k, cfg.BuildArgs[k])
-		}
-	}
+	// Values are printed exactly as configured — a ${secret:KEY} / ${env:KEY}
+	// reference is never resolved here.
+	printBuildInputs(p, indent, "build_args", cfg.BuildArgs)
+	printBuildInputs(p, indent, "build_secrets", cfg.BuildSecrets)
 	if cfg.RequireClean != nil {
 		p("%srequire_clean: %v\n", indent, *cfg.RequireClean)
 	}
@@ -2209,6 +2200,23 @@ func printConfig(w io.Writer, cfg *config.Config, indent string) {
 		for _, c := range cfg.PreDeploy {
 			p("%s  %s\n", indent, c)
 		}
+	}
+}
+
+// printBuildInputs prints one build_args / build_secrets block, sorted, with
+// values verbatim from the config — never resolved.
+func printBuildInputs(p func(string, ...interface{}), indent, field string, entries map[string]string) {
+	if len(entries) == 0 {
+		return
+	}
+	p("%s%s:\n", indent, field)
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		p("%s  %s: %s\n", indent, k, entries[k])
 	}
 }
 
@@ -2327,6 +2335,23 @@ Build args (per service, via build_args in ssd.yaml):
   errors name keys only, 'ssd config' shows the reference unresolved, and the
   build output stream is masked. Not valid on pre-built ('image:') services.
 
+  WARNING: --build-arg values are recorded in the image history on the server
+  ('docker history'). For credentials use build_secrets instead.
+
+Build secrets (per service, via build_secrets in ssd.yaml):
+  Same map shape and same ${secret:} / ${env:} references as build_args, but
+  delivered as BuildKit secret mounts (--secret id=KEY), so the value never
+  enters an image layer or the image history. ssd writes each value to a
+  private temp file on the server outside the build context (mode 600) and
+  removes it however the build ends.
+
+  The Dockerfile reads the mount instead of an ARG:
+
+    RUN --mount=type=secret,id=MAXMIND_LICENSE_KEY \
+        curl "...license_key=$(cat /run/secrets/MAXMIND_LICENSE_KEY)" -o db.tgz
+
+  A key cannot appear in both build_args and build_secrets.
+
 Deploy strategies (set via deploy.strategy in ssd.yaml):
   rollout   (default) Zero-downtime. Scales up new container, health-checks, removes old.
   recreate  In-place replacement via docker compose up --force-recreate. Brief downtime.
@@ -2360,15 +2385,16 @@ Examples:
       ports:
         - "27017:27017"
 
-  # ssd.yaml with build args (secret-safe)
+  # ssd.yaml with build args and build secrets
   server: myserver
   services:
     api:
       dockerfile: ./Dockerfile
       build_args:
+        BUILD_CHANNEL: stable
+      build_secrets:
         MAXMIND_ACCOUNT_ID: ${secret:MAXMIND_ACCOUNT_ID}
         MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
-        BUILD_CHANNEL: stable
 
   # ssd.yaml with deploy strategy
   server: myserver
@@ -2502,8 +2528,9 @@ Usage:
 Displays the fully resolved configuration after applying inheritance
 (root-level server, stack, deploy strategy inherited by services).
 
-build_args are shown exactly as configured: a ${secret:KEY} or ${env:KEY}
-reference is printed unresolved, so no stored value is ever displayed.
+build_args and build_secrets are shown exactly as configured: a ${secret:KEY}
+or ${env:KEY} reference is printed unresolved, so no stored value is ever
+displayed.
 
 Examples:
   ssd config web
@@ -2635,7 +2662,8 @@ into the container alongside ConfigMap env vars. Only available when
 runtime is set to k3s in ssd.yaml.
 
 A secret can also be fed to the image build: reference it from a service's
-build_args as ${secret:KEY} (see 'ssd deploy -h').
+build_secrets as ${secret:KEY} (see 'ssd deploy -h'). build_args works too,
+but those values are recorded in the image history.
 
 For compose runtime, use 'ssd env' instead.
 

@@ -33,23 +33,23 @@ func buildArgCfg(args map[string]string) *config.Config {
 
 func TestResolveBuildArgs_NoArgsTouchesNothing(t *testing.T) {
 	m := new(MockDeployer)
-	values, secrets, err := resolveBuildArgs(context.Background(), m, buildArgCfg(nil))
+	values, _, redact, err := resolveBuildInputs(context.Background(), m, buildArgCfg(nil))
 
 	require.NoError(t, err)
 	assert.Empty(t, values)
-	assert.Empty(t, secrets)
+	assert.Empty(t, redact)
 	m.AssertNotCalled(t, "GetEnvFile")
 }
 
 // A literal-only set needs no server round trip at all.
 func TestResolveBuildArgs_LiteralsOnly(t *testing.T) {
 	m := new(MockDeployer)
-	values, secrets, err := resolveBuildArgs(context.Background(), m,
+	values, _, redact, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"BUILD_CHANNEL": "stable"}))
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"BUILD_CHANNEL": "stable"}, values)
-	assert.Empty(t, secrets, "a literal from the config is not a secret to redact")
+	assert.Empty(t, redact, "a literal from the config is not a secret to redact")
 	m.AssertNotCalled(t, "GetEnvFile")
 }
 
@@ -57,12 +57,12 @@ func TestResolveBuildArgs_EnvRefFromEnvFile(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("# comment\nAPI_URL=https://x.test\nOTHER=nope\n", nil)
 
-	values, secrets, err := resolveBuildArgs(context.Background(), m,
+	values, _, redact, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"API_URL": "${env:API_URL}"}))
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"API_URL": "https://x.test"}, values)
-	assert.Equal(t, []string{"https://x.test"}, secrets)
+	assert.Equal(t, []string{"https://x.test"}, redact)
 	m.AssertNumberOfCalls(t, "GetEnvFile", 1)
 }
 
@@ -71,7 +71,7 @@ func TestResolveBuildArgs_EnvFileFetchedOnce(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("A=1\nB=2\n", nil)
 
-	values, _, err := resolveBuildArgs(context.Background(), m,
+	values, _, _, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"A": "${env:A}", "B": "${env:B}"}))
 
 	require.NoError(t, err)
@@ -83,12 +83,12 @@ func TestResolveBuildArgs_SecretRefFromK3sSecret(t *testing.T) {
 	m := new(MockDeployer)
 	client := &secretDeployer{MockDeployer: m, secrets: "MAXMIND_LICENSE_KEY=abc123xyz\n"}
 
-	values, secrets, err := resolveBuildArgs(context.Background(), client,
+	values, _, redact, err := resolveBuildInputs(context.Background(), client,
 		buildArgCfg(map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"}))
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"MAXMIND_LICENSE_KEY": "abc123xyz"}, values)
-	assert.Equal(t, []string{"abc123xyz"}, secrets)
+	assert.Equal(t, []string{"abc123xyz"}, redact)
 	m.AssertNotCalled(t, "GetEnvFile", "the k3s secret store answers ${secret:}")
 }
 
@@ -98,7 +98,7 @@ func TestResolveBuildArgs_SecretRefFallsBackToEnvFileOnCompose(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("MAXMIND_LICENSE_KEY=abc123xyz\n", nil)
 
-	values, _, err := resolveBuildArgs(context.Background(), m,
+	values, _, _, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"}))
 
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestResolveBuildArgs_MissingEnvKeyIsHardError(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("OTHER=1\n", nil)
 
-	_, _, err := resolveBuildArgs(context.Background(), m,
+	_, _, _, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"API_URL": "${env:API_URL}"}))
 
 	require.Error(t, err)
@@ -120,7 +120,7 @@ func TestResolveBuildArgs_MissingEnvKeyIsHardError(t *testing.T) {
 func TestResolveBuildArgs_MissingSecretKeyIsHardError(t *testing.T) {
 	client := &secretDeployer{MockDeployer: new(MockDeployer), secrets: "OTHER=1\n"}
 
-	_, _, err := resolveBuildArgs(context.Background(), client,
+	_, _, _, err := resolveBuildInputs(context.Background(), client,
 		buildArgCfg(map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"}))
 
 	require.Error(t, err)
@@ -134,7 +134,7 @@ func TestResolveBuildArgs_EmptyStoredValueIsHardError(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("API_URL=\n", nil)
 
-	_, _, err := resolveBuildArgs(context.Background(), m,
+	_, _, _, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"API_URL": "${env:API_URL}"}))
 
 	require.Error(t, err)
@@ -147,7 +147,7 @@ func TestResolveBuildArgs_ErrorNeverContainsAnyValue(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("PRESENT=super-secret-value\n", nil)
 
-	_, _, err := resolveBuildArgs(context.Background(), m, buildArgCfg(map[string]string{
+	_, _, _, err := resolveBuildInputs(context.Background(), m, buildArgCfg(map[string]string{
 		"PRESENT": "${env:PRESENT}",
 		"MISSING": "${env:MISSING}",
 	}))
@@ -160,7 +160,7 @@ func TestResolveBuildArgs_StoreReadFailurePropagates(t *testing.T) {
 	m := new(MockDeployer)
 	m.On("GetEnvFile", "api").Return("", errors.New("ssh died"))
 
-	_, _, err := resolveBuildArgs(context.Background(), m,
+	_, _, _, err := resolveBuildInputs(context.Background(), m,
 		buildArgCfg(map[string]string{"API_URL": "${env:API_URL}"}))
 
 	require.Error(t, err)
@@ -266,4 +266,61 @@ func TestDeploy_PrebuiltSkipsBuildArgs(t *testing.T) {
 
 	require.NoError(t, DeployWithClient(cfg, mockClient, nil))
 	mockClient.AssertNotCalled(t, "GetEnvFile", mock.Anything)
+}
+
+// build_secrets resolve through the same stores as build_args, and one deploy
+// must not fetch a store twice just because both maps reference it.
+func TestResolveBuildInputs_SharesStoresAcrossBothMaps(t *testing.T) {
+	m := new(MockDeployer)
+	m.On("GetEnvFile", "api").Return("A=literal-a\nB=literal-b\n", nil)
+
+	cfg := buildArgCfg(map[string]string{"A": "${env:A}"})
+	cfg.BuildSecrets = map[string]string{"B": "${env:B}"}
+
+	args, secrets, redact, err := resolveBuildInputs(context.Background(), m, cfg)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "literal-a"}, args)
+	assert.Equal(t, map[string]string{"B": "literal-b"}, secrets)
+	assert.ElementsMatch(t, []string{"literal-a", "literal-b"}, redact,
+		"values from both maps must be masked in build output")
+	m.AssertNumberOfCalls(t, "GetEnvFile", 1)
+}
+
+func TestResolveBuildInputs_MissingBuildSecretKeyIsHardError(t *testing.T) {
+	client := &secretDeployer{MockDeployer: new(MockDeployer), secrets: "OTHER=1\n"}
+
+	cfg := buildArgCfg(nil)
+	cfg.BuildSecrets = map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"}
+
+	_, _, _, err := resolveBuildInputs(context.Background(), client, cfg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build_secrets")
+	assert.Contains(t, err.Error(), "MAXMIND_LICENSE_KEY")
+	assert.Contains(t, err.Error(), "api-secret")
+}
+
+func TestDeploy_BuildSecretsPassedToBuild(t *testing.T) {
+	mockClient := new(MockDeployer)
+	cfg := newTestConfig()
+	cfg.BuildSecrets = map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"}
+
+	mockClient.On("StackExists").Return(true, nil)
+	mockClient.On("GetCurrentVersion").Return(0, nil)
+	mockClient.On("GetEnvFile", "myapp").Return("MAXMIND_LICENSE_KEY=abc123xyz\n", nil)
+	mockClient.On("MakeTempDir").Return("/tmp/build", nil)
+	mockClient.On("Rsync", mock.Anything, "/tmp/build").Return(nil)
+	mockClient.On("BuildImage", "/tmp/build", 1).Return(nil)
+	mockClient.On("UpdateManifest", 1).Return(nil)
+	mockClient.On("RolloutService", "myapp").Return(nil)
+	mockClient.On("Cleanup", "/tmp/build").Return(nil)
+
+	var out strings.Builder
+	require.NoError(t, DeployWithClient(cfg, mockClient, &Options{Output: &out}))
+
+	assert.Empty(t, mockClient.LastBuildArgs(), "a build secret is not a build arg")
+	assert.Equal(t, map[string]string{"MAXMIND_LICENSE_KEY": "abc123xyz"}, mockClient.LastBuildSecrets())
+	assert.Contains(t, out.String(), "MAXMIND_LICENSE_KEY", "key names are logged")
+	assert.NotContains(t, out.String(), "abc123xyz")
 }

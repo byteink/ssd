@@ -23,8 +23,17 @@ import (
 type MockDeployer struct {
 	mock.Mock
 
-	buildArgsMu sync.Mutex
-	buildArgs   map[string]string
+	buildArgsMu  sync.Mutex
+	buildArgs    map[string]string
+	buildSecrets map[string]string
+}
+
+// LastBuildSecrets returns the build secrets passed to the most recent
+// BuildImage call.
+func (m *MockDeployer) LastBuildSecrets() map[string]string {
+	m.buildArgsMu.Lock()
+	defer m.buildArgsMu.Unlock()
+	return m.buildSecrets
 }
 
 // LastBuildArgs returns the build args passed to the most recent BuildImage call.
@@ -57,9 +66,10 @@ func (m *MockDeployer) Rsync(ctx context.Context, localPath, remotePath string) 
 // buildArgs are recorded rather than matched, so the existing
 // On("BuildImage", dir, version) expectations stay valid; assert on
 // LastBuildArgs().
-func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
+func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version int, buildArgs, buildSecrets map[string]string) error {
 	m.buildArgsMu.Lock()
 	m.buildArgs = buildArgs
+	m.buildSecrets = buildSecrets
 	m.buildArgsMu.Unlock()
 	args := m.Called(buildDir, version)
 	return args.Error(0)

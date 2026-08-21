@@ -1088,3 +1088,21 @@ func TestPrintConfig_NoBuildArgsSectionWhenUnset(t *testing.T) {
 		t.Errorf("expected no build_args section, got:\n%s", out.String())
 	}
 }
+
+func TestPrintConfig_BuildSecretsPrintedUnresolved(t *testing.T) {
+	cfg := &config.Config{
+		Name: "api", Server: "myserver", Stack: "/stacks/myapp", Port: 80,
+		BuildSecrets: map[string]string{"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}"},
+	}
+
+	var out strings.Builder
+	printConfig(&out, cfg, "  ")
+
+	got := out.String()
+	if !strings.Contains(got, "build_secrets:") {
+		t.Errorf("expected build_secrets section, got:\n%s", got)
+	}
+	if !strings.Contains(got, "MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}") {
+		t.Errorf("expected unresolved reference, got:\n%s", got)
+	}
+}

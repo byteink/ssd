@@ -188,7 +188,8 @@ When `image` is set, ssd pulls it instead of building.
 | `context` | `.` | Docker build context |
 | `dockerfile` | `./Dockerfile` | Path to Dockerfile, **relative to `context`** (ssd syncs the contents of `context` and builds there) |
 | `image` | — | Pre-built image (skips build) |
-| `build_args` | — | `--build-arg KEY=VALUE` at build time. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret; compose reads `{svc}.env`) and `${env:KEY}` (`{svc}.env`). A missing or empty reference aborts before the build; resolved values are never printed |
+| `build_args` | — | `--build-arg KEY=VALUE` at build time. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret; compose reads `{svc}.env`) and `${env:KEY}` (`{svc}.env`). A missing or empty reference aborts before the build; resolved values are never printed. Recorded in image history |
+| `build_secrets` | — | Same shape as `build_args`, delivered as BuildKit `--secret` mounts. The Dockerfile reads them via `RUN --mount=type=secret,id=KEY`. Never enters an image layer or the image history — use this for credentials |
 | `domain` | — | Domain for Traefik routing |
 | `path` | — | Path prefix for routing (e.g., `/api`). Requires `domain` |
 | `https` | `true` | Enable HTTPS via Let's Encrypt |
@@ -213,7 +214,7 @@ ssd deploy app
   ├─ pre_deploy hooks (local)
   ├─ require_clean check (local)
   ├─ SSH connect ──────────────────► Create temp dir
-  ├─ resolve build_args ───────────► read {svc}.env / {svc}-secret
+  ├─ resolve build_args/secrets ───► read {svc}.env / {svc}-secret
   ├─ rsync code ───────────────────► /tmp/ssd-xxxxx/
   │                                  docker build → ssd-project-app:4
   │                                  Update compose.yaml (v3 → v4)

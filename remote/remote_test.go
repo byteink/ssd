@@ -282,7 +282,7 @@ func TestClient_BuildImage(t *testing.T) {
 			strings.Contains(cmd, "-f Dockerfile")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build123", 5, nil)
+	err := client.BuildImage(context.Background(), "/tmp/build123", 5, nil, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -303,7 +303,7 @@ func TestClient_BuildImage_CustomDockerfile(t *testing.T) {
 		return strings.Contains(cmd, "-f docker/Dockerfile.prod")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil, nil)
 
 	require.NoError(t, err)
 }
@@ -326,7 +326,7 @@ func TestClient_BuildImage_WithTarget(t *testing.T) {
 			strings.Contains(cmd, "--target production")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 3, nil)
+	err := client.BuildImage(context.Background(), "/tmp/build", 3, nil, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -343,7 +343,7 @@ func TestClient_BuildImage_NoTarget(t *testing.T) {
 			!strings.Contains(cmd, "--target")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -1531,7 +1531,7 @@ func TestClient_BuildImage_WithBuildArgs(t *testing.T) {
 	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{
 		"LICENSE_KEY": "abc 123",
 		"ACCOUNT_ID":  "42",
-	})
+	}, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -1549,7 +1549,7 @@ func TestClient_BuildImage_BuildArgValueIsShellEscaped(t *testing.T) {
 		return !strings.Contains(cmd, "$(id)") || strings.Contains(cmd, "'TOKEN=$(id)'")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{"TOKEN": "$(id)"})
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{"TOKEN": "$(id)"}, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -1564,8 +1564,63 @@ func TestClient_BuildImage_NoBuildArgs(t *testing.T) {
 		return !strings.Contains(args[len(args)-1], "--build-arg")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil, nil)
 
 	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_BuildImage_WithBuildSecrets(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "--secret id=LICENSE_KEY,src=") &&
+			strings.Contains(cmd, "DOCKER_BUILDKIT=1") &&
+			strings.Contains(cmd, "mktemp -d") &&
+			strings.Contains(cmd, "trap") &&
+			// The value reaches the server base64-encoded, never as plain text.
+			!strings.Contains(cmd, "abc123xyz")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil,
+		map[string]string{"LICENSE_KEY": "abc123xyz"})
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+// No secrets: no temp dir, no trap, no BuildKit pin — the plain build command.
+func TestClient_BuildImage_NoBuildSecrets(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return !strings.Contains(cmd, "--secret") && !strings.Contains(cmd, "mktemp")
+	})).Return(nil)
+
+	require.NoError(t, client.BuildImage(context.Background(), "/tmp/build", 1, nil, nil))
+	mockExec.AssertExpectations(t)
+}
+
+// Secret files must never land inside the build context: `COPY . .` would
+// bake them into the image, which is the whole thing --secret prevents.
+func TestClient_BuildImage_SecretsLiveOutsideBuildContext(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return !strings.Contains(cmd, "mktemp -d -p /tmp/build") &&
+			!strings.Contains(cmd, "/tmp/build/")
+	})).Return(nil)
+
+	require.NoError(t, client.BuildImage(context.Background(), "/tmp/build", 1, nil,
+		map[string]string{"LICENSE_KEY": "abc123xyz"}))
 	mockExec.AssertExpectations(t)
 }

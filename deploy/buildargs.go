@@ -17,41 +17,62 @@ type secretStore interface {
 	ListSecrets(ctx context.Context, serviceName string) (string, error)
 }
 
-// resolveBuildArgs turns the configured build_args into the literal values
-// handed to the builder, resolving `${secret:KEY}` / `${env:KEY}` against
-// what is already stored on the server for this service.
+// resolveBuildInputs turns the configured build_args and build_secrets into
+// the literal values handed to the builder, resolving `${secret:KEY}` /
+// `${env:KEY}` against what is already stored on the server for this service.
 //
-// It returns the resolved values and, separately, the subset that came out of
-// a store — those are credentials and must be kept out of the build output
-// (see redactWriter). A reference that names a missing or empty key is a hard
-// error: building with a silently empty credential produces a broken image
-// that looks like a successful deploy.
+// Both maps hold the same value shapes and share the same stores (each is
+// fetched at most once per deploy); they differ only in transport —
+// build_args become `--build-arg`, build_secrets become BuildKit `--secret`
+// mounts that never enter an image layer or the image history.
+//
+// redact collects every value that came out of a store. Those are credentials
+// and must be kept out of the build output (see redactWriter). A reference
+// that names a missing or empty key is a hard error: building with a silently
+// empty credential produces a broken image that looks like a successful
+// deploy.
 //
 // No error returned here contains a resolved value.
-func resolveBuildArgs(ctx context.Context, client Deployer, cfg *config.Config) (map[string]string, []string, error) {
-	if len(cfg.BuildArgs) == 0 {
-		return nil, nil, nil
+func resolveBuildInputs(ctx context.Context, client Deployer, cfg *config.Config) (args, secrets map[string]string, redact []string, err error) {
+	if len(cfg.BuildArgs) == 0 && len(cfg.BuildSecrets) == 0 {
+		return nil, nil, nil, nil
 	}
 
-	values := make(map[string]string, len(cfg.BuildArgs))
-	var secrets []string
-
 	stores := newBuildArgStores(client, cfg.Name)
-	for _, key := range buildArgKeys(cfg.BuildArgs) {
-		raw := cfg.BuildArgs[key]
+
+	args, argRedact, err := resolveEntries(ctx, stores, "build_args", cfg.BuildArgs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	secrets, secretRedact, err := resolveEntries(ctx, stores, "build_secrets", cfg.BuildSecrets)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return args, secrets, append(argRedact, secretRedact...), nil
+}
+
+// resolveEntries resolves one map. field names it in error messages.
+func resolveEntries(ctx context.Context, stores *buildArgStores, field string, entries map[string]string) (map[string]string, []string, error) {
+	if len(entries) == 0 {
+		return nil, nil, nil
+	}
+	values := make(map[string]string, len(entries))
+	var redact []string
+	for _, key := range buildArgKeys(entries) {
+		raw := entries[key]
 		kind, refKey, isRef := config.ParseBuildArgRef(raw)
 		if !isRef {
 			values[key] = raw
 			continue
 		}
-		value, err := stores.lookup(ctx, key, kind, refKey)
+		value, err := stores.lookup(ctx, field, key, kind, refKey)
 		if err != nil {
 			return nil, nil, err
 		}
 		values[key] = value
-		secrets = append(secrets, value)
+		redact = append(redact, value)
 	}
-	return values, secrets, nil
+	return values, redact, nil
 }
 
 // buildArgStores fetches each backing store at most once per deploy.
@@ -68,17 +89,17 @@ func newBuildArgStores(client Deployer, service string) *buildArgStores {
 }
 
 // lookup resolves one reference, loading its store on first use.
-func (s *buildArgStores) lookup(ctx context.Context, argKey, kind, refKey string) (string, error) {
+func (s *buildArgStores) lookup(ctx context.Context, field, argKey, kind, refKey string) (string, error) {
 	store, source, err := s.storeFor(ctx, kind)
 	if err != nil {
 		return "", err
 	}
 	value, ok := store[refKey]
 	if !ok {
-		return "", fmt.Errorf("build_args %q: %s not found in %s", argKey, refKey, source)
+		return "", fmt.Errorf("%s %q: %s not found in %s", field, argKey, refKey, source)
 	}
 	if value == "" {
-		return "", fmt.Errorf("build_args %q: %s is empty in %s", argKey, refKey, source)
+		return "", fmt.Errorf("%s %q: %s is empty in %s", field, argKey, refKey, source)
 	}
 	return value, nil
 }

@@ -15,7 +15,7 @@ Agentless remote deployment tool for Docker Compose and K3s.
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
 - **Reliable**: Zero-downtime deployments with automatic version tracking
-- **Secret-safe build args**: `build_args` values can reference a secret or env var already on the server (`${secret:KEY}`); the resolved value never reaches the terminal, logs, or `ssd config`
+- **Secret-safe build inputs**: `build_args` / `build_secrets` values can reference a secret or env var already on the server (`${secret:KEY}`); the resolved value never reaches the terminal, logs, or `ssd config`, and `build_secrets` keeps it out of the image history too
 - **Honest about what ships**: deploys send `git archive HEAD`, so `require_clean` refuses to deploy a dirty tree instead of silently shipping the last commit
 - **Polished output**: Docker-style live progress in your terminal — spinner + per-step timer, frozen ✓/✗ summary on completion. Falls back to plain text in CI and pipes automatically.
 
@@ -182,6 +182,7 @@ services:
     target: production          # Docker build target stage (optional)
     build_args:                     # --build-arg KEY=VALUE (optional)
       BUILD_CHANNEL: stable
+    build_secrets:                  # BuildKit --secret mounts (optional)
       MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
@@ -290,10 +291,46 @@ Notes:
   (`.ssd/ssd.<env>.yaml`), so dev and prod can carry different values.
 - Not valid on pre-built (`image:`) services — nothing is built.
 - A literal value may not contain `${`; use a reference or a plain literal.
-- `--build-arg` values are visible in the image history of a `docker history`
-  on the server. For credentials that must not appear in image metadata at all,
-  BuildKit's `RUN --mount=type=secret` is the stronger tool; ssd does not wire
-  it up yet.
+- **`--build-arg` values are recorded in the image history** (`docker history`
+  on the server). For credentials, prefer `build_secrets` below.
+
+### Build secrets (credentials that never enter the image)
+
+```yaml
+services:
+  api:
+    build_secrets:
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+```
+
+Same values and same `${secret:}` / `${env:}` references as `build_args` — only
+the transport differs. ssd writes each value to a private temp file on the
+server (outside the build context, mode 600, removed however the build exits)
+and passes BuildKit `--secret id=KEY,src=…`, so the credential is mounted into
+the one `RUN` that needs it and **never becomes a layer or a history entry**.
+
+The Dockerfile has to read it from the mount instead of an `ARG`:
+
+```dockerfile
+# build_args
+ARG MAXMIND_LICENSE_KEY
+RUN curl "…license_key=$MAXMIND_LICENSE_KEY" -o GeoLite2.tar.gz
+
+# build_secrets
+RUN --mount=type=secret,id=MAXMIND_LICENSE_KEY \
+    curl "…license_key=$(cat /run/secrets/MAXMIND_LICENSE_KEY)" -o GeoLite2.tar.gz
+```
+
+| | `build_args` | `build_secrets` |
+|---|---|---|
+| Flag | `--build-arg K=V` | `--secret id=K,src=…` |
+| In image history | **yes** | no |
+| Dockerfile | `ARG K` | `RUN --mount=type=secret,id=K` |
+| Use for | versions, channels, flags | credentials |
+
+A key may not appear in both maps. Residual exposure: the value is briefly
+visible in `ps` on the server while the build command runs — that is the same
+for both, and it is not what image history is.
 
 ### Config files
 
@@ -425,7 +462,8 @@ services:
 - `dockerfile`: Dockerfile path, **relative to `context`** (defaults to `./Dockerfile`). ssd syncs the contents of `context` to the server and builds there, so a path that repeats the context prefix will not be found
 - `image`: Pre-built image to use (skips build step if specified)
 - `target`: Docker build target stage for multi-stage builds (e.g., `production`)
-- `build_args`: Map of build-time args passed as `--build-arg KEY=VALUE`. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret, or the env file on compose) and `${env:KEY}` (env file). A missing or empty reference aborts the deploy; resolved values are never printed or logged
+- `build_args`: Map of build-time args passed as `--build-arg KEY=VALUE`. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret, or the env file on compose) and `${env:KEY}` (env file). A missing or empty reference aborts the deploy; resolved values are never printed or logged. Recorded in image history — for credentials use `build_secrets`
+- `build_secrets`: Same shape as `build_args`, delivered as BuildKit `--secret` mounts (`RUN --mount=type=secret,id=KEY`) instead. The value never enters an image layer or the image history. A key cannot appear in both maps
 - `domain`: Single domain for Traefik routing
 - `domains`: Multiple domains for Traefik routing. Cannot use both `domain` and `domains`
 - `redirect_to`: When set, all domains except this one redirect to it (302 temporary). Must be one of the domains in `domains` array

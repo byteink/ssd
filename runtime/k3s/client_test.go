@@ -158,7 +158,32 @@ func TestK3sClient_BuildImage_WithBuildArgs(t *testing.T) {
 	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{
 		"LICENSE_KEY": "abc 123",
 		"ACCOUNT_ID":  "42",
-	})
+	}, nil)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestK3sClient_BuildImage_WithBuildSecrets(t *testing.T) {
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("active", nil)
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "nerdctl --namespace k8s.io build") &&
+			strings.Contains(cmd, "--secret id=LICENSE_KEY,src=") &&
+			!strings.Contains(cmd, "abc123xyz")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil,
+		map[string]string{"LICENSE_KEY": "abc123xyz"})
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)

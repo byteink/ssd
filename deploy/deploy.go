@@ -152,7 +152,7 @@ type Deployer interface {
 	ReadManifest(ctx context.Context) (string, error)
 	MakeTempDir(ctx context.Context) (string, error)
 	Rsync(ctx context.Context, localPath, remotePath string) error
-	BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error
+	BuildImage(ctx context.Context, buildDir string, version int, buildArgs, buildSecrets map[string]string) error
 	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	Cleanup(ctx context.Context, path string) error
@@ -534,13 +534,16 @@ func imageStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.
 
 	// Resolved before anything is synced or built: a reference to a key that
 	// is not on the server must fail while the server is still untouched.
-	buildArgs, secrets, argErr := resolveBuildArgs(ctx, client, cfg)
+	buildArgs, buildSecrets, redact, argErr := resolveBuildInputs(ctx, client, cfg)
 	if argErr != nil {
 		return argErr
 	}
+	// Key names only — a resolved value is never printed.
 	if len(buildArgs) > 0 {
-		// Key names only — a resolved value is never printed.
 		r.Info("Build args: %s", strings.Join(buildArgKeys(buildArgs), ", "))
+	}
+	if len(buildSecrets) > 0 {
+		r.Info("Build secrets: %s", strings.Join(buildArgKeys(buildSecrets), ", "))
 	}
 
 	sync := r.Step(fmt.Sprintf("Syncing code to %s", cfg.Server))
@@ -556,8 +559,8 @@ func imageStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.
 	sync.Done()
 
 	build := r.Step(fmt.Sprintf("Building image %s:%d", cfg.ImageName(), newVersion))
-	err = withStreamedOutput(client, build, secrets, func() error {
-		return client.BuildImage(ctx, tempDir, newVersion, buildArgs)
+	err = withStreamedOutput(client, build, redact, func() error {
+		return client.BuildImage(ctx, tempDir, newVersion, buildArgs, buildSecrets)
 	})
 	if err != nil {
 		build.Fail(err)

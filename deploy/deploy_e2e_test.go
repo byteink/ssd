@@ -4,6 +4,7 @@ package deploy
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -393,4 +394,81 @@ func TestE2E_BuildArgsMissingKeyAbortsDeploy(t *testing.T) {
 	images, sshErr := sandbox.RunSSH("docker images --format '{{.Repository}}:{{.Tag}}'")
 	require.NoError(t, sshErr)
 	assert.NotContains(t, images, cfg.ImageName(), "nothing may be built when a reference is missing")
+}
+
+// buildSecretDockerfile hashes the mounted secret instead of echoing it: the
+// Dockerfile text must not contain the value, or the image-history assertion
+// below would be matching the Dockerfile rather than the credential.
+const buildSecretDockerfile = `FROM alpine:latest
+RUN --mount=type=secret,id=APP_TOKEN \
+    sha256sum /run/secrets/APP_TOKEN | cut -d" " -f1 > /marker.txt
+CMD ["sh", "-c", "echo running && sleep 3600"]
+`
+
+// A real deploy with build_secrets: the credential reaches the build, and
+// unlike build_args it never lands in the image or its history.
+func TestE2E_BuildSecretsNeverEnterTheImage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+	ctx := context.Background()
+
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "Dockerfile"), []byte(buildSecretDockerfile), 0644))
+	gitInitCommitE2E(t, cfg.Context)
+
+	cfg.BuildSecrets = map[string]string{"APP_TOKEN": "${secret:APP_TOKEN}"}
+	client := newE2EClient(t, sandbox, cfg)
+
+	const token = "s3cr3t-token-value"
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+	require.NoError(t, client.SetEnvVar(ctx, cfg.Name, "APP_TOKEN", token))
+
+	out := deployE2E(t, cfg, client)
+
+	marker, err := sandbox.RunSSH(fmt.Sprintf("docker run --rm %s:1 cat /marker.txt", cfg.ImageName()))
+	require.NoError(t, err)
+	assert.Equal(t, want, strings.TrimSpace(marker), "the build must have seen the secret value")
+
+	history, err := sandbox.RunSSH(fmt.Sprintf("docker history --no-trunc %s:1", cfg.ImageName()))
+	require.NoError(t, err)
+	assert.NotContains(t, history, token, "a build secret must never reach the image history")
+
+	assert.Contains(t, out, "Build secrets: APP_TOKEN", "key names are logged")
+	assert.NotContains(t, out, token, "the resolved value must never reach the deploy output")
+
+	leftovers, err := sandbox.RunSSH("find /tmp -name APP_TOKEN 2>/dev/null | wc -l")
+	require.NoError(t, err)
+	assert.Equal(t, "0", strings.TrimSpace(leftovers), "the secret file must not survive the build")
+}
+
+// The contrast that justifies the feature: the same credential passed as a
+// build arg IS recorded in the image history.
+func TestE2E_BuildArgsDoLandInImageHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+	ctx := context.Background()
+
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+
+	dockerfile := "FROM alpine:latest\nARG APP_TOKEN\nRUN echo ok > /marker.txt\nCMD [\"sh\", \"-c\", \"sleep 3600\"]\n"
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "Dockerfile"), []byte(dockerfile), 0644))
+	gitInitCommitE2E(t, cfg.Context)
+
+	cfg.BuildArgs = map[string]string{"APP_TOKEN": "${env:APP_TOKEN}"}
+	client := newE2EClient(t, sandbox, cfg)
+
+	const token = "s3cr3t-token-value"
+	require.NoError(t, client.SetEnvVar(ctx, cfg.Name, "APP_TOKEN", token))
+
+	deployE2E(t, cfg, client)
+
+	history, err := sandbox.RunSSH(fmt.Sprintf("docker history --no-trunc %s:1", cfg.ImageName()))
+	require.NoError(t, err)
+	assert.Contains(t, history, token,
+		"build args are recorded in image history — this is why build_secrets exists")
 }

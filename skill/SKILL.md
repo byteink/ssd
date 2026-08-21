@@ -97,7 +97,14 @@ services:
       API_URL: ${env:API_URL}                            # {svc}.env
                               # Missing/empty reference aborts the deploy before the build.
                               # Resolved values are never printed, logged, or shown by `ssd config`.
-                              # Not valid with `image:`.
+                              # Not valid with `image:`. RECORDED IN IMAGE HISTORY.
+    build_secrets:            # same shape, delivered as BuildKit --secret mounts
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+                              # Dockerfile reads it via:
+                              #   RUN --mount=type=secret,id=MAXMIND_LICENSE_KEY \
+                              #       ... "$(cat /run/secrets/MAXMIND_LICENSE_KEY)"
+                              # Never enters a layer or image history. Use for credentials.
+                              # A key cannot appear in both build_args and build_secrets.
     image: nginx:latest       # Pre-built image (skips build)
     domain: example.com       # Traefik routing (single)
     domains: [a.com, b.com]   # Traefik routing (multi, mutually exclusive with domain)
