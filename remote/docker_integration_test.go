@@ -81,7 +81,7 @@ CMD ["echo", "test"]
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
 
-	err = client.BuildImage(ctx, remoteDir, 1)
+	err = client.BuildImage(ctx, remoteDir, 1, nil)
 	require.NoError(t, err)
 
 	imageTag := fmt.Sprintf("%s:1", cfg.ImageName())
@@ -140,7 +140,7 @@ CMD ["echo", "custom"]
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
 
-	err = client.BuildImage(ctx, remoteDir, 1)
+	err = client.BuildImage(ctx, remoteDir, 1, nil)
 	require.NoError(t, err)
 
 	imageTag := fmt.Sprintf("%s:1", cfg.ImageName())
@@ -198,7 +198,7 @@ CMD ["cat", "/test.txt"]
 	err = client.Rsync(ctx, localDir, remoteDir)
 	require.NoError(t, err)
 
-	err = client.BuildImage(ctx, remoteDir, 1)
+	err = client.BuildImage(ctx, remoteDir, 1, nil)
 	require.NoError(t, err)
 
 	imageTag := fmt.Sprintf("%s:1", cfg.ImageName())
@@ -257,7 +257,7 @@ CMD ["echo", "version"]
 
 	testVersions := []int{1, 2, 42, 100}
 	for _, version := range testVersions {
-		err = client.BuildImage(ctx, remoteDir, version)
+		err = client.BuildImage(ctx, remoteDir, version, nil)
 		require.NoError(t, err)
 
 		imageTag := fmt.Sprintf("%s:%d", cfg.ImageName(), version)
@@ -268,4 +268,67 @@ CMD ["echo", "version"]
 		_, err = client.SSH(ctx, fmt.Sprintf("docker rmi %s", imageTag))
 		require.NoError(t, err)
 	}
+}
+
+// Build args must reach docker intact — including a value with a space, which
+// is only correct if the flag is shell-escaped on the remote side.
+// (TestDocker_BuildWithBuildArgs above covers the no-flag ARG default.)
+func TestDocker_BuildWithBuildArgFlags(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	sshContainer, err := testhelpers.StartSSHDockerContainer(ctx, t)
+	require.NoError(t, err)
+	defer sshContainer.Cleanup(ctx)
+
+	sshConfig, err := sshContainer.WriteSSHConfig("testserver")
+	require.NoError(t, err)
+
+	localDir, err := os.MkdirTemp("", "docker-buildargs-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(localDir) }()
+
+	dockerfileContent := `FROM alpine:latest
+ARG LICENSE_KEY
+ARG BUILD_CHANNEL
+RUN echo "key=$LICENSE_KEY channel=$BUILD_CHANNEL" > /baked.txt
+CMD ["cat", "/baked.txt"]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "Dockerfile"), []byte(dockerfileContent), 0644))
+
+	cfg := &config.Config{
+		Name:       "testapp",
+		Server:     "testserver",
+		Stack:      "/stacks/testapp",
+		Context:    ".",
+		Dockerfile: "Dockerfile",
+	}
+
+	gitInitCommit(t, localDir)
+
+	executor := &testhelpers.SSHConfigExecutor{ConfigPath: sshConfig}
+	client := NewClientWithExecutor(cfg, executor)
+
+	remoteDir, err := client.MakeTempDir(ctx)
+	require.NoError(t, err)
+	defer func() { _ = client.Cleanup(ctx, remoteDir) }()
+
+	require.NoError(t, client.Rsync(ctx, localDir, remoteDir))
+	require.NoError(t, client.BuildImage(ctx, remoteDir, 1, map[string]string{
+		"LICENSE_KEY":   "abc 123",
+		"BUILD_CHANNEL": "stable",
+	}))
+
+	imageTag := fmt.Sprintf("%s:1", cfg.ImageName())
+	baked, err := client.SSH(ctx, fmt.Sprintf("docker run --rm %s", imageTag))
+	require.NoError(t, err)
+	assert.Contains(t, baked, "key=abc 123", "build arg value must arrive verbatim")
+	assert.Contains(t, baked, "channel=stable")
+
+	_, err = client.SSH(ctx, fmt.Sprintf("docker rmi %s", imageTag))
+	require.NoError(t, err)
 }

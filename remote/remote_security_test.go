@@ -215,7 +215,7 @@ func TestShellInjection_ImageNameWithSpecialChars(t *testing.T) {
 						strings.Contains(cmd, fmt.Sprintf(`"ssd-myapp-%s:1"`, tt.appName)))
 			})).Return(nil)
 
-			err := client.BuildImage(context.Background(), "/tmp/build", 1)
+			err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
 
 			if tt.shouldError {
 				require.Error(t, err)
@@ -250,7 +250,7 @@ func TestShellInjection_BuildDirWithSpecialChars(t *testing.T) {
 			strings.Contains(cmd, "docker build")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), buildDir, 1)
+	err := client.BuildImage(context.Background(), buildDir, 1, nil)
 	require.NoError(t, err)
 
 	mockExec.AssertExpectations(t)
@@ -276,7 +276,7 @@ func TestShellInjection_DockerfilePathWithSpecialChars(t *testing.T) {
 				strings.Contains(cmd, `-f "docker/Dockerfile`+"`"+`whoami`+"`"+`"`))
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
 	require.NoError(t, err)
 
 	mockExec.AssertExpectations(t)

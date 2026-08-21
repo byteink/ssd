@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -121,6 +123,7 @@ type Config struct {
 	Image       string            `yaml:"image"`       // if set, skip build (pre-built)
 	Ports       []string          `yaml:"ports"`       // host:container port mappings
 	Target      string            `yaml:"target"`      // Docker build target stage
+	BuildArgs   map[string]string `yaml:"build_args"`  // --build-arg K=V; values may be ${secret:KEY} / ${env:KEY}
 	Deploy      *DeployConfig     `yaml:"deploy"`      // deployment strategy options
 	DependsOn   Dependencies      `yaml:"depends_on"`
 	Volumes     map[string]string `yaml:"volumes"`  // name: mount_path
@@ -595,6 +598,100 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
+	if err := validateBuildArgs(cfg); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// buildArgRefRe matches a whole-value reference to a value already stored on
+// the server for this service. Anchored on purpose: a partial match (e.g.
+// "prefix${secret:K}") is a config mistake, not a template to interpolate.
+var buildArgRefRe = regexp.MustCompile(`^\$\{(secret|env):([A-Za-z_][A-Za-z0-9_]*)\}$`)
+
+const (
+	maxBuildArgKey   = 128
+	maxBuildArgValue = 4096
+)
+
+// ParseBuildArgRef reports whether a build_args value is a reference to a
+// stored value, and to which store ("secret" or "env") and key. Literal
+// values return ok=false.
+func ParseBuildArgRef(value string) (kind, key string, ok bool) {
+	m := buildArgRefRe.FindStringSubmatch(value)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// validateBuildArgs checks the build_args map.
+//
+// No error here ever echoes a value: a literal build arg may itself be a
+// credential, and validation errors go to the terminal and to logs.
+func validateBuildArgs(cfg *Config) error {
+	if len(cfg.BuildArgs) == 0 {
+		return nil
+	}
+	if cfg.Image != "" {
+		return fmt.Errorf("build_args cannot be used with a pre-built image: nothing is built")
+	}
+	// Sorted so a config with several bad entries always reports the same one.
+	keys := make([]string, 0, len(cfg.BuildArgs))
+	for key := range cfg.BuildArgs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := validateBuildArgKey(key); err != nil {
+			return fmt.Errorf("invalid build_args entry: %w", err)
+		}
+		if err := validateBuildArgValue(key, cfg.BuildArgs[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateBuildArgKey enforces the environment-variable name shape docker
+// expects for an ARG, which also keeps the key safe on the remote shell.
+func validateBuildArgKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("build_args key cannot be empty")
+	}
+	if len(key) > maxBuildArgKey {
+		return fmt.Errorf("build_args key exceeds maximum length of %d characters", maxBuildArgKey)
+	}
+	for i, r := range key {
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		if isLower || isUpper || r == '_' || (isDigit && i > 0) {
+			continue
+		}
+		return fmt.Errorf("build_args key %q contains invalid character: %c (letters, digits and underscore only, not leading digit)", key, r)
+	}
+	return nil
+}
+
+// validateBuildArgValue rejects values that cannot survive the trip to the
+// builder, and malformed references that would otherwise be silently baked
+// into the image as literal text.
+func validateBuildArgValue(key, value string) error {
+	if len(value) > maxBuildArgValue {
+		return fmt.Errorf("build_args %q: value exceeds maximum length of %d characters", key, maxBuildArgValue)
+	}
+	for _, r := range value {
+		if r == 0x7f || (r < 0x20 && r != '\t') {
+			return fmt.Errorf("build_args %q: value contains a control character", key)
+		}
+	}
+	if strings.Contains(value, "${") {
+		if _, _, ok := ParseBuildArgRef(value); !ok {
+			return fmt.Errorf("build_args %q: invalid reference; use ${secret:KEY}, ${env:KEY}, or a literal value", key)
+		}
+	}
 	return nil
 }
 

@@ -15,6 +15,7 @@ Agentless remote deployment tool for Docker Compose and K3s.
 - **Smart**: Auto-increments build numbers
 - **Fast**: Builds on the server, no image registry needed
 - **Reliable**: Zero-downtime deployments with automatic version tracking
+- **Secret-safe build args**: `build_args` values can reference a secret or env var already on the server (`${secret:KEY}`); the resolved value never reaches the terminal, logs, or `ssd config`
 - **Honest about what ships**: deploys send `git archive HEAD`, so `require_clean` refuses to deploy a dirty tree instead of silently shipping the last commit
 - **Polished output**: Docker-style live progress in your terminal — spinner + per-step timer, frozen ✓/✗ summary on completion. Falls back to plain text in CI and pipes automatically.
 
@@ -139,7 +140,7 @@ services:
   web:
     name: myapp-web
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context
 ```
 
 ### Monorepo with multiple services:
@@ -151,11 +152,16 @@ stack: /stacks/myproject      # All services share this stack
 services:
   web:
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context, not to the repo root
   api:
     context: ./apps/api
-    dockerfile: ./apps/api/Dockerfile
+    dockerfile: ./Dockerfile
 ```
+
+`dockerfile` is resolved **inside the build context**: ssd ships the contents of
+`context` to the server and builds from there, so `context: ./apps/web` plus
+`dockerfile: ./apps/web/Dockerfile` looks for `apps/web/Dockerfile` *within*
+`apps/web` and fails.
 
 Deploy specific service:
 ```bash
@@ -172,8 +178,11 @@ services:
     name: myapp-web
     stack: /stacks/myapp
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context
     target: production          # Docker build target stage (optional)
+    build_args:                     # --build-arg KEY=VALUE (optional)
+      BUILD_CHANNEL: stable
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
@@ -232,6 +241,59 @@ sync no build context.
 Both fields can be set at the root level and are inherited by every service; a
 service-level value always wins (including `require_clean: false` and
 `pre_deploy: []`).
+
+### Build args (secret-safe)
+
+```yaml
+server: myserver
+
+services:
+  api:
+    dockerfile: ./Dockerfile
+    build_args:
+      MAXMIND_ACCOUNT_ID: ${secret:MAXMIND_ACCOUNT_ID}
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+      BUILD_CHANNEL: stable
+```
+
+Passed to the builder as `--build-arg KEY=VALUE` — `docker build` on compose,
+`nerdctl --namespace k8s.io build` on k3s. A value is either a literal or a
+reference to a value already stored on the server for that service:
+
+| Reference | Resolved from |
+|---|---|
+| `${secret:KEY}` | the service secret store — the `{service}-secret` Secret on k3s; on compose, which has no secret store, the service env file `{service}.env` |
+| `${env:KEY}` | the service env file, `{service}.env` |
+
+Set the referenced values first:
+
+```bash
+ssd secret api set MAXMIND_LICENSE_KEY=...   # k3s
+ssd env api set MAXMIND_LICENSE_KEY=...      # compose
+```
+
+A reference to a key that is missing or empty **aborts the deploy before
+anything is built**, naming the key and where ssd looked. ssd never builds with
+a silently empty credential.
+
+Secrecy rules — a resolved value is never printed:
+
+- progress output lists key names only (`Build args: MAXMIND_ACCOUNT_ID, ...`)
+- error messages name keys, never values
+- `ssd config` prints `KEY: ${secret:KEY}` unresolved
+- the build output stream is masked, so a build step that echoes the value (or
+  a failing `curl` printing a URL with the key in it) shows `***`
+
+Notes:
+
+- Build args are per service and merge through env overlays
+  (`.ssd/ssd.<env>.yaml`), so dev and prod can carry different values.
+- Not valid on pre-built (`image:`) services — nothing is built.
+- A literal value may not contain `${`; use a reference or a plain literal.
+- `--build-arg` values are visible in the image history of a `docker history`
+  on the server. For credentials that must not appear in image metadata at all,
+  BuildKit's `RUN --mount=type=secret` is the stronger tool; ssd does not wire
+  it up yet.
 
 ### Config files
 
@@ -332,7 +394,7 @@ stack: /stacks/myapp
 services:
   api:
     context: ./apps/api
-    dockerfile: ./apps/api/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context
     domain: api.example.com
     port: 8080
     depends_on:
@@ -360,9 +422,10 @@ services:
 - `name`: Service name (defaults to service key)
 - `stack`: Path to stack directory on server (defaults to `/stacks/{name}`)
 - `context`: Build context path (defaults to `.`)
-- `dockerfile`: Dockerfile path (defaults to `./Dockerfile`)
+- `dockerfile`: Dockerfile path, **relative to `context`** (defaults to `./Dockerfile`). ssd syncs the contents of `context` to the server and builds there, so a path that repeats the context prefix will not be found
 - `image`: Pre-built image to use (skips build step if specified)
 - `target`: Docker build target stage for multi-stage builds (e.g., `production`)
+- `build_args`: Map of build-time args passed as `--build-arg KEY=VALUE`. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret, or the env file on compose) and `${env:KEY}` (env file). A missing or empty reference aborts the deploy; resolved values are never printed or logged
 - `domain`: Single domain for Traefik routing
 - `domains`: Multiple domains for Traefik routing. Cannot use both `domain` and `domains`
 - `redirect_to`: When set, all domains except this one redirect to it (302 temporary). Must be one of the domains in `domains` array

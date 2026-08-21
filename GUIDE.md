@@ -110,13 +110,13 @@ stack: /stacks/myproject
 services:
   web:
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile      # relative to context, not to the repo root
     domain: example.com
     port: 3000
 
   api:
     context: ./apps/api
-    dockerfile: ./apps/api/Dockerfile
+    dockerfile: ./Dockerfile
     domain: api.example.com
     port: 8080
     depends_on:
@@ -186,8 +186,9 @@ When `image` is set, ssd pulls it instead of building.
 | `name` | service key | Service name |
 | `stack` | `/stacks/{name}` | Stack directory on server |
 | `context` | `.` | Docker build context |
-| `dockerfile` | `./Dockerfile` | Path to Dockerfile |
+| `dockerfile` | `./Dockerfile` | Path to Dockerfile, **relative to `context`** (ssd syncs the contents of `context` and builds there) |
 | `image` | — | Pre-built image (skips build) |
+| `build_args` | — | `--build-arg KEY=VALUE` at build time. Values are literals or references to values stored on the server: `${secret:KEY}` (k3s Secret; compose reads `{svc}.env`) and `${env:KEY}` (`{svc}.env`). A missing or empty reference aborts before the build; resolved values are never printed |
 | `domain` | — | Domain for Traefik routing |
 | `path` | — | Path prefix for routing (e.g., `/api`). Requires `domain` |
 | `https` | `true` | Enable HTTPS via Let's Encrypt |
@@ -212,6 +213,7 @@ ssd deploy app
   ├─ pre_deploy hooks (local)
   ├─ require_clean check (local)
   ├─ SSH connect ──────────────────► Create temp dir
+  ├─ resolve build_args ───────────► read {svc}.env / {svc}-secret
   ├─ rsync code ───────────────────► /tmp/ssd-xxxxx/
   │                                  docker build → ssd-project-app:4
   │                                  Update compose.yaml (v3 → v4)

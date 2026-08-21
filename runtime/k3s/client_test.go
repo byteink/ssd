@@ -137,3 +137,29 @@ func TestClient_RestartStack_PopulatesConfigMapsBeforeApply(t *testing.T) {
 	require.NotEqual(t, -1, applyIdx)
 	assert.Less(t, cmdIdx, applyIdx)
 }
+
+func TestK3sClient_BuildImage_WithBuildArgs(t *testing.T) {
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "testserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+	}
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("Run", "ssh", mock.Anything).Return("active", nil)
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return strings.Contains(cmd, "nerdctl --namespace k8s.io build") &&
+			strings.Index(cmd, "--build-arg ACCOUNT_ID=42") < strings.Index(cmd, "--build-arg 'LICENSE_KEY=abc 123'")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{
+		"LICENSE_KEY": "abc 123",
+		"ACCOUNT_ID":  "42",
+	})
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}

@@ -338,7 +338,7 @@ func TestChaos_BuildImageTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := client.BuildImage(ctx, "/tmp/build", 1)
+	err := client.BuildImage(ctx, "/tmp/build", 1, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context deadline exceeded")

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -23,7 +24,7 @@ type RemoteClient interface {
 	SSHInteractive(ctx context.Context, command string) error
 	Rsync(ctx context.Context, localPath, remotePath string) error
 	GetCurrentVersion(ctx context.Context) (int, error)
-	BuildImage(ctx context.Context, buildDir string, version int) error
+	BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error
 	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	GetLogs(ctx context.Context, follow bool, tail int) error
@@ -237,8 +238,11 @@ func (c *Client) GetCurrentVersion(ctx context.Context) (int, error) {
 	return ParseVersionFromContent(content, imageName)
 }
 
-// BuildImage builds a Docker image on the remote server
-func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) error {
+// BuildImage builds a Docker image on the remote server.
+//
+// buildArgs are already-resolved values (see deploy.resolveBuildArgs); they
+// may be credentials, so they are shell-escaped and never logged here.
+func (c *Client) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
 	imageTag := fmt.Sprintf("%s:%d", c.cfg.ImageName(), version)
 
 	// Build command with dockerfile path relative to build context
@@ -249,8 +253,29 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 		targetFlag = " --target " + shellescape.Quote(c.cfg.Target)
 	}
 
-	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s%s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile), targetFlag)
+	cmd := fmt.Sprintf("cd %s && docker build -t %s -f %s%s%s .", shellescape.Quote(buildDir), shellescape.Quote(imageTag), shellescape.Quote(dockerfile), targetFlag, BuildArgFlags(buildArgs))
 	return c.SSHInteractive(ctx, cmd)
+}
+
+// BuildArgFlags renders a resolved build_args map as shell-escaped
+// `--build-arg K=V` flags, sorted by key so the command is identical across
+// deploys. Shared by both runtimes.
+func BuildArgFlags(buildArgs map[string]string) string {
+	if len(buildArgs) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(buildArgs))
+	for k := range buildArgs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(" --build-arg ")
+		b.WriteString(shellescape.Quote(k + "=" + buildArgs[k]))
+	}
+	return b.String()
 }
 
 // UpdateManifest updates the image tag in compose.yaml via server-side sed.

@@ -89,8 +89,15 @@ services:
   web:
     name: myapp-web           # Defaults to service key
     context: ./apps/web       # Build context (default: .)
-    dockerfile: ./Dockerfile  # Dockerfile path
+    dockerfile: ./Dockerfile  # Dockerfile path, RELATIVE TO context (not the repo root)
     target: production        # Multi-stage build target
+    build_args:               # --build-arg KEY=VALUE at build time
+      BUILD_CHANNEL: stable                              # literal
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY} # k3s Secret (compose: {svc}.env)
+      API_URL: ${env:API_URL}                            # {svc}.env
+                              # Missing/empty reference aborts the deploy before the build.
+                              # Resolved values are never printed, logged, or shown by `ssd config`.
+                              # Not valid with `image:`.
     image: nginx:latest       # Pre-built image (skips build)
     domain: example.com       # Traefik routing (single)
     domains: [a.com, b.com]   # Traefik routing (multi, mutually exclusive with domain)

@@ -1042,3 +1042,49 @@ func TestLoadAllServices_ReturnsFullConfig(t *testing.T) {
 		}
 	}
 }
+
+// `ssd config` must show which build args a service declares without ever
+// resolving them: the reference is printed verbatim, never the stored value.
+func TestPrintConfig_BuildArgsPrintedUnresolved(t *testing.T) {
+	cfg := &config.Config{
+		Name:       "api",
+		Server:     "myserver",
+		Stack:      "/stacks/myapp",
+		Dockerfile: "./Dockerfile",
+		Context:    ".",
+		Port:       80,
+		BuildArgs: map[string]string{
+			"MAXMIND_LICENSE_KEY": "${secret:MAXMIND_LICENSE_KEY}",
+			"BUILD_CHANNEL":       "stable",
+		},
+	}
+
+	var out strings.Builder
+	printConfig(&out, cfg, "  ")
+
+	got := out.String()
+	for _, want := range []string{
+		"build_args:",
+		"BUILD_CHANNEL: stable",
+		"MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in config output, got:\n%s", want, got)
+		}
+	}
+	// Sorted, so repeated runs are diffable.
+	if strings.Index(got, "BUILD_CHANNEL") > strings.Index(got, "MAXMIND_LICENSE_KEY") {
+		t.Errorf("build_args should be printed in sorted key order, got:\n%s", got)
+	}
+}
+
+func TestPrintConfig_NoBuildArgsSectionWhenUnset(t *testing.T) {
+	cfg := &config.Config{Name: "api", Server: "myserver", Stack: "/stacks/myapp", Port: 80}
+
+	var out strings.Builder
+	printConfig(&out, cfg, "  ")
+
+	if strings.Contains(out.String(), "build_args") {
+		t.Errorf("expected no build_args section, got:\n%s", out.String())
+	}
+}

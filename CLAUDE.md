@@ -94,7 +94,9 @@ goreleaser release --snapshot --clean   # Test release locally
 │   └── remote.go     # SSH, rsync, docker operations
 ├── deploy/
 │   ├── deploy.go     # Deploy orchestration
-│   └── preflight.go  # Local pre-flight: pre_deploy hooks + require_clean check
+│   ├── preflight.go  # Local pre-flight: pre_deploy hooks + require_clean check
+│   ├── buildargs.go  # build_args resolution (${secret:}/${env:} → values)
+│   └── redact.go     # Masks resolved build-arg values in build output
 ├── compose/
 │   └── compose.go    # Docker Compose YAML generation
 ├── k8s/
@@ -134,7 +136,8 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 2. SSH into configured server (uses `~/.ssh/config` hosts)
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
-5. Build Docker image on server: `ssd-{name}:{version}`
+4b. Resolve `build_args` (`${secret:}` / `${env:}`) — missing key aborts here
+5. Build Docker image on server: `ssd-{name}:{version}` (with `--build-arg`)
 6. Parse current version from compose.yaml, increment it
 7. Start service using configured strategy (`docker rollout` or `--force-recreate`)
 8. Clean up temp directory
@@ -145,7 +148,9 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 2. SSH into configured server
 3. Create temp directory on server
 4. Rsync code to temp dir (via git archive)
+4b. Resolve `build_args` (`${secret:}` / `${env:}`) — missing key aborts here
 5. Ensure buildkitd is running, build image with `nerdctl --namespace k8s.io build`
+   (plus `--build-arg` flags)
 6. Parse current version from manifests.yaml, increment it
 7. Generate K8s manifests, apply with `kubectl apply`
 8. Wait for rollout: `kubectl rollout status`
@@ -195,6 +200,76 @@ commit it. Don't add an escape hatch until someone proves they need one.
 Called from `DeployWithClient` right after the header, before `StackExists` —
 a failing hook or dirty tree leaves the server untouched. Skipped for pre-built
 (`image:`) services, which sync no context.
+
+## Build Args (`deploy/buildargs.go`, `deploy/redact.go`)
+
+`build_args` is a per-service map passed to the builder as `--build-arg K=V`
+(`docker build` on compose, `nerdctl --namespace k8s.io build` on k3s, both via
+`remote.BuildArgFlags`, sorted by key so the command is stable across deploys).
+It exists because instaplayers-api downloads the MaxMind GeoLite2 DB in a build
+stage using two credentials; without it that app cannot deploy with ssd at all.
+
+```yaml
+services:
+  api:
+    build_args:
+      MAXMIND_ACCOUNT_ID: ${secret:MAXMIND_ACCOUNT_ID}
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+      BUILD_CHANNEL: stable
+```
+
+A value is a literal or a **whole-value** reference (`config.ParseBuildArgRef`,
+anchored regexp — `prefix${secret:K}` is a config error, not a template):
+
+- `${secret:KEY}` — the service secret store. On k3s that is the
+  `{svc}-secret` Secret, read through the optional `secretStore` interface
+  (`ListSecrets`), which only `*k3s.Client` satisfies. On compose there is no
+  secret store, so it falls back to `{svc}.env` — one ssd.yaml then works on
+  both runtimes, and the error message says which store it read.
+- `${env:KEY}` — `{svc}.env` via `GetEnvFile`.
+
+Each store is fetched **once per deploy** (`buildArgStores`), and both parse as
+`KEY=VALUE` lines (`parseKVLines`) — the shape of a .env file and of the
+`kubectl get secret -o go-template` output alike. That makes stored values
+single-line by construction: a multi-line secret (a PEM, say) would read back
+as its first line only. Not worth handling — `--build-arg` is the wrong
+transport for a certificate, and the truncated value fails the build loudly.
+
+A missing **or empty** key is a hard error raised in `imageStep` *before* the
+rsync, so a bad reference leaves the server untouched. Empty counts as missing:
+building with a silently blank credential produces a broken image and a
+successful-looking deploy.
+
+**Secrecy is the load-bearing part** (`build_args` values are credentials):
+
+- values resolved from a store are returned separately from
+  `resolveBuildArgs` and fed to `withStreamedOutput`, which wraps the step's
+  tail-window writer in a `redactWriter`. It holds output back to the last
+  newline (so a value split across two writes is still matched), replaces each
+  value with `***`, and bounds the hold buffer at `maxRedactHold` with a
+  `carry` so no value straddles a forced flush. Values shorter than
+  `minRedactLen` are ignored — masking them would smear the log.
+  This is not theoretical: buildkit prints `RUN` step output, so a Dockerfile
+  that echoes the arg (or a failing `curl` printing the MaxMind URL, which
+  carries the licence key as a query parameter) leaks it into the deploy
+  transcript. `TestE2E_BuildArgsResolvedAndMasked` fails without the masking.
+- progress output logs key names only (`Build args: A, B`).
+- no error in `config` or `deploy` ever contains a value — including
+  validation errors, since a literal build arg may itself be a credential.
+- `ssd config` prints the reference unresolved (`printConfig`).
+
+Validation (`config.validateBuildArgs`): env-var-shaped keys, no control
+characters in values, `maxBuildArgValue` cap, malformed `${...}` rejected, and
+`build_args` on a pre-built (`image:`) service rejected outright — nothing is
+built there, so it would be silently ignored.
+
+Build args are per-service only (no root-level inheritance) and merge through
+env overlays for free, since the overlay deep-merge is at the YAML node level:
+an overlay that names one key replaces that key and keeps the rest.
+
+Deliberately **not** implemented: BuildKit `RUN --mount=type=secret`. It keeps
+credentials out of image layers entirely and is the better long-term answer,
+but `build_args` is what the blocked app needs today.
 
 ## Deploy Output (ui package)
 
@@ -249,9 +324,13 @@ just like `[+] Building (15/15) FINISHED` collapsing in docker.
 Plumbing: `Deployer.SetOutput(stdout, stderr io.Writer)` redirects the
 client's `SSHInteractive` (and everything built on it: `BuildImage`,
 `PullImage`, `StartService`, `RolloutService`) into the Stream writer.
-`nil` restores `os.Stdout`/`os.Stderr`. The helper `withStreamedOutput`
-in deploy.go wraps the set/restore + step lifecycle so callers stay
-terse. Tail height is `streamTailLines = 4`.
+`nil` restores `os.Stdout`/`os.Stderr`. Tail height is
+`streamTailLines = 4`.
+
+`withStreamedOutput(client, step, secrets, fn)` wraps the set/restore plus the
+`redactWriter` that masks `secrets` (resolved build-arg values; nil for every
+other step). Its `Flush()` runs on restore so a final line without a newline is
+not lost.
 
 Used in `deploy/deploy.go` for `BuildImage`, `PullImage` (prebuilt +
 dependency), and `StartService`/`RolloutService` (main + dependency).
@@ -312,6 +391,13 @@ guards it.
 
 ## Conventions
 
+- **Dockerfile path**: `dockerfile` is relative to `context`, never to the repo
+  root. `Rsync` ships the *contents* of `context` (git archive +
+  `--strip-components`), and `BuildImage` runs `cd <tempdir> && docker build -f
+  <dockerfile>`, so `context: ./apps/web` + `dockerfile: ./apps/web/Dockerfile`
+  resolves to `apps/web/apps/web/Dockerfile` and fails. On k3s the symptom is
+  misleading: nerdctl falls back to `Containerfile` when `-f` is missing, so the
+  error names a file the user never configured.
 - **Stack path**: Full path to stack directory containing compose.yaml (default: `/stacks/{name}`)
 - **Image naming**: `ssd-{project}-{name}:{version}` where project is extracted from stack path
 - **Version tracking**: Parsed from compose.yaml image tag, auto-incremented on deploy
@@ -438,10 +524,10 @@ stack: /stacks/myproject      # All services share this stack
 services:
   web:
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context, not to the repo root
   api:
     context: ./apps/api
-    dockerfile: ./apps/api/Dockerfile
+    dockerfile: ./Dockerfile
 ```
 
 ### Full-featured service
@@ -453,8 +539,11 @@ services:
     name: myapp-web
     stack: /stacks/myapp
     context: ./apps/web
-    dockerfile: ./apps/web/Dockerfile
+    dockerfile: ./Dockerfile    # relative to context
     target: production          # Docker build target stage (optional)
+    build_args:                 # --build-arg KEY=VALUE (optional)
+      BUILD_CHANNEL: stable
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
     domain: example.com         # Enable Traefik routing
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
@@ -476,6 +565,23 @@ services:
       timeout: 10s
       retries: 3
 ```
+
+### Build args
+```yaml
+server: myserver
+
+services:
+  api:
+    dockerfile: ./Dockerfile
+    build_args:
+      MAXMIND_ACCOUNT_ID: ${secret:MAXMIND_ACCOUNT_ID}   # k3s Secret / compose env file
+      MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+      API_URL: ${env:API_URL}                            # {svc}.env
+      BUILD_CHANNEL: stable                              # literal
+```
+
+See "Build Args" above. Missing/empty reference aborts before the build;
+resolved values are never printed. Not valid with `image:`.
 
 ### Pre-deploy hooks / clean tree
 ```yaml
@@ -762,6 +868,9 @@ ssd secret <service> set KEY=VALUE    # Set a K8s Secret
 ssd secret <service> list             # List all secrets
 ssd secret <service> rm KEY           # Remove a secret
 ```
+
+A secret can also be fed to an image build by referencing it from a service's
+`build_args` as `${secret:KEY}` (see "Build Args").
 
 K8s Secrets are injected as env vars alongside ConfigMap vars. The generated
 Deployment's `envFrom` always carries `secretRef: {name: {service}-secret,

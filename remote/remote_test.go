@@ -282,7 +282,7 @@ func TestClient_BuildImage(t *testing.T) {
 			strings.Contains(cmd, "-f Dockerfile")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build123", 5)
+	err := client.BuildImage(context.Background(), "/tmp/build123", 5, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -303,7 +303,7 @@ func TestClient_BuildImage_CustomDockerfile(t *testing.T) {
 		return strings.Contains(cmd, "-f docker/Dockerfile.prod")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
 
 	require.NoError(t, err)
 }
@@ -326,7 +326,7 @@ func TestClient_BuildImage_WithTarget(t *testing.T) {
 			strings.Contains(cmd, "--target production")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 3)
+	err := client.BuildImage(context.Background(), "/tmp/build", 3, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -343,7 +343,7 @@ func TestClient_BuildImage_NoTarget(t *testing.T) {
 			!strings.Contains(cmd, "--target")
 	})).Return(nil)
 
-	err := client.BuildImage(context.Background(), "/tmp/build", 1)
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
 
 	require.NoError(t, err)
 	mockExec.AssertExpectations(t)
@@ -1512,4 +1512,60 @@ func TestClient_CopyFiles_SSHError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to copy file")
+}
+
+func TestClient_BuildImage_WithBuildArgs(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		// Sorted keys keep the command deterministic across deploys.
+		accountAt := strings.Index(cmd, "--build-arg ACCOUNT_ID=42")
+		licenseAt := strings.Index(cmd, "--build-arg 'LICENSE_KEY=abc 123'")
+		return strings.Contains(cmd, "docker build") &&
+			accountAt >= 0 && licenseAt > accountAt
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{
+		"LICENSE_KEY": "abc 123",
+		"ACCOUNT_ID":  "42",
+	})
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+// A value carrying shell metacharacters must reach docker verbatim, never
+// as a command the server evaluates.
+func TestClient_BuildImage_BuildArgValueIsShellEscaped(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		cmd := args[len(args)-1]
+		return !strings.Contains(cmd, "$(id)") || strings.Contains(cmd, "'TOKEN=$(id)'")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, map[string]string{"TOKEN": "$(id)"})
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
+}
+
+func TestClient_BuildImage_NoBuildArgs(t *testing.T) {
+	cfg := newTestConfig()
+	mockExec := new(testhelpers.MockExecutor)
+	client := NewClientWithExecutor(cfg, mockExec)
+
+	mockExec.On("RunInteractive", "ssh", mock.MatchedBy(func(args []string) bool {
+		return !strings.Contains(args[len(args)-1], "--build-arg")
+	})).Return(nil)
+
+	err := client.BuildImage(context.Background(), "/tmp/build", 1, nil)
+
+	require.NoError(t, err)
+	mockExec.AssertExpectations(t)
 }

@@ -322,3 +322,75 @@ func TestE2E_DeploymentLocking(t *testing.T) {
 		t.Fatal("deploy did not complete after the lock was released")
 	}
 }
+
+// buildArgDockerfile both consumes the build args and echoes one back, so the
+// build output would leak the credential if it were not masked.
+const buildArgDockerfile = `FROM alpine:latest
+ARG APP_TOKEN
+ARG BUILD_CHANNEL
+RUN echo "token=$APP_TOKEN channel=$BUILD_CHANNEL" > /baked.txt && cat /baked.txt
+CMD ["sh", "-c", "echo running && sleep 3600"]
+`
+
+// A real deploy must resolve a ${secret:} reference from what is stored on the
+// server, bake it into the image, and keep it out of the deploy output.
+func TestE2E_BuildArgsResolvedAndMasked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+	ctx := context.Background()
+
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "Dockerfile"), []byte(buildArgDockerfile), 0644))
+	gitInitCommitE2E(t, cfg.Context)
+
+	cfg.BuildArgs = map[string]string{
+		"APP_TOKEN":     "${secret:APP_TOKEN}",
+		"BUILD_CHANNEL": "stable",
+	}
+	client := newE2EClient(t, sandbox, cfg)
+
+	// Compose has no secret store, so ${secret:} resolves from the service
+	// env file — the same value `ssd env set` writes.
+	const token = "s3cr3t-token-value"
+	require.NoError(t, client.SetEnvVar(ctx, cfg.Name, "APP_TOKEN", token))
+
+	out := deployE2E(t, cfg, client)
+
+	baked, err := sandbox.RunSSH(fmt.Sprintf("docker run --rm %s:1 cat /baked.txt", cfg.ImageName()))
+	require.NoError(t, err)
+	assert.Contains(t, baked, "token="+token, "the resolved value must reach the build")
+	assert.Contains(t, baked, "channel=stable", "literal build args pass through too")
+
+	assert.Contains(t, out, "APP_TOKEN", "key names are logged")
+	assert.NotContains(t, out, token, "the resolved value must never reach the deploy output")
+}
+
+// A reference to a key that is not on the server aborts before anything is
+// built — no image, no half-deployed stack.
+func TestE2E_BuildArgsMissingKeyAbortsDeploy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+
+	sandbox, cfg, cleanup := setupE2EEnvironment(t)
+	defer cleanup()
+
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Context, "Dockerfile"), []byte(buildArgDockerfile), 0644))
+	gitInitCommitE2E(t, cfg.Context)
+
+	cfg.BuildArgs = map[string]string{"APP_TOKEN": "${env:APP_TOKEN}"}
+	client := newE2EClient(t, sandbox, cfg)
+
+	out := new(strings.Builder)
+	err := DeployWithClient(cfg, client, &Options{Output: out})
+
+	require.Error(t, err, "a missing build arg reference must abort the deploy")
+	assert.Contains(t, err.Error(), "APP_TOKEN")
+
+	images, sshErr := sandbox.RunSSH("docker images --format '{{.Repository}}:{{.Tag}}'")
+	require.NoError(t, sshErr)
+	assert.NotContains(t, images, cfg.ImageName(), "nothing may be built when a reference is missing")
+}

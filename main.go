@@ -897,7 +897,7 @@ func runConfig(args []string) {
 		for _, name := range rootCfg.ListServices() {
 			cfg, _ := rootCfg.GetService(name)
 			fmt.Printf("\n  %s:\n", name)
-			printConfig(cfg, "    ")
+			printConfig(os.Stdout, cfg, "    ")
 		}
 		return
 	}
@@ -909,7 +909,7 @@ func runConfig(args []string) {
 	}
 
 	fmt.Println("Configuration:")
-	printConfig(cfg, "  ")
+	printConfig(os.Stdout, cfg, "  ")
 }
 
 func runEnv(args []string) {
@@ -2151,45 +2151,63 @@ Examples:
 `)
 }
 
-func printConfig(cfg *config.Config, indent string) {
-	fmt.Printf("%sname: %s\n", indent, cfg.Name)
-	fmt.Printf("%sserver: %s\n", indent, cfg.Server)
-	fmt.Printf("%sstack: %s\n", indent, cfg.Stack)
-	fmt.Printf("%sstack_path: %s\n", indent, cfg.StackPath())
+func printConfig(w io.Writer, cfg *config.Config, indent string) {
+	p := func(format string, args ...interface{}) {
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
+		}
+	}
+	p("%sname: %s\n", indent, cfg.Name)
+	p("%sserver: %s\n", indent, cfg.Server)
+	p("%sstack: %s\n", indent, cfg.Stack)
+	p("%sstack_path: %s\n", indent, cfg.StackPath())
 	if cfg.Domain != "" {
-		fmt.Printf("%sdomain: %s\n", indent, cfg.Domain)
+		p("%sdomain: %s\n", indent, cfg.Domain)
 	}
 	if cfg.Path != "" {
-		fmt.Printf("%spath: %s\n", indent, cfg.Path)
+		p("%spath: %s\n", indent, cfg.Path)
 	}
 	// HTTPS defaults to true if not explicitly set
 	https := true
 	if cfg.HTTPS != nil {
 		https = *cfg.HTTPS
 	}
-	fmt.Printf("%shttps: %v\n", indent, https)
-	fmt.Printf("%sport: %d\n", indent, cfg.Port)
+	p("%shttps: %v\n", indent, https)
+	p("%sport: %d\n", indent, cfg.Port)
 	if cfg.Image != "" {
-		fmt.Printf("%simage: %s (pre-built)\n", indent, cfg.Image)
+		p("%simage: %s (pre-built)\n", indent, cfg.Image)
 	}
-	fmt.Printf("%sdockerfile: %s\n", indent, cfg.Dockerfile)
-	fmt.Printf("%scontext: %s\n", indent, cfg.Context)
+	p("%sdockerfile: %s\n", indent, cfg.Dockerfile)
+	p("%scontext: %s\n", indent, cfg.Context)
 	if cfg.Image == "" {
-		fmt.Printf("%simage: %s\n", indent, cfg.ImageName())
+		p("%simage: %s\n", indent, cfg.ImageName())
 	}
 	if len(cfg.Files) > 0 {
-		fmt.Printf("%sfiles:\n", indent)
+		p("%sfiles:\n", indent)
 		for local, container := range cfg.Files {
-			fmt.Printf("%s  %s -> %s\n", indent, local, container)
+			p("%s  %s -> %s\n", indent, local, container)
+		}
+	}
+	if len(cfg.BuildArgs) > 0 {
+		// Values are printed exactly as configured — a ${secret:KEY} /
+		// ${env:KEY} reference is never resolved here.
+		p("%sbuild_args:\n", indent)
+		keys := make([]string, 0, len(cfg.BuildArgs))
+		for k := range cfg.BuildArgs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			p("%s  %s: %s\n", indent, k, cfg.BuildArgs[k])
 		}
 	}
 	if cfg.RequireClean != nil {
-		fmt.Printf("%srequire_clean: %v\n", indent, *cfg.RequireClean)
+		p("%srequire_clean: %v\n", indent, *cfg.RequireClean)
 	}
 	if len(cfg.PreDeploy) > 0 {
-		fmt.Printf("%spre_deploy:\n", indent)
+		p("%spre_deploy:\n", indent)
 		for _, c := range cfg.PreDeploy {
-			fmt.Printf("%s  %s\n", indent, c)
+			p("%s  %s\n", indent, c)
 		}
 	}
 }
@@ -2270,7 +2288,9 @@ Workflow:
   1. Reads ssd.yaml from the current directory
   2. Runs pre_deploy commands locally, then the require_clean check
   3. SSHs into the configured server
-  4. Rsyncs source code to a temp directory on the server (skipped for pre-built images)
+  4. Rsyncs the CONTENTS of 'context' to a temp directory on the server
+     (skipped for pre-built images) — so 'dockerfile' is resolved relative to
+     'context', not to the repo root
   5. Builds the Docker image on the server (or pulls if 'image' is set)
   6. Generates compose.yaml in the stack directory
   7. Starts the service using the configured deploy strategy
@@ -2289,6 +2309,23 @@ Local pre-flight (per service, or set at root level to apply to all):
   pre_deploy runs BEFORE require_clean: hooks regenerate committed artifacts,
   the check then catches "you regenerated and did not commit". Neither applies
   to pre-built ('image:') services, which sync no build context.
+
+Build args (per service, via build_args in ssd.yaml):
+  Passed to the builder as --build-arg KEY=VALUE. A value is either a literal
+  or a reference to a value already stored on the server for that service:
+
+    ${secret:KEY}   the service's secret store — the {service}-secret Secret on
+                    k3s; on compose (which has no secret store) the service env
+                    file, {service}.env
+    ${env:KEY}      the service env file, {service}.env
+
+  Set the referenced values first with 'ssd secret <svc> set KEY=VALUE' (k3s)
+  or 'ssd env <svc> set KEY=VALUE'. A reference to a missing or empty key
+  aborts the deploy before anything is built — never a silent empty value.
+
+  Resolved values are never printed: progress output lists key names only,
+  errors name keys only, 'ssd config' shows the reference unresolved, and the
+  build output stream is masked. Not valid on pre-built ('image:') services.
 
 Deploy strategies (set via deploy.strategy in ssd.yaml):
   rollout   (default) Zero-downtime. Scales up new container, health-checks, removes old.
@@ -2322,6 +2359,16 @@ Examples:
         mongo-data: /data/db
       ports:
         - "27017:27017"
+
+  # ssd.yaml with build args (secret-safe)
+  server: myserver
+  services:
+    api:
+      dockerfile: ./Dockerfile
+      build_args:
+        MAXMIND_ACCOUNT_ID: ${secret:MAXMIND_ACCOUNT_ID}
+        MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}
+        BUILD_CHANNEL: stable
 
   # ssd.yaml with deploy strategy
   server: myserver
@@ -2455,6 +2502,9 @@ Usage:
 Displays the fully resolved configuration after applying inheritance
 (root-level server, stack, deploy strategy inherited by services).
 
+build_args are shown exactly as configured: a ${secret:KEY} or ${env:KEY}
+reference is printed unresolved, so no stored value is ever displayed.
+
 Examples:
   ssd config web
   ssd config
@@ -2498,6 +2548,9 @@ Examples:
 If 'env_file' is set in ssd.yaml for a service, it OVERWRITES any values
 set via 'ssd env set' on every deploy. To manage env vars via CLI only,
 remove 'env_file' from ssd.yaml first.
+
+An env var can also be fed to the image build: reference it from a service's
+build_args as ${env:KEY} (see 'ssd deploy -h').
 `)
 }
 
@@ -2580,6 +2633,9 @@ Usage:
 Secrets are stored as K8s Secrets and injected as environment variables
 into the container alongside ConfigMap env vars. Only available when
 runtime is set to k3s in ssd.yaml.
+
+A secret can also be fed to the image build: reference it from a service's
+build_args as ${secret:KEY} (see 'ssd deploy -h').
 
 For compose runtime, use 'ssd env' instead.
 

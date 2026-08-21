@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/byteink/ssd/compose"
 	"github.com/byteink/ssd/config"
@@ -151,7 +152,7 @@ type Deployer interface {
 	ReadManifest(ctx context.Context) (string, error)
 	MakeTempDir(ctx context.Context) (string, error)
 	Rsync(ctx context.Context, localPath, remotePath string) error
-	BuildImage(ctx context.Context, buildDir string, version int) error
+	BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error
 	UpdateManifest(ctx context.Context, version int) error
 	RestartStack(ctx context.Context) error
 	Cleanup(ctx context.Context, path string) error
@@ -160,6 +161,9 @@ type Deployer interface {
 	EnsureNetwork(ctx context.Context, name string) error
 	CreateEnvFiles(ctx context.Context, serviceNames []string) error
 	UploadEnvFile(ctx context.Context, serviceName, localPath string) error
+	// GetEnvFile reads {service}.env from the stack directory. Used to
+	// resolve build_args references before a build.
+	GetEnvFile(ctx context.Context, serviceName string) (string, error)
 	IsServiceRunning(ctx context.Context, serviceName string) (bool, error)
 	PullImage(ctx context.Context, image string) error
 	StartService(ctx context.Context, serviceName string) error
@@ -469,7 +473,7 @@ func dependenciesStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *
 	for _, p := range toStart {
 		ds := r.Step("Starting " + p.name)
 		var pullErr, startErr error
-		err := withStreamedOutput(client, ds, func() error {
+		err := withStreamedOutput(client, ds, nil, func() error {
 			if p.cfg != nil && p.cfg.IsPrebuilt() {
 				if pullErr = client.PullImage(ctx, p.cfg.Image); pullErr != nil {
 					return pullErr
@@ -499,17 +503,25 @@ const streamTailLines = 4
 // withStreamedOutput runs fn with the client's stdout/stderr redirected
 // into the step's tail-window writer. Always restores the default writers
 // (and Done()'s the step) regardless of error.
-func withStreamedOutput(client Deployer, s ui.Step, fn func() error) error {
-	w := s.Stream(streamTailLines)
+//
+// secrets are values that must never reach the terminal — resolved build
+// args. They are masked on the way through.
+func withStreamedOutput(client Deployer, s ui.Step, secrets []string, fn func() error) error {
+	w := newRedactWriter(s.Stream(streamTailLines), secrets)
 	client.SetOutput(w, w)
-	defer client.SetOutput(nil, nil)
+	defer func() {
+		client.SetOutput(nil, nil)
+		if err := w.Flush(); err != nil {
+			log.Printf("failed to flush build output: %v", err)
+		}
+	}()
 	return fn()
 }
 
 func imageStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.Config, tempDir string, newVersion int) error {
 	if cfg.IsPrebuilt() {
 		s := r.Step(fmt.Sprintf("Pulling image %s", cfg.Image))
-		err := withStreamedOutput(client, s, func() error {
+		err := withStreamedOutput(client, s, nil, func() error {
 			return client.PullImage(ctx, cfg.Image)
 		})
 		if err != nil {
@@ -518,6 +530,17 @@ func imageStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.
 		}
 		s.Done()
 		return nil
+	}
+
+	// Resolved before anything is synced or built: a reference to a key that
+	// is not on the server must fail while the server is still untouched.
+	buildArgs, secrets, argErr := resolveBuildArgs(ctx, client, cfg)
+	if argErr != nil {
+		return argErr
+	}
+	if len(buildArgs) > 0 {
+		// Key names only — a resolved value is never printed.
+		r.Info("Build args: %s", strings.Join(buildArgKeys(buildArgs), ", "))
 	}
 
 	sync := r.Step(fmt.Sprintf("Syncing code to %s", cfg.Server))
@@ -533,8 +556,8 @@ func imageStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.
 	sync.Done()
 
 	build := r.Step(fmt.Sprintf("Building image %s:%d", cfg.ImageName(), newVersion))
-	err = withStreamedOutput(client, build, func() error {
-		return client.BuildImage(ctx, tempDir, newVersion)
+	err = withStreamedOutput(client, build, secrets, func() error {
+		return client.BuildImage(ctx, tempDir, newVersion, buildArgs)
 	})
 	if err != nil {
 		build.Fail(err)
@@ -584,7 +607,7 @@ func updateManifestStep(ctx context.Context, r ui.Reporter, client Deployer, cfg
 func startStep(ctx context.Context, r ui.Reporter, client Deployer, cfg *config.Config) error {
 	strategy := cfg.DeployStrategy()
 	s := r.Step(fmt.Sprintf("Starting service %s (strategy: %s)", cfg.Name, strategy))
-	err := withStreamedOutput(client, s, func() error {
+	err := withStreamedOutput(client, s, nil, func() error {
 		if strategy == "rollout" {
 			return client.RolloutService(ctx, cfg.Name)
 		}

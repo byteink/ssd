@@ -108,8 +108,9 @@ func (c *Client) RemoveEnvVar(ctx context.Context, serviceName, key string) erro
 // --- K3s-specific implementations ---
 
 // BuildImage builds a container image using nerdctl on the remote server.
-// Uses --namespace k8s.io so K3s can see the image.
-func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) error {
+// Uses --namespace k8s.io so K3s can see the image. buildArgs are already
+// resolved and may be credentials — escaped, never logged.
+func (c *Client) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
 	// Ensure buildkitd is running
 	if _, err := c.SSH(ctx, "systemctl is-active buildkitd || sudo systemctl start buildkitd"); err != nil {
 		return fmt.Errorf("failed to ensure buildkitd: %w", err)
@@ -123,11 +124,12 @@ func (c *Client) BuildImage(ctx context.Context, buildDir string, version int) e
 		targetFlag = " --target " + shellescape.Quote(c.cfg.Target)
 	}
 
-	cmd := fmt.Sprintf("cd %s && sudo nerdctl --namespace k8s.io build -t %s -f %s%s .",
+	cmd := fmt.Sprintf("cd %s && sudo nerdctl --namespace k8s.io build -t %s -f %s%s%s .",
 		shellescape.Quote(buildDir),
 		shellescape.Quote(imageTag),
 		shellescape.Quote(dockerfile),
-		targetFlag)
+		targetFlag,
+		remote.BuildArgFlags(buildArgs))
 	return c.SSHInteractive(ctx, cmd)
 }
 

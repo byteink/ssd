@@ -3,6 +3,7 @@ package testhelpers
 import (
 	"context"
 	"io"
+	"sync"
 
 	"github.com/stretchr/testify/mock"
 )
@@ -33,6 +34,16 @@ func (m *MockExecutor) SetOutput(stdout, stderr io.Writer) {
 // MockRemoteClient is a mock implementation of the remote client interface
 type MockRemoteClient struct {
 	mock.Mock
+
+	buildArgsMu sync.Mutex
+	buildArgs   map[string]string
+}
+
+// LastBuildArgs returns the build args passed to the most recent BuildImage call.
+func (m *MockRemoteClient) LastBuildArgs() map[string]string {
+	m.buildArgsMu.Lock()
+	defer m.buildArgsMu.Unlock()
+	return m.buildArgs
 }
 
 // SSH mocks SSH execution
@@ -59,8 +70,13 @@ func (m *MockRemoteClient) GetCurrentVersion(ctx context.Context) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
-// BuildImage mocks image building
-func (m *MockRemoteClient) BuildImage(ctx context.Context, buildDir string, version int) error {
+// BuildImage mocks image building. buildArgs are recorded rather than
+// matched, so existing On("BuildImage", dir, version) expectations keep
+// working; assert on LastBuildArgs().
+func (m *MockRemoteClient) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
+	m.buildArgsMu.Lock()
+	m.buildArgs = buildArgs
+	m.buildArgsMu.Unlock()
 	args := m.Called(buildDir, version)
 	return args.Error(0)
 }

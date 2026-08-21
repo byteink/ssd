@@ -22,6 +22,16 @@ import (
 // MockDeployer is a mock implementation of the Deployer interface
 type MockDeployer struct {
 	mock.Mock
+
+	buildArgsMu sync.Mutex
+	buildArgs   map[string]string
+}
+
+// LastBuildArgs returns the build args passed to the most recent BuildImage call.
+func (m *MockDeployer) LastBuildArgs() map[string]string {
+	m.buildArgsMu.Lock()
+	defer m.buildArgsMu.Unlock()
+	return m.buildArgs
 }
 
 func (m *MockDeployer) GetCurrentVersion(ctx context.Context) (int, error) {
@@ -44,7 +54,13 @@ func (m *MockDeployer) Rsync(ctx context.Context, localPath, remotePath string) 
 	return args.Error(0)
 }
 
-func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version int) error {
+// buildArgs are recorded rather than matched, so the existing
+// On("BuildImage", dir, version) expectations stay valid; assert on
+// LastBuildArgs().
+func (m *MockDeployer) BuildImage(ctx context.Context, buildDir string, version int, buildArgs map[string]string) error {
+	m.buildArgsMu.Lock()
+	m.buildArgs = buildArgs
+	m.buildArgsMu.Unlock()
 	args := m.Called(buildDir, version)
 	return args.Error(0)
 }
@@ -87,6 +103,11 @@ func (m *MockDeployer) CreateEnvFiles(ctx context.Context, serviceNames []string
 func (m *MockDeployer) UploadEnvFile(ctx context.Context, serviceName, localPath string) error {
 	args := m.Called(serviceName, localPath)
 	return args.Error(0)
+}
+
+func (m *MockDeployer) GetEnvFile(ctx context.Context, serviceName string) (string, error) {
+	args := m.Called(serviceName)
+	return args.String(0), args.Error(1)
 }
 
 func (m *MockDeployer) IsServiceRunning(ctx context.Context, serviceName string) (bool, error) {
