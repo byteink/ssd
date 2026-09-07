@@ -2312,6 +2312,14 @@ func TestValidatePortMapping(t *testing.T) {
 		{name: "port exceeds max", mapping: "65536:80", wantErr: true},
 		{name: "container port exceeds max", mapping: "80:65536", wantErr: true},
 		{name: "negative-looking port", mapping: "-1:80", wantErr: true},
+		{name: "ipv4 bound host", mapping: "100.103.176.35:9001:9001", wantErr: false},
+		{name: "loopback bound host", mapping: "127.0.0.1:9001:9001", wantErr: false},
+		{name: "bracketed ipv6 bound host", mapping: "[fd7a:115c:a1e0::1]:9001:9001", wantErr: false},
+		{name: "unbracketed ipv6 host", mapping: "fd7a:115c:a1e0::1:9001:9001", wantErr: true},
+		{name: "bogus host ip", mapping: "999.1.1.1:9001:9001", wantErr: true},
+		{name: "hostname instead of ip", mapping: "localhost:9001:9001", wantErr: true},
+		{name: "empty host ip", mapping: ":9001:9001", wantErr: true},
+		{name: "too many parts", mapping: "1.2.3.4:1:2:3", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -2324,6 +2332,28 @@ func TestValidatePortMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParsePortMapping(t *testing.T) {
+	tests := []struct {
+		mapping string
+		want    PortMapping
+	}{
+		{mapping: "8080:80", want: PortMapping{HostPort: 8080, ContainerPort: 80}},
+		{mapping: "100.103.176.35:9001:9001", want: PortMapping{HostIP: "100.103.176.35", HostPort: 9001, ContainerPort: 9001}},
+		{mapping: "[fd7a:115c:a1e0::1]:9001:9001", want: PortMapping{HostIP: "fd7a:115c:a1e0::1", HostPort: 9001, ContainerPort: 9001}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mapping, func(t *testing.T) {
+			got, err := ParsePortMapping(tt.mapping)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	_, err := ParsePortMapping("localhost:9001:9001")
+	assert.Error(t, err)
 }
 
 func TestLoadFromBytes_Ports(t *testing.T) {

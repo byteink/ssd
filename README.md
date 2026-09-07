@@ -188,7 +188,7 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
-    ports:                          # Host:container port mappings (optional)
+    ports:                          # [ip:]host:container port mappings (optional)
       - "3000:3000"
       - "8080:80"
     depends_on:                     # Simple list or map with conditions
@@ -470,7 +470,7 @@ services:
 - `path`: Path prefix for routing (e.g., `/api`). Requires `domain` or `domains`. Generates `PathPrefix` rule with `StripPrefix` middleware
 - `https`: Enable HTTPS (default: `true`)
 - `port`: Container port (default: `80`)
-- `ports`: Host:container port mappings (e.g., `["3000:3000"]`). Maps directly to Docker Compose `ports:`
+- `ports`: `[ip:]host:container` port mappings (e.g., `["3000:3000", "100.64.0.5:9001:9001"]`). The optional IP binds the publish to one host interface (IPv6 in brackets). Maps directly to Docker Compose `ports:`
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
 - `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files

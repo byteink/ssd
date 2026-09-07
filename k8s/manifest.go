@@ -132,22 +132,18 @@ func deploymentResource(name, namespace, project string, cfg *config.Config, ver
 
 	// Host port mappings from cfg.Ports
 	for _, mapping := range cfg.Ports {
-		parts := strings.SplitN(mapping, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		hostPort, err := strconv.Atoi(parts[0])
+		pm, err := config.ParsePortMapping(mapping)
 		if err != nil {
-			continue
+			continue // config validation already rejected it; keep manifest generation total
 		}
-		containerPort, err := strconv.Atoi(parts[1])
-		if err != nil {
-			continue
+		port := map[string]interface{}{
+			"containerPort": pm.ContainerPort,
+			"hostPort":      pm.HostPort,
 		}
-		containerPorts = append(containerPorts, map[string]interface{}{
-			"containerPort": containerPort,
-			"hostPort":      hostPort,
-		})
+		if pm.HostIP != "" {
+			port["hostIP"] = pm.HostIP
+		}
+		containerPorts = append(containerPorts, port)
 	}
 
 	container := map[string]interface{}{

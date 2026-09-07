@@ -112,7 +112,7 @@ services:
     path: /api                # Path prefix routing
     https: true               # Default true
     port: 3000                # Container port, default 80
-    ports: ["3000:3000"]      # Host:container port mappings (optional)
+    ports: ["3000:3000"]      # [ip:]host:container port mappings (optional)
     depends_on: [db, redis]   # Or map with conditions (service_healthy, service_started)
     env_file: ./.env          # Upload local .env to {stack}/{service}.env on every deploy (mode 600)
                               # OVERWRITES values set via `ssd env set`. Remove to manage vars via CLI only.

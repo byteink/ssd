@@ -581,7 +581,7 @@ services:
     path: /api                  # Path prefix routing (optional)
     https: true                 # Default true, set false to disable
     port: 3000                  # Container port, default 80
-    ports:                          # Host:container port mappings (optional)
+    ports:                          # [ip:]host:container port mappings (optional)
       - "3000:3000"
       - "8080:80"
     depends_on:                     # Simple list or map with conditions
@@ -779,7 +779,7 @@ services:
       - "9090:9090"             # Additional port exposure alongside Traefik
 ```
 
-`ports` maps directly to Docker Compose `ports:`. Each entry is `host:container` format. Works independently of domain/Traefik configuration.
+`ports` maps directly to Docker Compose `ports:`. Each entry is `host:container` or `ip:host:container` (IPv6 in brackets: `[fd7a::1]:9001:9001`). The optional IP binds the publish to one host interface, e.g. `100.64.0.5:9001:9001` for Tailscale-only access. Docker publishes past ufw, so an unbound port is reachable from every interface. Works independently of domain/Traefik configuration. On the k3s runtime the IP becomes the container port's `hostIP`.
 
 ### Env file (overwrite-on-deploy)
 ```yaml

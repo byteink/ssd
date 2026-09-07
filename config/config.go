@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -121,7 +122,7 @@ type Config struct {
 	HTTPS      *bool             `yaml:"https"`       // default true, pointer for nil check
 	Port       int               `yaml:"port"`        // default 80
 	Image      string            `yaml:"image"`       // if set, skip build (pre-built)
-	Ports      []string          `yaml:"ports"`       // host:container port mappings
+	Ports      []string          `yaml:"ports"`       // [ip:]host:container port mappings
 	Target     string            `yaml:"target"`      // Docker build target stage
 	BuildArgs  map[string]string `yaml:"build_args"`  // --build-arg K=V; values may be ${secret:KEY} / ${env:KEY}
 	// BuildSecrets are the same shape as BuildArgs but reach the build via
@@ -1331,42 +1332,95 @@ func ValidateTarget(target string) error {
 	return nil
 }
 
-// ValidatePortMapping validates a Docker port mapping string (e.g., "3000:3000", "8080:80")
-func ValidatePortMapping(mapping string) error {
-	if mapping == "" {
-		return fmt.Errorf("port mapping cannot be empty")
-	}
-
-	parts := strings.SplitN(mapping, ":", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("must be in host:container format")
-	}
-
-	if err := validatePortNumber(parts[0], "host"); err != nil {
-		return err
-	}
-	return validatePortNumber(parts[1], "container")
+// PortMapping is a parsed Docker port publish spec. HostIP is empty when the
+// mapping binds every host interface.
+type PortMapping struct {
+	HostIP        string
+	HostPort      int
+	ContainerPort int
 }
 
-// validatePortNumber validates a single port number string
-func validatePortNumber(s, label string) error {
+// ValidatePortMapping validates a Docker port mapping string (e.g., "3000:3000",
+// "8080:80", "127.0.0.1:9001:9001", "[fd7a::1]:9001:9001").
+func ValidatePortMapping(mapping string) error {
+	_, err := ParsePortMapping(mapping)
+	return err
+}
+
+// ParsePortMapping parses "[host_ip:]host_port:container_port". The host IP
+// must be a literal (IPv6 in brackets): Docker resolves hostnames on the
+// server at container start, so a bad name would only surface as a failed
+// deploy instead of a config error.
+func ParsePortMapping(mapping string) (PortMapping, error) {
+	if mapping == "" {
+		return PortMapping{}, fmt.Errorf("port mapping cannot be empty")
+	}
+
+	hostIP, rest, err := splitHostIP(mapping)
+	if err != nil {
+		return PortMapping{}, err
+	}
+
+	parts := strings.Split(rest, ":")
+	if len(parts) != 2 {
+		return PortMapping{}, fmt.Errorf("must be in [ip:]host:container format")
+	}
+
+	hostPort, err := parsePortNumber(parts[0], "host")
+	if err != nil {
+		return PortMapping{}, err
+	}
+	containerPort, err := parsePortNumber(parts[1], "container")
+	if err != nil {
+		return PortMapping{}, err
+	}
+	return PortMapping{HostIP: hostIP, HostPort: hostPort, ContainerPort: containerPort}, nil
+}
+
+// splitHostIP peels an optional leading host IP off a port mapping and
+// returns it with the remaining "host:container" tail.
+func splitHostIP(mapping string) (string, string, error) {
+	if strings.HasPrefix(mapping, "[") {
+		end := strings.Index(mapping, "]:")
+		if end < 0 {
+			return "", "", fmt.Errorf("unterminated bracketed host ip")
+		}
+		ip := mapping[1:end]
+		if net.ParseIP(ip) == nil || !strings.Contains(ip, ":") {
+			return "", "", fmt.Errorf("host ip %q is not a valid IPv6 literal", ip)
+		}
+		return ip, mapping[end+2:], nil
+	}
+
+	if strings.Count(mapping, ":") != 2 {
+		return "", mapping, nil
+	}
+	ip, rest, _ := strings.Cut(mapping, ":")
+	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
+		return "", "", fmt.Errorf("host ip %q is not a valid IPv4 literal (bracket IPv6)", ip)
+	}
+	return ip, rest, nil
+}
+
+// parsePortNumber validates a single port number string
+func parsePortNumber(s, label string) (int, error) {
 	if s == "" {
-		return fmt.Errorf("%s port cannot be empty", label)
+		return 0, fmt.Errorf("%s port cannot be empty", label)
 	}
 	n := 0
 	for _, r := range s {
 		if r < '0' || r > '9' {
-			return fmt.Errorf("%s port contains invalid character: %c", label, r)
+			return 0, fmt.Errorf("%s port contains invalid character: %c", label, r)
 		}
 		n = n*10 + int(r-'0')
 		if n > 65535 {
-			return fmt.Errorf("%s port %s exceeds maximum 65535", label, s)
+			return 0, fmt.Errorf("%s port %s exceeds maximum 65535", label, s)
 		}
 	}
 	if n == 0 {
-		return fmt.Errorf("%s port cannot be 0", label)
+		return 0, fmt.Errorf("%s port cannot be 0", label)
 	}
-	return nil
+	return n, nil
 }
 
 // validateDuration validates a Docker duration string (e.g., "30s", "1m", "1h")

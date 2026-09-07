@@ -685,6 +685,49 @@ func TestGenerateManifests_WithPorts(t *testing.T) {
 	}
 }
 
+func TestGenerateManifests_PortsHostIP(t *testing.T) {
+	services := map[string]*config.Config{
+		"app": {
+			Name:   "app",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   80,
+			Ports:  []string{"100.103.176.35:9001:9001"},
+		},
+	}
+
+	result, err := GenerateManifests(services, "/stacks/myapp", map[string]int{"app": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+
+	docs := parseMultiDoc(t, result)
+	dep := findDoc(docs, "Deployment", "app")
+	if dep == nil {
+		t.Fatal("Deployment missing")
+	}
+
+	spec := dep["spec"].(map[string]interface{})
+	podSpec := spec["template"].(map[string]interface{})["spec"].(map[string]interface{})
+	container := podSpec["containers"].([]interface{})[0].(map[string]interface{})
+
+	found := false
+	for _, p := range container["ports"].([]interface{}) {
+		port := p.(map[string]interface{})
+		hp, _ := port["hostPort"].(int)
+		if hp != 9001 {
+			continue
+		}
+		found = true
+		if ip, _ := port["hostIP"].(string); ip != "100.103.176.35" {
+			t.Errorf("hostIP = %q, want 100.103.176.35", ip)
+		}
+	}
+	if !found {
+		t.Error("hostPort mapping 100.103.176.35:9001:9001 not found")
+	}
+}
+
 func TestGenerateManifests_MultiDomain(t *testing.T) {
 	services := map[string]*config.Config{
 		"web": {
