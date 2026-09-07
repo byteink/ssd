@@ -1760,7 +1760,7 @@ func TestGenerateCompose_WithPorts(t *testing.T) {
 			Server: "myserver",
 			Stack:  "/stacks/myapp",
 			Port:   80,
-			Ports:  []string{"3000:3000", "8080:80"},
+			Ports:  []string{"3000:3000", "8080:80", "100.103.176.35:9001:9001"},
 		},
 	}
 
@@ -1782,14 +1782,16 @@ func TestGenerateCompose_WithPorts(t *testing.T) {
 		t.Fatal("ports missing or not an array")
 	}
 
-	if len(ports) != 2 {
-		t.Fatalf("ports count = %d, want 2", len(ports))
+	// Interface-bound mappings must reach compose verbatim; Docker does the
+	// bind, ssd must not normalize the IP away.
+	want := []string{"3000:3000", "8080:80", "100.103.176.35:9001:9001"}
+	if len(ports) != len(want) {
+		t.Fatalf("ports count = %d, want %d", len(ports), len(want))
 	}
-	if ports[0] != "3000:3000" {
-		t.Errorf("ports[0] = %v, want 3000:3000", ports[0])
-	}
-	if ports[1] != "8080:80" {
-		t.Errorf("ports[1] = %v, want 8080:80", ports[1])
+	for i, w := range want {
+		if ports[i] != w {
+			t.Errorf("ports[%d] = %v, want %s", i, ports[i], w)
+		}
 	}
 }
 
