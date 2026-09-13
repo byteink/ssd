@@ -451,6 +451,21 @@ guards it.
   post-rollout patch is needed. The `{svc}-env` ConfigMap is populated by
   `applyEnvConfigMap`; the `{svc}-secret` Secret is created by `ssd secret set`.
 - **K3s builds**: `nerdctl --namespace k8s.io build` (images land directly in K3s containerd)
+- **K3s `files:` mounts**: each entry renders as a `hostPath` volume of type
+  `File` (`{stack}/{basename}`) mounted at the container path with **no
+  `subPath`**. `subPath` means "a path inside this volume"; a volume that *is* a
+  single file has no inside, so kubelet cannot resolve it and the pod dies with
+  `CreateContainerConfigError: failed to prepare subPath for volumeMount`. That
+  made `files:` completely non-functional on k3s until v0.26.1.
+  `TestGenerateManifests_WithFiles` asserts the absence, not the presence.
+- **K3s probes** (`buildProbe` / `probeCommand`): a healthcheck `cmd:` string is
+  wrapped as `sh -c <cmd>` (it is shell syntax — `curl … || exit 1`), but an
+  `exec:` array is passed through as `exec.command` **verbatim**. Wrapping the
+  array rendered `sh -c ""` — the command was dropped entirely, and a
+  scratch/distroless image has no shell to run the wrapper with either, so both
+  probes errored and the pod sat 0/1 Running with no useful event. A
+  healthcheck with no command emits **no probe at all**: an empty command can
+  only ever fail, so the probe would do nothing but kill the pod.
 
 ## Config Layout
 
@@ -594,6 +609,8 @@ services:
       redis-data: /data
     healthcheck:
       cmd: "curl -f http://localhost:3000/health || exit 1"
+      # or, for an image with no shell (exactly one of cmd / exec):
+      # exec: ["/ByteBucket", "healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

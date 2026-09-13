@@ -19,12 +19,12 @@ test-integration: hooks
 # E2E tests, CI/fast path: full deploy in a docker-in-docker sandbox using the
 # recreate strategy (compose plugin only). Host Docker is never touched.
 test-e2e: hooks
-	go test -tags e2e ./...
+	go test -tags e2e -timeout 30m ./...
 
 # E2E tests, full-fidelity path: provisions docker-rollout in the sandbox and
 # exercises the real zero-downtime rollout deploy. Run locally before release.
 test-e2e-full: hooks
-	SSD_E2E_FULL=1 go test -tags e2e ./...
+	SSD_E2E_FULL=1 go test -tags e2e -timeout 30m ./...
 
 # Everything that must pass before a release (see CLAUDE.md release gate).
 test-all: test test-integration test-e2e-full

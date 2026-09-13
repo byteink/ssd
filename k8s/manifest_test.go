@@ -322,6 +322,8 @@ func TestGenerateManifests_WithHealthcheck(t *testing.T) {
 	if len(execCmd) != 3 {
 		t.Fatalf("exec command length = %d, want 3", len(execCmd))
 	}
+	// A shell string needs the wrapper — `||` is shell syntax. An exec array
+	// must not get one; see TestGenerateManifests_HealthcheckExec_Verbatim.
 	if execCmd[0] != "sh" || execCmd[1] != "-c" {
 		t.Errorf("exec command prefix = %v %v, want sh -c", execCmd[0], execCmd[1])
 	}
@@ -604,8 +606,11 @@ func TestGenerateManifests_WithFiles(t *testing.T) {
 	for _, vm := range volumeMounts {
 		mount := vm.(map[string]interface{})
 		if mount["name"] == "file-config-yaml" && mount["mountPath"] == "/app/config.yaml" {
-			if mount["subPath"] != "config.yaml" {
-				t.Errorf("subPath = %v, want config.yaml", mount["subPath"])
+			// A hostPath of type File has no inside, so kubelet cannot resolve
+			// a subPath against it: "failed to prepare subPath for volumeMount".
+			// The mountPath alone is the whole mount.
+			if sub, ok := mount["subPath"]; ok {
+				t.Errorf("subPath = %v, want absent for a File hostPath", sub)
 			}
 			found = true
 		}
@@ -1089,5 +1094,75 @@ func TestGenerateManifests_StackWithVolumesSecretsDepends(t *testing.T) {
 		if !secOptional {
 			t.Errorf("%s secretRef must be optional (Bug 3)", svc)
 		}
+	}
+}
+
+// An exec array must reach the cluster verbatim. Wrapping it as `sh -c ""`
+// dropped the command outright, and a scratch/distroless image has no shell to
+// run it with — liveness and readiness both error and the pod sits 0/1 Running.
+func TestGenerateManifests_HealthcheckExec_Verbatim(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:   "web",
+			Server: "myserver",
+			Stack:  "/stacks/myapp",
+			Port:   3000,
+			HealthCheck: &config.HealthCheck{
+				Exec:     []string{"/ByteBucket", "healthcheck"},
+				Interval: "30s",
+			},
+		},
+	}
+
+	result, err := GenerateManifests(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+
+	container := containerOf(t, parseMultiDoc(t, result), "web")
+
+	for _, kind := range []string{"livenessProbe", "readinessProbe"} {
+		probe, ok := container[kind].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s missing", kind)
+		}
+		cmd := probe["exec"].(map[string]interface{})["command"].([]interface{})
+		want := []string{"/ByteBucket", "healthcheck"}
+		if len(cmd) != len(want) {
+			t.Fatalf("%s command = %v, want %v", kind, cmd, want)
+		}
+		for i, arg := range want {
+			if cmd[i] != arg {
+				t.Errorf("%s command[%d] = %v, want %v", kind, i, cmd[i], arg)
+			}
+		}
+	}
+}
+
+// A probe with an empty command always fails, so it is worse than no probe:
+// omit it rather than render a healthcheck that can only kill the pod.
+func TestGenerateManifests_HealthcheckEmpty_NoProbe(t *testing.T) {
+	services := map[string]*config.Config{
+		"web": {
+			Name:        "web",
+			Server:      "myserver",
+			Stack:       "/stacks/myapp",
+			Port:        3000,
+			HealthCheck: &config.HealthCheck{Interval: "30s"},
+		},
+	}
+
+	result, err := GenerateManifests(services, "/stacks/myapp", map[string]int{"web": 1})
+	if err != nil {
+		t.Fatalf("GenerateManifests failed: %v", err)
+	}
+
+	container := containerOf(t, parseMultiDoc(t, result), "web")
+
+	if probe, ok := container["livenessProbe"]; ok {
+		t.Errorf("livenessProbe = %v, want none", probe)
+	}
+	if probe, ok := container["readinessProbe"]; ok {
+		t.Errorf("readinessProbe = %v, want none", probe)
 	}
 }

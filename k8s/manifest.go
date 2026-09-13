@@ -173,14 +173,17 @@ func deploymentResource(name, namespace, project string, cfg *config.Config, ver
 		},
 	}
 
-	// Healthcheck probes
+	// Healthcheck probes. buildProbe returns nil for a healthcheck with no
+	// command — an always-failing probe is worse than none.
 	if cfg.HealthCheck != nil {
 		probe, err := buildProbe(cfg.HealthCheck)
 		if err != nil {
 			return nil, err
 		}
-		container["livenessProbe"] = probe
-		container["readinessProbe"] = probe
+		if probe != nil {
+			container["livenessProbe"] = probe
+			container["readinessProbe"] = probe
+		}
 	}
 
 	// Volume mounts
@@ -194,10 +197,13 @@ func deploymentResource(name, namespace, project string, cfg *config.Config, ver
 	for localPath, containerPath := range cfg.Files {
 		base := filepath.Base(localPath)
 		volName := "file-" + sanitizeVolumeName(base)
+		// No subPath: the volume below is a hostPath of type File, and a
+		// single file has no inside for a subPath to resolve against —
+		// kubelet fails the pod with "failed to prepare subPath for
+		// volumeMount". mountPath alone is the whole mount.
 		volumeMounts = append(volumeMounts, map[string]interface{}{
 			"name":      volName,
 			"mountPath": containerPath,
-			"subPath":   base,
 		})
 	}
 	if len(volumeMounts) > 0 {
@@ -453,11 +459,35 @@ func allDomains(cfg *config.Config) []string {
 	return nil
 }
 
-// buildProbe creates a K8s probe map from a healthcheck config.
+// probeCommand renders a healthcheck as a probe's exec.command.
+//
+// An exec array is passed through verbatim. Wrapping it in `sh -c` drops every
+// element (the array is not hc.Cmd, so the wrapper renders `sh -c ""`), and a
+// scratch or distroless image has no shell to run the wrapper with anyway — the
+// pod then sits 0/1 Running with both probes erroring. A shell string does need
+// the wrapper: `curl ... || exit 1` is shell syntax, not an argv.
+func probeCommand(hc *config.HealthCheck) []string {
+	if len(hc.Exec) > 0 {
+		return hc.Exec
+	}
+	if strings.TrimSpace(hc.Cmd) == "" {
+		return nil
+	}
+	return []string{"sh", "-c", hc.Cmd}
+}
+
+// buildProbe creates a K8s probe map from a healthcheck config, or nil when
+// the healthcheck carries no command. A probe with an empty command can only
+// ever fail, so omitting it beats shipping a healthcheck that kills the pod.
 func buildProbe(hc *config.HealthCheck) (map[string]interface{}, error) {
+	command := probeCommand(hc)
+	if len(command) == 0 {
+		return nil, nil
+	}
+
 	probe := map[string]interface{}{
 		"exec": map[string]interface{}{
-			"command": []string{"sh", "-c", hc.Cmd},
+			"command": command,
 		},
 	}
 

@@ -473,12 +473,12 @@ services:
 - `ports`: `[ip:]host:container` port mappings (e.g., `["3000:3000", "100.64.0.5:9001:9001"]`). The optional IP binds the publish to one host interface (IPv6 in brackets). Maps directly to Docker Compose `ports:`
 - `depends_on`: Service dependencies (list or map with conditions)
 - `volumes`: Map of volume names to mount paths
-- `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files
+- `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files. On k3s the file becomes a `hostPath` volume of type `File` mounted at the container path — no `subPath`, which a single-file volume cannot resolve
 - `require_clean`: Abort the deploy when the build context has uncommitted tracked changes (default: `false`, which warns). Inherits from root
 - `pre_deploy`: Shell commands run locally in the build context before the sync, in order. A non-zero exit aborts the deploy. Runs before the `require_clean` check. Inherits from root
 - `healthcheck`: Health check configuration (exactly one of `cmd` / `exec`)
-  - `cmd`: Shell command, rendered as `["CMD","sh","-c",cmd]`
-  - `exec`: Array form, rendered as `["CMD",arg0,arg1,...]`. Use for scratch images with no shell.
+  - `cmd`: Shell command, rendered as `["CMD","sh","-c",cmd]` on compose and as a `sh -c` exec probe on k3s
+  - `exec`: Array form, rendered as `["CMD",arg0,arg1,...]` on compose and as the probe's `exec.command` **verbatim** on k3s — no shell wrapper. Use for scratch/distroless images with no shell
   - `interval`: Check interval (e.g., `30s`)
   - `timeout`: Command timeout (e.g., `10s`)
   - `retries`: Number of retries before unhealthy
