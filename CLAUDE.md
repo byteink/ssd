@@ -912,9 +912,30 @@ If `env_file` is set in ssd.yaml, it OVERWRITES any values set via
 ### Secrets (k3s only)
 ```bash
 ssd secret <service> set KEY=VALUE    # Set a K8s Secret
-ssd secret <service> list             # List all secrets
+ssd secret <service> list             # List secret names (never the values)
 ssd secret <service> rm KEY           # Remove a secret
 ```
+
+**Secrets are usable before the first deploy** — they have to be, since
+`build_secrets: ${secret:KEY}` is resolved *during* the build. `SetSecret`
+runs `kubectl create namespace X --dry-run=client -o yaml | kubectl apply -f -`
+first, so a never-deployed stack gets its namespace from the secret write.
+Requiring a deployed namespace made the documented workflow circular.
+
+Every probe uses `kubectl get ... --ignore-not-found -o name`: absent is exit
+0 + empty stdout, so it stays distinct from a genuine failure (unreachable
+server, broken kubeconfig, RBAC), which still exits non-zero. A plain `get`
+exits 1 for both, which is why `secret list` used to die on a stack that had
+never been deployed. Nothing in the secret path redirects remote stderr to
+`/dev/null` any more — the old `2>/dev/null` on the list command is what
+reduced a real failure to `ssh command failed: exit status 1`. Errors name the
+Secret and the namespace and wrap the remote stderr.
+
+`ssd secret list` prints **key names only**. `ListSecrets` still returns
+`KEY=VALUE` lines (`deploy/buildargs.go` resolves `${secret:}` from them);
+`secretKeys` in main.go drops the values before printing, and
+`noSecretsMessage` distinguishes "namespace absent (stack not deployed yet)"
+from "no secrets set" — the two need different actions from the operator.
 
 A secret can also be fed to an image build by referencing it from a service's
 `build_args` or `build_secrets` as `${secret:KEY}` (see "Build Args and Build

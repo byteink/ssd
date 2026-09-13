@@ -11,6 +11,7 @@ import (
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/internal/testhelpers"
 	"github.com/byteink/ssd/remote"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestEnvSetParsing tests that runEnvSet correctly parses KEY=VALUE with SplitN
@@ -1105,4 +1106,35 @@ func TestPrintConfig_BuildSecretsPrintedUnresolved(t *testing.T) {
 	if !strings.Contains(got, "MAXMIND_LICENSE_KEY: ${secret:MAXMIND_LICENSE_KEY}") {
 		t.Errorf("expected unresolved reference, got:\n%s", got)
 	}
+}
+
+// `ssd secret list` is an inventory, not a dump: values never reach stdout.
+func TestSecretKeys_NamesOnlyNeverValues(t *testing.T) {
+	content := "API_KEY=sk-live-abcdef\nDATABASE_URL=postgres://u:p@h/db\n\nMALFORMED\n"
+
+	keys := secretKeys(content)
+
+	assert.Equal(t, []string{"API_KEY", "DATABASE_URL"}, keys)
+	for _, k := range keys {
+		assert.NotContains(t, k, "=")
+	}
+	assert.NotContains(t, strings.Join(keys, "\n"), "sk-live-abcdef")
+}
+
+func TestSecretKeys_Empty(t *testing.T) {
+	assert.Empty(t, secretKeys(""))
+	assert.Empty(t, secretKeys("\n  \n"))
+}
+
+// The three pre-deploy states need different actions from the operator, so
+// they need different messages.
+func TestNoSecretsMessage_DistinguishesStates(t *testing.T) {
+	undeployed := noSecretsMessage("backend", "expensia", false)
+	assert.Contains(t, undeployed, "backend")
+	assert.Contains(t, undeployed, "expensia")
+	assert.Contains(t, undeployed, "not deployed")
+
+	deployed := noSecretsMessage("backend", "expensia", true)
+	assert.Contains(t, deployed, "backend")
+	assert.NotContains(t, deployed, "not deployed")
 }

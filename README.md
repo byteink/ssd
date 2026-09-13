@@ -599,6 +599,27 @@ When `env_file` is set, the local file is uploaded to
 any values set via `ssd env set`. To manage env vars via CLI only, remove
 `env_file` from ssd.yaml first.
 
+### Secrets (k3s only)
+```bash
+ssd secret <service> set KEY=VALUE   # Set or update a secret
+ssd secret <service> list            # List secret names (never the values)
+ssd secret <service> rm KEY          # Remove a secret
+```
+
+Stored as a `{service}-secret` K8s Secret and injected into the pod as env
+vars alongside the ConfigMap vars.
+
+Secrets work **before the first deploy**, which is what makes
+`build_secrets: ${secret:KEY}` usable: `set` creates the namespace and the
+Secret when they are missing, and `list` prints
+`No secrets set for <svc> (stack not deployed yet: namespace "<ns>" does not
+exist)` instead of failing. A real failure — unreachable server, broken
+kubeconfig, RBAC — is still an error, and it names the namespace, the Secret,
+and the remote stderr.
+
+`list` prints key names only. Read a value with `kubectl` if you genuinely
+need it; ssd will not put a credential in your scrollback.
+
 ### Server Provisioning
 ```bash
 ssd provision                                         # Provision server from ssd.yaml

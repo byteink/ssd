@@ -1427,11 +1427,19 @@ func runSecret(args []string) {
 			fmt.Printf(errorFmt, err)
 			os.Exit(1)
 		}
-		if output == "" || strings.TrimSpace(output) == "" {
-			fmt.Println("No secrets set")
+		keys := secretKeys(output)
+		if len(keys) == 0 {
+			deployed, err := client.NamespaceExists(context.Background())
+			if err != nil {
+				fmt.Printf(errorFmt, err)
+				os.Exit(1)
+			}
+			fmt.Println(noSecretsMessage(service, client.Namespace(), deployed))
 			return
 		}
-		fmt.Print(output)
+		for _, key := range keys {
+			fmt.Println(key)
+		}
 	case "rm":
 		if len(args) < 3 {
 			fmt.Println("Usage: ssd secret <service> rm KEY")
@@ -1447,6 +1455,30 @@ func runSecret(args []string) {
 		fmt.Println("Usage: ssd secret <service> <set|list|rm> [...]")
 		os.Exit(1)
 	}
+}
+
+// secretKeys extracts the key names from ListSecrets' KEY=VALUE lines.
+// Values are deliberately dropped: `ssd secret list` is an inventory, and a
+// secret printed to a terminal ends up in scrollback and shell history.
+func secretKeys(content string) []string {
+	var keys []string
+	for _, line := range strings.Split(content, "\n") {
+		key, _, found := strings.Cut(strings.TrimSpace(line), "=")
+		if found && key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// noSecretsMessage explains an empty secret list. The two states need
+// different actions: an absent namespace means nothing has been deployed yet
+// (and `ssd secret set` will create it), not that the secret was lost.
+func noSecretsMessage(service, namespace string, namespaceExists bool) string {
+	if !namespaceExists {
+		return fmt.Sprintf("No secrets set for %s (stack not deployed yet: namespace %q does not exist)", service, namespace)
+	}
+	return fmt.Sprintf("No secrets set for %s", service)
 }
 
 func runProvision(args []string) {
@@ -2654,12 +2686,16 @@ func printSecretHelp() {
 
 Usage:
   ssd secret <service> set KEY=VALUE  Set or update a secret
-  ssd secret <service> list           List all secrets
+  ssd secret <service> list           List secret names (never the values)
   ssd secret <service> rm KEY         Remove a secret
 
 Secrets are stored as K8s Secrets and injected as environment variables
 into the container alongside ConfigMap env vars. Only available when
 runtime is set to k3s in ssd.yaml.
+
+Secrets work before the first deploy: 'set' creates the namespace and the
+Secret if they are missing, and 'list' reports an empty list rather than an
+error when the stack has not been deployed yet.
 
 A secret can also be fed to the image build: reference it from a service's
 build_secrets as ${secret:KEY} (see 'ssd deploy -h'). build_args works too,

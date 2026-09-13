@@ -21,7 +21,7 @@ ssd env <service> set K=V     # Set env var on server
 ssd env <service> list        # List env vars
 ssd env <service> rm KEY      # Remove env var
 ssd secret <service> set K=V  # Set K8s secret (k3s only)
-ssd secret <service> list     # List secrets (k3s only)
+ssd secret <service> list     # List secret names, values never printed (k3s only)
 ssd secret <service> rm KEY   # Remove secret (k3s only)
 ssd prune                     # Remove orphaned services (default)
 ssd prune --images            # Remove old image tags beyond retention
