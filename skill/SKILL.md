@@ -120,6 +120,9 @@ services:
                               # (default false = warn). Deploys ship `git archive HEAD`.
     pre_deploy:               # Shell commands run LOCALLY in the context, in order, before
       - make gen              # the sync. Non-zero exit aborts. Runs BEFORE require_clean.
+    post_deploy:              # Shell commands run LOCALLY in the context, in order, AFTER the
+      - sh purge.sh           # start/rollout succeeded (CDN purge, smoke test). Runs for image:
+                              # services too. Non-zero exit = exit 1, but the service IS live.
     files:
       ./config.yaml: /app/config.yaml  # Local file -> container path (works with .gitignored files)
     volumes:
@@ -134,7 +137,7 @@ services:
       replicas: 3             # default 1 (compose: requires `docker compose --compatibility`)
 ```
 
-Root-level `server`, `stack`, `deploy.strategy`, `require_clean`, and `pre_deploy` are inherited by all services.
+Root-level `server`, `stack`, `deploy.strategy`, `require_clean`, `pre_deploy`, and `post_deploy` are inherited by all services.
 Traefik is only included when a service has `domain` or `domains` set. Services without domains can use `ports` for host access (Tailscale, Cloudflare tunnels).
 
 ## Workflow

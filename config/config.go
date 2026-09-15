@@ -143,6 +143,10 @@ type Config struct {
 	// PreDeploy are shell commands run locally in the build context before
 	// the sync, in order. Inherits from root when unset.
 	PreDeploy []string `yaml:"pre_deploy"`
+	// PostDeploy are shell commands run locally in the build context after
+	// the service has started/rolled out, in order. Inherits from root when
+	// unset. Unlike PreDeploy it also runs for pre-built (image:) services.
+	PostDeploy []string `yaml:"post_deploy"`
 }
 
 // RootConfig represents the ssd.yaml file structure
@@ -154,6 +158,7 @@ type RootConfig struct {
 	Cleanup      *CleanupConfig     `yaml:"cleanup"`
 	RequireClean *bool              `yaml:"require_clean"`
 	PreDeploy    []string           `yaml:"pre_deploy"`
+	PostDeploy   []string           `yaml:"post_deploy"`
 	Services     map[string]*Config `yaml:"services"`
 }
 
@@ -428,7 +433,7 @@ func (r *RootConfig) GetService(serviceName string) (*Config, error) {
 
 // inherit fills unset service fields from the root-level defaults.
 // A value set on the service always wins — including an explicit zero
-// (cleanup.retention: 0, require_clean: false, pre_deploy: []).
+// (cleanup.retention: 0, require_clean: false, pre_deploy: [], post_deploy: []).
 func (r *RootConfig) inherit(cfg *Config) {
 	if cfg.Server == "" {
 		cfg.Server = r.Server
@@ -455,6 +460,9 @@ func (r *RootConfig) inherit(cfg *Config) {
 	}
 	if cfg.PreDeploy == nil {
 		cfg.PreDeploy = r.PreDeploy
+	}
+	if cfg.PostDeploy == nil {
+		cfg.PostDeploy = r.PostDeploy
 	}
 }
 
@@ -599,7 +607,10 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 
-	if err := validatePreDeploy(cfg.PreDeploy); err != nil {
+	if err := validateHooks("pre_deploy", cfg.PreDeploy); err != nil {
+		return err
+	}
+	if err := validateHooks("post_deploy", cfg.PostDeploy); err != nil {
 		return err
 	}
 
@@ -726,14 +737,14 @@ func validateBuildArgValue(field, key, value string) error {
 	return nil
 }
 
-// validatePreDeploy rejects blank commands — `sh -c ""` would silently
-// succeed, hiding a typo'd hook. The command text itself is not sanitised:
-// it runs on the operator's machine from a config that already names the
-// ssh host, so it is trusted input, not a boundary.
-func validatePreDeploy(cmds []string) error {
+// validateHooks rejects blank pre_deploy/post_deploy commands — `sh -c ""`
+// would silently succeed, hiding a typo'd hook. The command text itself is
+// not sanitised: it runs on the operator's machine from a config that already
+// names the ssh host, so it is trusted input, not a boundary.
+func validateHooks(field string, cmds []string) error {
 	for i, c := range cmds {
 		if strings.TrimSpace(c) == "" {
-			return fmt.Errorf("pre_deploy[%d]: command cannot be empty", i)
+			return fmt.Errorf("%s[%d]: command cannot be empty", field, i)
 		}
 	}
 	return nil

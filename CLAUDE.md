@@ -95,6 +95,7 @@ goreleaser release --snapshot --clean   # Test release locally
 ├── deploy/
 │   ├── deploy.go     # Deploy orchestration
 │   ├── preflight.go  # Local pre-flight: pre_deploy hooks + require_clean check
+│   ├── hooks.go      # Shared sh -c hook runner + post_deploy (after the start)
 │   ├── buildargs.go  # build_args/build_secrets resolution (${secret:}/${env:})
 │   └── redact.go     # Masks resolved build-arg/secret values in build output
 ├── compose/
@@ -140,6 +141,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 5. Build Docker image on server: `ssd-{name}:{version}` (with `--build-arg`)
 6. Parse current version from compose.yaml, increment it
 7. Start service using configured strategy (`docker rollout` or `--force-recreate`)
+7b. Run `post_deploy` hooks locally (see "Post-deploy hooks")
 8. Clean up temp directory
 
 ### K3s runtime
@@ -154,6 +156,7 @@ The runtime factory (`runtime/runtime.go`) selects the right client implementati
 6. Parse current version from manifests.yaml, increment it
 7. Generate K8s manifests, apply with `kubectl apply`
 8. Wait for rollout: `kubectl rollout status`
+8b. Run `post_deploy` hooks locally (see "Post-deploy hooks")
 9. Clean up temp directory
 
 ## Local Pre-flight (`deploy/preflight.go`)
@@ -200,6 +203,43 @@ commit it. Don't add an escape hatch until someone proves they need one.
 Called from `DeployWithClient` right after the header, before `StackExists` —
 a failing hook or dirty tree leaves the server untouched. Skipped for pre-built
 (`image:`) services, which sync no context.
+
+## Post-deploy hooks (`deploy/hooks.go`)
+
+`post_deploy` is the mirror of `pre_deploy`: a per-service list of local shell
+commands, settable at root for inheritance, run by the same `runHooks` (`sh -c`,
+sequential, `cmd.Dir` = resolved `context`, output streamed into the step's
+tail window and buffered for the error). It exists because bitlang.org sits
+behind a Cloudflare HTML cache: a deploy is invisible until something purges
+the edge, and the purge **must run after the rollout** — before it, the old
+pod repopulates the cache during the build window and re-pins the stale page.
+
+```yaml
+services:
+  website:
+    post_deploy:
+      - sh purge.sh
+```
+
+- **Fires only after a successful start/rollout.** `deploy.PostDeploy` is
+  called from `DeployWithClient` straight after `startStep` (single-service
+  path) and from `startAndClean` in main.go after `start()` returns nil
+  (deploy-all / multi-service path). BuildOnly deploys never start the
+  service, so they never run it. `TestDeployWithClient_PostDeployRunsAfterStart`
+  asserts the hook's side effect is absent when `RolloutService` is invoked
+  and present afterwards — a test that only proved the command ran would pass
+  on a broken implementation.
+- **A failing hook fails the command** (exit 1). The rollout cannot be undone,
+  so the error reads `<svc> is deployed and live, but post_deploy command
+  failed: …` — the operator must not read it as a failed rollout. Warn-only
+  (the tag-cleanup precedent) was rejected deliberately: a silently failed
+  purge leaves a stale site behind a green deploy, the exact bug the hook
+  prevents. In a multi-service deploy the remaining services still start;
+  `startServices` collects the failures and exits 1 at the end.
+- **Runs for pre-built (`image:`) services too.** They sync no context (so no
+  pre-flight), but they still deploy and may still need a purge.
+- Blank commands are rejected (`validateHooks`), same reason as `pre_deploy`.
+- `ssd config` prints the list (`printHooks`).
 
 ## Build Args and Build Secrets (`deploy/buildargs.go`, `deploy/redact.go`)
 
@@ -647,22 +687,26 @@ See "Build Args and Build Secrets" above. Missing/empty reference aborts before
 the build; resolved values are never printed. Neither is valid with `image:`.
 Use `build_secrets` for credentials — `build_args` land in image history.
 
-### Pre-deploy hooks / clean tree
+### Pre-deploy / post-deploy hooks, clean tree
 ```yaml
 server: myserver
 require_clean: true           # root default, inherited by every service
 
 services:
   website:
-    pre_deploy:               # run locally in the context, in order
+    pre_deploy:               # run locally in the context, in order, before the sync
       - sh advisories.sh
       - make gen
+    post_deploy:              # run locally in the context, after the rollout succeeds
+      - sh purge.sh           # e.g. CDN cache purge, smoke test, notification
   worker:
     require_clean: false      # per-service override (warn instead of abort)
 ```
 
-See "Local Pre-flight" above. `pre_deploy` runs before the `require_clean`
-check; neither applies to pre-built (`image:`) services.
+See "Local Pre-flight" and "Post-deploy hooks" above. `pre_deploy` runs before
+the `require_clean` check; neither applies to pre-built (`image:`) services.
+`post_deploy` runs after the service is up, for every service including
+pre-built ones; a failing hook exits 1 with a message that the service is live.
 
 ### Deploy strategy
 ```yaml

@@ -424,20 +424,7 @@ func deployMany(rootCfg *config.RootConfig, names []string, detectOrphansToo boo
 		}
 	}
 
-	// Start the targeted subset using each service's strategy, in dependency
-	// order so a dependency (e.g. a DB a readiness probe needs) is Ready before
-	// the dependent starts. Alphabetical order would start the dependent first
-	// and deadlock on its rollout deadline.
-	fmt.Println("\n==> Starting all services...")
-	client := runtime.New(rootCfg.Runtime, allServices[names[0]])
-	tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
-	deploySet := make(map[string]*config.Config, len(names))
-	for _, name := range names {
-		deploySet[name] = allServices[name]
-	}
-	for _, name := range deploy.OrderByDependsOn(deploySet) {
-		startAndClean(rootCfg, client, tagCleaner, name, allServices[name])
-	}
+	client := startServices(rootCfg, names, allServices)
 
 	fmt.Println("\nAll services deployed successfully!")
 
@@ -446,9 +433,40 @@ func deployMany(rootCfg *config.RootConfig, names []string, detectOrphansToo boo
 	}
 }
 
-// startAndClean starts one service with its configured strategy, then prunes
-// old image tags for it (warn-only). Exits on a start failure.
-func startAndClean(rootCfg *config.RootConfig, client remote.RemoteClient, tagCleaner deploy.TagCleaner, name string, cfg *config.Config) {
+// startServices starts the targeted subset using each service's strategy, in
+// dependency order so a dependency (e.g. a DB a readiness probe needs) is
+// Ready before the dependent starts. Alphabetical order would start the
+// dependent first and deadlock on its rollout deadline.
+//
+// A failing post_deploy hook does not stop the remaining services from
+// starting — they are independent deploys — but the command still exits
+// non-zero once every service has been started.
+func startServices(rootCfg *config.RootConfig, names []string, allServices map[string]*config.Config) remote.RemoteClient {
+	fmt.Println("\n==> Starting all services...")
+	client := runtime.New(rootCfg.Runtime, allServices[names[0]])
+	tagCleaner := tagCleanerFor(rootCfg.Runtime, client)
+	deploySet := make(map[string]*config.Config, len(names))
+	for _, name := range names {
+		deploySet[name] = allServices[name]
+	}
+	var hookFailed []string
+	for _, name := range deploy.OrderByDependsOn(deploySet) {
+		if err := startAndClean(rootCfg, client, tagCleaner, name, allServices[name]); err != nil {
+			hookFailed = append(hookFailed, name)
+		}
+	}
+	if len(hookFailed) > 0 {
+		fmt.Printf("\nAll services deployed, but post_deploy failed for: %s\n", strings.Join(hookFailed, ", "))
+		os.Exit(1)
+	}
+	return client
+}
+
+// startAndClean starts one service with its configured strategy, runs its
+// post_deploy hooks, then prunes old image tags for it (warn-only). Exits on
+// a start failure. A hook failure is printed and returned instead: the
+// service is live by then, so the caller decides how to finish.
+func startAndClean(rootCfg *config.RootConfig, client remote.RemoteClient, tagCleaner deploy.TagCleaner, name string, cfg *config.Config) error {
 	strategy := cfg.DeployStrategy()
 	fmt.Printf("    %s (strategy: %s)...\n", name, strategy)
 
@@ -462,16 +480,24 @@ func startAndClean(rootCfg *config.RootConfig, client remote.RemoteClient, tagCl
 		os.Exit(1)
 	}
 
+	reporter := ui.New(os.Stdout)
+	hookErr := deploy.PostDeploy(context.Background(), reporter, cfg)
+	reporter.Close()
+	if hookErr != nil {
+		fmt.Printf("\nError: %v\n", hookErr)
+	}
+
 	// Post-deploy image cleanup per service (warn-only). Use a per-service
 	// client so GetCurrentVersion parses the correct image tag.
 	if cfg.IsPrebuilt() || cfg.RetainTags() <= 0 {
-		return
+		return hookErr
 	}
 	svcClient := runtime.New(rootCfg.Runtime, cfg)
 	version, _ := svcClient.GetCurrentVersion(context.Background())
 	if err := tagCleaner.PruneOldTags(context.Background(), cfg.ImageName(), cfg.RetainTags(), version); err != nil {
 		fmt.Printf("    Warning: image cleanup failed for %s: %v\n", name, err)
 	}
+	return hookErr
 }
 
 func runDown(args []string) {
@@ -2227,11 +2253,18 @@ func printConfig(w io.Writer, cfg *config.Config, indent string) {
 	if cfg.RequireClean != nil {
 		p("%srequire_clean: %v\n", indent, *cfg.RequireClean)
 	}
-	if len(cfg.PreDeploy) > 0 {
-		p("%spre_deploy:\n", indent)
-		for _, c := range cfg.PreDeploy {
-			p("%s  %s\n", indent, c)
-		}
+	printHooks(p, indent, "pre_deploy", cfg.PreDeploy)
+	printHooks(p, indent, "post_deploy", cfg.PostDeploy)
+}
+
+// printHooks prints one pre_deploy / post_deploy command list, if set.
+func printHooks(p func(string, ...interface{}), indent, field string, cmds []string) {
+	if len(cmds) == 0 {
+		return
+	}
+	p("%s%s:\n", indent, field)
+	for _, c := range cmds {
+		p("%s  %s\n", indent, c)
 	}
 }
 
@@ -2334,9 +2367,10 @@ Workflow:
   5. Builds the Docker image on the server (or pulls if 'image' is set)
   6. Generates compose.yaml in the stack directory
   7. Starts the service using the configured deploy strategy
-  8. Cleans up the temp directory
+  8. Runs post_deploy commands locally
+  9. Cleans up the temp directory
 
-Local pre-flight (per service, or set at root level to apply to all):
+Local hooks (per service, or set at root level to apply to all):
   pre_deploy      List of shell commands run locally, in order, with the working
                   directory set to the build context. Any non-zero exit aborts
                   the deploy before anything touches the server.
@@ -2349,6 +2383,17 @@ Local pre-flight (per service, or set at root level to apply to all):
   pre_deploy runs BEFORE require_clean: hooks regenerate committed artifacts,
   the check then catches "you regenerated and did not commit". Neither applies
   to pre-built ('image:') services, which sync no build context.
+
+  post_deploy     List of shell commands run locally, in order, with the working
+                  directory set to the build context, AFTER the service has
+                  been started or rolled out successfully. Use it for anything
+                  that must see the new version live: a CDN cache purge, a
+                  smoke test, a sitemap ping, a deploy notification. Runs for
+                  pre-built ('image:') services too. A non-zero exit fails the
+                  command (exit 1) even though the service IS deployed and
+                  live — the error says so — because a silently failed purge
+                  would leave a stale site behind a green deploy. In a
+                  multi-service deploy the remaining services still start.
 
 Build args (per service, via build_args in ssd.yaml):
   Passed to the builder as --build-arg KEY=VALUE. A value is either a literal

@@ -367,6 +367,12 @@ func DeployWithClient(cfg *config.Config, client Deployer, opts *Options) error 
 		return err
 	}
 
+	// Straight after the start so a purge lands as soon as the new version
+	// serves. A failing hook skips tag cleanup; the next deploy prunes.
+	if err := PostDeploy(ctx, r, cfg); err != nil {
+		return err
+	}
+
 	if opts != nil && opts.TagCleaner != nil && !cfg.IsPrebuilt() && cfg.RetainTags() > 0 {
 		if err := opts.TagCleaner.PruneOldTags(ctx, cfg.ImageName(), cfg.RetainTags(), newVersion); err != nil {
 			r.Warn("image cleanup failed: %v", err)

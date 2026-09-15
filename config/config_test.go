@@ -2639,3 +2639,50 @@ func TestConfig_PreDeployRejectsBlankCommand(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre_deploy")
 }
+
+func TestConfig_PostDeploy_Service(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    post_deploy:\n      - sh purge.sh\n      - curl -s https://example.com/ping\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sh purge.sh", "curl -s https://example.com/ping"}, svc.PostDeploy)
+}
+
+func TestConfig_PostDeploy_RootInheritance(t *testing.T) {
+	yaml := "server: srv\npost_deploy:\n  - sh purge.sh\nservices:\n  web: {}\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sh purge.sh"}, svc.PostDeploy)
+}
+
+func TestConfig_PostDeployServiceOverridesRoot(t *testing.T) {
+	yaml := "server: srv\npost_deploy:\n  - sh purge.sh\nservices:\n  web:\n    post_deploy: []\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Empty(t, svc.PostDeploy)
+}
+
+func TestConfig_PostDeployRejectsBlankCommand(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    post_deploy:\n      - \"  \"\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	_, err = cfg.GetService("web")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "post_deploy")
+}
+
+// post_deploy runs for pre-built services too — they still deploy and may
+// still need a purge — so, unlike build_args, it is not rejected with image:.
+func TestConfig_PostDeployAllowedOnPrebuilt(t *testing.T) {
+	yaml := "server: srv\nservices:\n  web:\n    image: nginx:latest\n    post_deploy:\n      - sh purge.sh\n"
+	cfg, err := LoadFromBytes([]byte(yaml))
+	require.NoError(t, err)
+	svc, err := cfg.GetService("web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sh purge.sh"}, svc.PostDeploy)
+}

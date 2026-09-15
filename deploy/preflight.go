@@ -1,10 +1,8 @@
 package deploy
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -12,11 +10,6 @@ import (
 	"github.com/byteink/ssd/config"
 	"github.com/byteink/ssd/ui"
 )
-
-// preDeployErrTail caps how much of a failed hook's output is folded into
-// the error. The live tail window already showed it scrolling; this is the
-// post-mortem copy.
-const preDeployErrTail = 2000
 
 // preflight runs the local, pre-sync checks for a service: the `pre_deploy`
 // hooks first, then the `require_clean` git check.
@@ -31,33 +24,10 @@ func preflight(ctx context.Context, r ui.Reporter, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve context path: %w", err)
 	}
-	if err := runPreDeploy(ctx, r, cfg.PreDeploy, dir); err != nil {
+	if err := runHooks(ctx, r, "pre_deploy", cfg.PreDeploy, dir); err != nil {
 		return err
 	}
 	return checkClean(ctx, r, cfg, dir)
-}
-
-// runPreDeploy executes each command sequentially with the working directory
-// set to the build context. The first non-zero exit aborts the deploy.
-func runPreDeploy(ctx context.Context, r ui.Reporter, cmds []string, dir string) error {
-	for _, c := range cmds {
-		s := r.Step("Running pre_deploy: " + c)
-		// ponytail: full output buffered so a failure can report it after the
-		// live tail window collapses. Bounded in practice by one hook's output.
-		var buf bytes.Buffer
-		w := io.MultiWriter(s.Stream(streamTailLines), &buf)
-
-		cmd := exec.CommandContext(ctx, "sh", "-c", c)
-		cmd.Dir = dir
-		cmd.Stdout, cmd.Stderr = w, w
-
-		if err := cmd.Run(); err != nil {
-			s.Fail(err)
-			return fmt.Errorf("pre_deploy command failed: %s: %w\n%s", c, err, lastChars(buf.String(), preDeployErrTail))
-		}
-		s.Done()
-	}
-	return nil
 }
 
 // checkClean fails (require_clean) or warns (default) when the build context
@@ -107,14 +77,4 @@ func dirtyTrackedFiles(ctx context.Context, dir string) ([]string, error) {
 		dirty = append(dirty, line)
 	}
 	return dirty, nil
-}
-
-// lastChars returns the final n runes of s, marked with an ellipsis when
-// truncated. Rune-based so a cut never splits a multi-byte character.
-func lastChars(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return "…" + string(r[len(r)-n:])
 }

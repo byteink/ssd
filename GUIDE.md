@@ -178,6 +178,7 @@ When `image` is set, ssd pulls it instead of building.
 | `cleanup.retention` | Default image tag retention (default: `2`; `0` disables) |
 | `require_clean` | Default clean-tree enforcement for all services |
 | `pre_deploy` | Default pre-deploy hooks for all services |
+| `post_deploy` | Default post-deploy hooks for all services |
 
 ### Service-level
 
@@ -200,6 +201,7 @@ When `image` is set, ssd pulls it instead of building.
 | `cleanup.retention` | inherited | Per-service override for image tag retention |
 | `require_clean` | `false` | Abort when the build context has uncommitted **tracked** changes (untracked files are fine). `false` warns instead |
 | `pre_deploy` | — | Shell commands run locally in the build context before the sync, in order. Non-zero exit aborts. Runs **before** `require_clean` |
+| `post_deploy` | — | Shell commands run locally in the build context **after** the service has started/rolled out, in order (CDN purge, smoke test, notification). Runs for pre-built services too. Non-zero exit fails the command (exit 1) although the service is live |
 
 ---
 
@@ -219,6 +221,7 @@ ssd deploy app
   │                                  docker build → ssd-project-app:4
   │                                  Update compose.yaml (v3 → v4)
   │                                  docker compose up -d
+  ├─ post_deploy hooks (local)
   │                                  Remove temp dir
   └─ Done ✓
 ```

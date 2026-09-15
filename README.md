@@ -217,6 +217,8 @@ services:
     pre_deploy:                     # run locally, in order, in the build context
       - sh advisories.sh
       - make gen
+    post_deploy:                    # run locally, in order, after the rollout succeeds
+      - sh purge.sh
 ```
 
 ssd ships the build context with `git archive HEAD`, so **uncommitted tracked
@@ -239,9 +241,26 @@ regenerate committed artifacts, and the check then catches "you regenerated and
 did not commit". Neither field applies to pre-built (`image:`) services, which
 sync no build context.
 
-Both fields can be set at the root level and are inherited by every service; a
-service-level value always wins (including `require_clean: false` and
-`pre_deploy: []`).
+### Post-deploy hooks
+
+`post_deploy` runs **after** the service has been started or rolled out
+successfully, in the same way (`sh -c`, sequential, working directory =
+`context`). It is for anything that must see the new version live: a CDN
+cache purge, a smoke test, a sitemap ping, a deploy notification. Purging a
+CDN from `pre_deploy` is worse than not purging: the old container
+repopulates the edge during the build and rollout window.
+
+- Runs for pre-built (`image:`) services too — they still deploy.
+- A non-zero exit fails the command (exit 1). The service **is** deployed and
+  live at that point and the error says so; the exit code is there so a failed
+  purge never hides behind a green deploy.
+- In a multi-service deploy the remaining services still start; the command
+  exits 1 once all of them have.
+- Not run by build-only steps, and never run when the start itself failed.
+
+All three fields can be set at the root level and are inherited by every
+service; a service-level value always wins (including `require_clean: false`,
+`pre_deploy: []` and `post_deploy: []`).
 
 ### Build args (secret-safe)
 
@@ -476,6 +495,7 @@ services:
 - `files`: Map of local file paths to container mount paths. Copied to stack directory and bind-mounted on every deploy. Works with `.gitignore`d files. On k3s the file becomes a `hostPath` volume of type `File` mounted at the container path — no `subPath`, which a single-file volume cannot resolve
 - `require_clean`: Abort the deploy when the build context has uncommitted tracked changes (default: `false`, which warns). Inherits from root
 - `pre_deploy`: Shell commands run locally in the build context before the sync, in order. A non-zero exit aborts the deploy. Runs before the `require_clean` check. Inherits from root
+- `post_deploy`: Shell commands run locally in the build context after the service has started/rolled out, in order. Runs for pre-built services too. A non-zero exit fails the command (exit 1) although the service is live. Inherits from root
 - `healthcheck`: Health check configuration (exactly one of `cmd` / `exec`)
   - `cmd`: Shell command, rendered as `["CMD","sh","-c",cmd]` on compose and as a `sh -c` exec probe on k3s
   - `exec`: Array form, rendered as `["CMD",arg0,arg1,...]` on compose and as the probe's `exec.command` **verbatim** on k3s — no shell wrapper. Use for scratch/distroless images with no shell
@@ -488,6 +508,7 @@ services:
 - `stack`: Default stack path for all services
 - `require_clean`: Default for all services
 - `pre_deploy`: Default for all services
+- `post_deploy`: Default for all services
 
 ## Commands
 
