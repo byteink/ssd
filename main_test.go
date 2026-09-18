@@ -1138,3 +1138,32 @@ func TestNoSecretsMessage_DistinguishesStates(t *testing.T) {
 	assert.Contains(t, deployed, "backend")
 	assert.NotContains(t, deployed, "not deployed")
 }
+
+// A service whose config fails validation (here: env_file pointing at a file
+// that does not exist locally) must not crash `ssd config`. GetService returns
+// nil + error; the all-services loop used to drop the error and hand the nil
+// to printConfig.
+func TestPrintAllConfigs_InvalidServiceReportedNotPanicked(t *testing.T) {
+	root := &config.RootConfig{
+		Runtime: "k3s",
+		Server:  "myserver",
+		Stack:   "/stacks/myapp",
+		Services: map[string]*config.Config{
+			"prebuilt": {Image: "redis:7-alpine", Port: 6379},
+			"built":    {Context: ".", Dockerfile: "./Dockerfile", Port: 3000, EnvFile: "./does-not-exist.env"},
+		},
+	}
+
+	var out strings.Builder
+	err := printAllConfigs(&out, root)
+	if err == nil {
+		t.Fatal("expected an error for the invalid service, got nil")
+	}
+
+	got := out.String()
+	for _, want := range []string{"prebuilt:", "image: redis:7-alpine", "built:", "env_file not found"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, got)
+		}
+	}
+}

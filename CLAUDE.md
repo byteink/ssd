@@ -950,6 +950,15 @@ ssd config                    # Show all services config
 ssd config <service>          # Show specific service config
 ```
 
+`ssd config` never contacts the server — it is the pre-deploy validation
+tool. With no argument, `printAllConfigs` dumps every service sorted by name;
+a service whose config fails validation (e.g. `env_file` pointing at a file
+that does not exist locally) is reported inline as `error: …` under its name
+instead of aborting the dump, and the command exits 1. It used to drop the
+`GetService` error and hand a nil config to `printConfig`, which segfaulted
+on the first invalid service (v0.27.0, cardova).
+`TestPrintAllConfigs_InvalidServiceReportedNotPanicked` guards it.
+
 ### Environment variables
 ```bash
 ssd env <service> set KEY=VALUE      # Set environment variable
