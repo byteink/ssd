@@ -920,10 +920,8 @@ func runConfig(args []string) {
 	// If multi-service and no service specified, show all
 	if !rootCfg.IsSingleService() && serviceName == "" {
 		fmt.Println("Services:")
-		for _, name := range rootCfg.ListServices() {
-			cfg, _ := rootCfg.GetService(name)
-			fmt.Printf("\n  %s:\n", name)
-			printConfig(os.Stdout, cfg, "    ")
+		if err := printAllConfigs(os.Stdout, rootCfg); err != nil {
+			os.Exit(1)
 		}
 		return
 	}
@@ -2209,12 +2207,42 @@ Examples:
 `)
 }
 
-func printConfig(w io.Writer, cfg *config.Config, indent string) {
-	p := func(format string, args ...interface{}) {
+// printAllConfigs prints every service's resolved config, sorted by name. A
+// service that fails validation is reported inline rather than aborting the
+// dump, so one bad service does not hide the others; the first error is
+// returned so the command still exits non-zero.
+func printAllConfigs(w io.Writer, rootCfg *config.RootConfig) error {
+	names := rootCfg.ListServices()
+	sort.Strings(names)
+	p := configWriter(w)
+	var firstErr error
+	for _, name := range names {
+		p("\n  %s:\n", name)
+		cfg, err := rootCfg.GetService(name)
+		if err != nil {
+			p("    error: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		printConfig(w, cfg, "    ")
+	}
+	return firstErr
+}
+
+// configWriter returns a printf that reports a failed write on stderr instead
+// of returning it, so the config dump does not stop at the first broken pipe.
+func configWriter(w io.Writer) func(string, ...interface{}) {
+	return func(format string, args ...interface{}) {
 		if _, err := fmt.Fprintf(w, format, args...); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
 		}
 	}
+}
+
+func printConfig(w io.Writer, cfg *config.Config, indent string) {
+	p := configWriter(w)
 	p("%sname: %s\n", indent, cfg.Name)
 	p("%sserver: %s\n", indent, cfg.Server)
 	p("%sstack: %s\n", indent, cfg.Stack)
@@ -2603,7 +2631,9 @@ Usage:
   ssd config <service>            Show configuration for a specific service
 
 Displays the fully resolved configuration after applying inheritance
-(root-level server, stack, deploy strategy inherited by services).
+(root-level server, stack, deploy strategy inherited by services). Runs
+locally; the server is never contacted. A service whose configuration fails
+validation is reported as "error: ..." under its name and the command exits 1.
 
 build_args and build_secrets are shown exactly as configured: a ${secret:KEY}
 or ${env:KEY} reference is printed unresolved, so no stored value is ever

@@ -598,6 +598,10 @@ ssd config                    # Show all services config
 ssd config <service>          # Show specific service config
 ```
 
+`ssd config` runs entirely locally. A service that fails validation is
+reported as `error: …` under its name and the command exits 1, so it works as
+a pre-deploy check.
+
 ### Environment Variables
 ```bash
 ssd env <service> set KEY=VALUE      # Set environment variable
